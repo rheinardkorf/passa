@@ -19,7 +19,7 @@ const ALLOWED = new Set([
 ]);
 
 type Entry = { name: string; versions: string[] };
-const output = execFileSync('pnpm', ['licenses', 'list', '--json', '--prod'], { encoding: 'utf8' });
+const output = execFileSync('pnpm', ['licenses', 'list', '--json', '--prod', '--recursive'], { encoding: 'utf8' });
 const byLicense = JSON.parse(output) as Record<string, Entry[]>;
 
 const isAllowed = (license: string) =>
