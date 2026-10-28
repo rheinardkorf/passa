@@ -1,0 +1,10 @@
+{
+  "name": "@passa/shared",
+  "description": "Code shared by every package: IDs, config, data access, events.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

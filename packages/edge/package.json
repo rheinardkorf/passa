@@ -1,0 +1,10 @@
+{
+  "name": "@passa/edge",
+  "description": "The edge handler that runs as a CloudFront Function, and the local proxy that runs the same code.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

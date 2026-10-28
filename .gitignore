@@ -1,0 +1,10 @@
+node_modules/
+cdk.out/
+dist/
+*.tsbuildinfo
+.env*
+config.yml
+*.log
+.DS_Store
+# Personal values the leak check looks for (never committed)
+.leaks.local

@@ -1,0 +1,29 @@
+{
+  "name": "passa",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@12.10.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "check:leaks": "node scripts/check-leaks.ts",
+    "check:licenses": "node scripts/check-licenses.ts",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm check:leaks && pnpm check:licenses",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.12.0",
+    "globals": "17.13.0",
+    "husky": "9.1.7",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2",
+    "vitest": "5.0.4"
+  }
+}

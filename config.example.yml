@@ -1,0 +1,46 @@
+# Copy to config.yml (which is never committed) and fill in your values.
+
+# The domain sites are served from: <site-id>.<domain>, auth.<domain>, mcp.<domain>.
+# Use a domain that hosts nothing else.
+domain: example.com
+
+# Region for everything that stores or processes data.
+region: ap-southeast-2
+
+# AWS accounts. Production should be separate from dev.
+accounts:
+  dev: "000000000000"
+  prod: "111111111111"
+
+# Admins can manage publishers. Each admin is also a publisher.
+admins:
+  - you@example.com
+
+# Email sender for magic links (on the domain above, verified in SES).
+email:
+  from: Passa <no-reply@example.com>
+
+# Lifetimes, in seconds.
+lifetimes:
+  accessToken: 3600
+  refreshToken: 2592000
+  siteCookie: 3600
+  sessionIdle: 604800
+  sessionMax: 2592000
+  magicLink: 900
+
+# Limits, in bytes.
+limits:
+  inlinePublish: 1048576
+  site: 104857600
+  file: 26214400
+
+deleteGraceDays: 7
+
+# Scripts, styles and fonts on sites may load only from these hosts.
+cdnAllowlist:
+  - cdn.jsdelivr.net
+  - cdnjs.cloudflare.com
+  - unpkg.com
+  - fonts.googleapis.com
+  - fonts.gstatic.com

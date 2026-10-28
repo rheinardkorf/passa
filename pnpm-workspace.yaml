@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+
+# Supply-chain settings
+saveExact: true
+minimumReleaseAge: 20160 # 14 days, in minutes
+blockExoticSubdeps: true
+trustPolicy: no-downgrade

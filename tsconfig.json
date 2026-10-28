@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/auth" },
+    { "path": "packages/mcp" },
+    { "path": "packages/edge" },
+    { "path": "packages/infra" }
+  ]
+}

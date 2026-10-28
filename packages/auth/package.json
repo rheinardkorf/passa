@@ -1,0 +1,10 @@
+{
+  "name": "@passa/auth",
+  "description": "The auth service on auth.<domain>: OAuth authorization server, magic links, sessions and site cookies.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
