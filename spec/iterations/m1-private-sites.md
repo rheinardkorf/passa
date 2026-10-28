@@ -75,8 +75,8 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 - **R23** The authorization code flow requires PKCE with `S256` and a `resource` parameter naming the MCP server.
 - **R24** Sign-in is the magic link. The consent screen shows the client's name, its client ID and, prominently, the host it redirects to. Only active publishers can approve; anyone else is refused before consent.
 - **R25** Redirect URIs match exactly, except loopback redirects (`http://localhost`, `http://127.0.0.1`), which match on any port.
-- **R26** Access tokens are signed JWTs, valid for about an hour, bound to the MCP server as their audience, and checked for signature, issuer, audience, expiry and scope on every call.
-- **R27** Refresh tokens are stored as hashes and replaced on every use. Reusing an old one is rejected and revokes the chain.
+- **R26** Access tokens are signed JWTs, valid for about an hour, bound to the MCP server as their audience, and checked for signature, issuer, audience, expiry and scope on every call. Each carries its grant ID, and the MCP server checks the grant still exists, so revoking a client or a refresh-token chain takes effect immediately rather than when the token expires.
+- **R27** Refresh tokens are stored as hashes and replaced on every use. Reusing an old one is rejected and revokes the whole grant.
 - **R28** Fetching a client ID metadata document follows SSRF rules: HTTPS only, no private or internal addresses, no redirects, and size and time limits. Other URLs in client metadata are never fetched.
 - **R29** A connected-apps page on `auth.` lists the publisher's authorized clients and revokes any of them.
 
@@ -92,7 +92,7 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 - **Cookies** are host-only, `HttpOnly`, `Secure` and `SameSite=Lax`.
 - **Errors** are generic: no stack traces, and nothing that reveals whether an email or site exists.
 - **Logs** never contain tokens. Emails in application logs are masked. The edge never logs personal data.
-- **Rate limits** with AWS WAF on sign-in, OAuth endpoints and MCP calls.
+- **Rate limits:** AWS WAF on `auth.` (sign-in and OAuth endpoints), and API Gateway throttling on `mcp.`.
 - **No hardcoded secrets or environment branching.** Lifetimes, limits and flags are config values.
 - **Data access** goes through one module using key-condition queries only. Scans are only for standalone maintenance jobs.
 
@@ -105,8 +105,8 @@ What this iteration introduces:
 | Component | Runs on | Purpose |
 | --- | --- | --- |
 | Edge | CloudFront Function + KeyValueStore | Maps hostnames to sites, checks cookies, rewrites to the current version |
-| Auth service | Lambda (`auth.`) | Authorization server, magic links, sessions, site cookies, connected apps |
-| MCP server | Lambda (`mcp.`) | Publishing tools, token checks |
+| Auth service | CloudFront + WAF → Lambda function URL (`auth.`) | Authorization server, magic links, sessions, site cookies, connected apps |
+| MCP server | API Gateway HTTP API → Lambda (`mcp.`) | Publishing tools, token checks |
 | Storage | S3, DynamoDB | Immutable site versions, metadata, users, OAuth records, events |
 | Email | SES | Magic links only, in M1 |
 
@@ -132,7 +132,7 @@ Table `passa`, single-table design, on-demand billing, point-in-time recovery, T
 | Site | `SITE#<id>` | `META` | `OWNER#<ownerId>` / `SITE#<createdAt>` |
 | Version | `SITE#<id>` | `VER#<versionId>` | — |
 | Sign-in token | `TOKEN#<hash>` | `META` | — |
-| OAuth records | `OIDC#<model>#<id>` | `META` | As the library adapter needs |
+| OAuth records | `OIDC#<model>#<id>` | `META` | `OIDCGRANT#<grantId>` / `OIDC#<model>#<id>` (revoking a grant finds all its tokens) |
 
 Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. Events go to a separate append-only `passa-events` table.
 
@@ -143,8 +143,9 @@ Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. 
 | **AWS CDK (TypeScript)** for infrastructure | First-class constructs for CloudFront Functions, KeyValueStore and Origin Access Control, and the same language as the application |
 | **`oidc-provider`** for the authorization server | A certified OAuth/OpenID library. A local test confirmed client ID metadata documents, resource indicators, JWT access tokens, PKCE and refresh-token rotation, all through configuration |
 | **CloudFront Functions + KeyValueStore** for access checks | Runs on every request at low cost and latency, with no origin call for the check |
-| **Lambda function URLs behind CloudFront** for `auth.` and `mcp.` | Simple, and suited to MCP's streaming responses. API Gateway with a Lambda authorizer is the alternative; checked early in this iteration (see below) |
-| **Node.js LTS** on Lambda | `oidc-provider` supports LTS releases only |
+| **API Gateway HTTP API** for `mcp.` | Returns `WWW-Authenticate` intact, which MCP clients use to find the auth server (Lambda function URLs rename it). Built-in throttling. Tokens are checked in the function rather than by a gateway authorizer, because the `401` must carry MCP's `resource_metadata` and every call checks the grant |
+| **CloudFront + WAF → Lambda function URL** for `auth.` | WAF provides rate limits and CAPTCHA, and can't attach to an HTTP API. CloudFront adds a secret origin header that the function checks, since Origin Access Control requires signed request bodies, which browsers and OAuth clients don't send |
+| **Node.js LTS** on Lambda | `oidc-provider` supports LTS releases only. Bundles keep class names (esbuild `keepNames`), because `oidc-provider` names its stored records after its classes |
 | **pnpm** with exact versions and supply-chain settings | Reproducible installs and protection against freshly published malicious packages |
 
 ## Data
@@ -157,10 +158,10 @@ Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. 
 
 These could change the design, so they come first in implementation:
 
-1. **Function URLs or API Gateway:** check that MCP streaming responses work through CloudFront and function URLs, and whether API Gateway would handle them.
-2. **KMS signing:** whether `oidc-provider`'s external signing support can keep the token-signing key in KMS.
-3. **Lambda fit:** a DynamoDB adapter for `oidc-provider`, and cold-start time for the auth service.
-4. **Refresh-token reuse:** confirm reuse revokes the whole chain, not just the reused token.
+1. **Function URLs or API Gateway.** Decided: API Gateway HTTP API for `mcp.`. Stateless MCP with plain JSON responses needs no streaming, so both work. But function URLs rename `WWW-Authenticate` to `x-amzn-Remapped-www-authenticate`, and a CloudFront function can't rename it back. Claude Code falls back to the well-known metadata URL; other clients may not. Origin Access Control rejects MCP's unsigned POST bodies.
+2. **KMS signing.** Confirmed: `oidc-provider`'s experimental external signing key signs tokens in KMS (`ECC_NIST_P256`; KMS returns DER signatures, converted to the JOSE format). About 50 ms per signature, measured from outside AWS. Because the feature is experimental, the library version is pinned and a test covers signing.
+3. **Lambda fit.** Confirmed: `oidc-provider` with a DynamoDB adapter (indexes on grant ID, interaction UID and user code) ran the full flow on AWS, from Claude Code too. Cold starts were 0.4–0.56 s of initialization, then 20–70 ms per request, at about 120 MB of memory. Minifying without `keepNames` breaks it.
+4. **Refresh-token reuse.** Confirmed: reusing a refresh token revokes the whole grant, including the newest refresh token. Access tokens already issued stay valid until they expire, which R26 closes with a grant check on every call.
 
 ## Starting values
 
