@@ -40,3 +40,19 @@ export function newVersionId(now: number = Date.now()): string {
 export function isVersionId(value: string): boolean {
   return /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(value);
 }
+
+// User IDs are stable and never derived from the email, so an email can change
+// without changing who owns what.
+export function newUserId(): string {
+  return `u_${randomBytes(16).toString('base64url')}`;
+}
+
+// Upload IDs are bearer-like references to a pending upload, so they carry
+// 128 random bits. They are still only usable by the publisher who began them.
+export function newUploadId(): string {
+  return randomBytes(16).toString('base64url');
+}
+
+export function isUploadId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{22}$/.test(value);
+}

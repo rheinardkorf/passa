@@ -6,6 +6,18 @@ Say "publish this" to any MCP-capable agent and get back a link like `https://k3
 
 **Status:** early development. Nothing here is usable yet. The current iteration is described in [`spec/iterations/`](spec/iterations/).
 
+## Development
+
+Needs Node 24, pnpm and Docker.
+
+```sh
+pnpm install
+pnpm check          # lint, typecheck, unit tests, leak and license checks
+pnpm local:up       # start Moto, a local AWS emulator, on port 5005
+pnpm test:int       # integration tests against Moto
+pnpm local:down
+```
+
 ## License
 
 [MIT](LICENSE)

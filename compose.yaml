@@ -1,0 +1,7 @@
+# Local AWS for development and integration tests: Moto (Apache-2.0), which
+# needs no account. Port 5005 on the host, since macOS uses 5000 for AirPlay.
+services:
+  moto:
+    image: motoserver/moto:5.2.4@sha256:120b1589c6df7e35d2092935f6ff724486bb2c4189d0e36ce795baba1400ffd2
+    ports:
+      - "127.0.0.1:5005:5000"

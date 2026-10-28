@@ -26,7 +26,7 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 - Users bootstrapped from config: one or more admins, each also a publisher.
 - An append-only events table, including security events.
 - Publish-time checks and a strict content security policy on every site.
-- Local development against LocalStack and a local edge proxy.
+- Local development against Moto (a local AWS emulator) and a local edge proxy.
 - CDK stacks for a dev account and a production account.
 
 **Out (later milestones):**
@@ -43,7 +43,7 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 
 - **R1** `publish(files | upload_id, title, data_source?, data_as_of?)` creates a private site with a random ID and returns its URL.
 - **R2** Small sites are sent inline in the tool call. Larger sites use `begin_upload(file_list)`, which returns presigned S3 upload URLs, then `finish_upload(upload_id)`.
-- **R3** `update(site_id, files | upload_id)` creates a new version. The URL doesn't change.
+- **R3** `update(site_id, files | upload_id, remove?, replace_all?)` creates a new version from the current one: the files sent are added or replaced, the paths in `remove` are removed, and everything else is carried over. With `replace_all`, the files sent become the whole site. The URL doesn't change. An update built on a version that is no longer current is refused, so concurrent updates can't undo each other.
 - **R4** `get_site(site_id)` returns the current files and metadata, so any agent can continue another agent's site.
 - **R5** `find_sites(query)` lists the caller's own sites, matching on title.
 - **R6** `rollback(site_id, version_id)` makes an earlier version current again, instantly.
@@ -132,9 +132,13 @@ Table `passa`, single-table design, on-demand billing, point-in-time recovery, T
 | Site | `SITE#<id>` | `META` | `OWNER#<ownerId>` / `SITE#<createdAt>` |
 | Version | `SITE#<id>` | `VER#<versionId>` | — |
 | Sign-in token | `TOKEN#<hash>` | `META` | — |
+| Upload | `UPLOAD#<uploadId>` | `META` | — (expires by TTL) |
+| Pending purge | `PURGE#<siteId>` | `META` | — (its TTL, at the end of the grace period, triggers the hard delete) |
 | OAuth records | `OIDC#<model>#<id>` | `META` | `OIDCGRANT#<grantId>` / `OIDC#<model>#<id>` (revoking a grant finds all its tokens) |
 
-Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. Events go to a separate append-only `passa-events` table.
+Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. Events go to a separate append-only `passa-events` table, keyed by day (`DAY#<date>`) and timestamp.
+
+Site files live in a sites bucket under `<site-id>/<version-id>/<path>`. Uploads are staged in a separate uploads bucket that expires objects on its own; `finish_upload` checks every declared file arrived at its declared size, and the files are checked again and copied into the sites bucket when `publish` or `update` uses the upload. Every version is a complete folder: an update copies unchanged files from the current version within S3, so agents only send what changed, and rollback stays a pointer change.
 
 ## Technology choices
 
@@ -146,6 +150,7 @@ Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. 
 | **API Gateway HTTP API** for `mcp.` | Returns `WWW-Authenticate` intact, which MCP clients use to find the auth server (Lambda function URLs rename it). Built-in throttling. Tokens are checked in the function rather than by a gateway authorizer, because the `401` must carry MCP's `resource_metadata` and every call checks the grant |
 | **CloudFront + WAF → Lambda function URL** for `auth.` | WAF provides rate limits and CAPTCHA, and can't attach to an HTTP API. CloudFront adds a secret origin header that the function checks, since Origin Access Control requires signed request bodies, which browsers and OAuth clients don't send |
 | **Node.js LTS** on Lambda | `oidc-provider` supports LTS releases only. Bundles keep class names (esbuild `keepNames`), because `oidc-provider` names its stored records after its classes |
+| **Moto** for local AWS | Open source (Apache-2.0), one container, no account. LocalStack now requires an account and auth token, and its free plan is non-commercial only, which doesn't suit an open-source project's contributors. Moto doesn't verify presigned URL signatures, so upload limits enforced by S3 are tested on the dev account |
 | **pnpm** with exact versions and supply-chain settings | Reproducible installs and protection against freshly published malicious packages |
 
 ## Data
@@ -183,9 +188,9 @@ All config, so they can change without code changes:
 
 1. Repo setup: pnpm workspace (`auth`, `mcp`, `edge`, `infra`, `shared`), CI, PR template, `SECURITY.md`, `config.example.yml`.
 2. The early checks above.
-3. Storage and publishing tools against LocalStack.
+3. Storage and publishing tools against Moto.
 4. The edge handler, local proxy, version routing and CSP.
-5. Magic links, sessions and site cookies, with SES in LocalStack.
+5. Magic links, sessions and site cookies, with SES in Moto.
 6. The authorization server, MCP auth and the connected-apps page.
 7. CDK stacks; deploy to dev, test, deploy to production, smoke test. Connect claude.ai and Mobile.
 

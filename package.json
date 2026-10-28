@@ -11,10 +11,13 @@
     "lint": "eslint .",
     "typecheck": "tsc -b",
     "test": "vitest run",
+    "test:int": "vitest run --config vitest.int.config.ts",
     "check:leaks": "node scripts/check-leaks.ts",
     "check:licenses": "node scripts/check-licenses.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm check:leaks && pnpm check:licenses",
-    "prepare": "husky"
+    "prepare": "husky",
+    "local:up": "docker compose up -d --wait",
+    "local:down": "docker compose down"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
