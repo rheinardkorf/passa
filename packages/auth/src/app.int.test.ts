@@ -10,35 +10,29 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAuthApp } from './app.ts';
 import { type Email, SesMailer } from './mailer.ts';
 import { errorPage } from './pages.ts';
+import { authTestDeps } from './testing.ts';
 
 const endpoint = process.env.PASSA_TEST_AWS_ENDPOINT ?? 'http://127.0.0.1:5005';
 const AUTH = 'https://auth.example.com';
-const key = { kid: 'k1', secret: 'd'.repeat(64) };
 
 let env: TestEnv;
 let server: Server;
 let base: string;
 let clock = Date.now();
 // Every email that SES (Moto) accepted, newest last.
-const sent: Email[] = [];
+let sent: Email[] = [];
 
 beforeAll(async () => {
   env = await testEnv();
   const ses = new SESv2Client({ endpoint, region: 'ap-southeast-2', credentials: { accessKeyId: 'test', secretAccessKey: 'test' } });
   await ses.send(new CreateEmailIdentityCommand({ EmailIdentity: 'example.com' }));
-  const mailer = new SesMailer(ses, env.config.email.from);
-  const app = createAuthApp({
-    ...env,
-    mailer: {
-      async send(email) {
-        await mailer.send(email);
-        sent.push(email);
-      },
-    },
-    siteKey: async () => key,
-    urls: { auth: AUTH, site: (id) => `https://${id}.example.com` },
-    now: () => new Date(clock),
-  });
+  const deps = await authTestDeps(
+    env,
+    { auth: AUTH, mcp: 'https://mcp.example.com', site: (id) => `https://${id}.example.com` },
+    { mailer: new SesMailer(ses, env.config.email.from), now: () => new Date(clock) },
+  );
+  sent = deps.sent;
+  const app = createAuthApp(deps);
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -87,6 +81,12 @@ async function motoEmails(to: string): Promise<{ subject: string; body: string }
   type Message = { destinations: { ToAddresses: string[] }; subject: string; body: string };
   const data = (await (await fetch(`${endpoint}/moto-api/data.json`)).json()) as { ses: { Message: Message[] } };
   return data.ses.Message.filter((m) => m.destinations.ToAddresses.includes(to));
+}
+
+// Where a continuingPage moves on to.
+function refreshTo(body: string): string {
+  const url = /<meta http-equiv="refresh" content="0;url=([^"]+)">/.exec(body)?.[1] ?? '';
+  return url.replaceAll('&amp;', '&');
 }
 
 const emailsTo = (to: string) => sent.filter((e) => e.to === to).length;
@@ -150,11 +150,11 @@ describe('signing in to view a site', () => {
     expect(page.body).not.toContain(token);
 
     const done = await browser.post('/signin/continue', { token });
-    expect(done.status).toBe(303);
-    expect(done.location).toBe(`/site/signin?site=${siteId}&path=%2Fdocs%2F`);
+    expect(done.status).toBe(200);
+    expect(refreshTo(done.body)).toBe(`/site/signin?site=${siteId}&path=%2Fdocs%2F`);
     expect(done.cookies.find((c) => c.startsWith('__Host-passa-session='))).toMatch(/^__Host-passa-session=[A-Za-z0-9_-]{43}; Path=\/; Max-Age=2592000; Secure; HttpOnly; SameSite=Lax$/);
 
-    const handoff = await browser.request(done.location);
+    const handoff = await browser.request(refreshTo(done.body));
     expect(handoff.status).toBe(302);
     const url = new URL(handoff.location);
     expect(`${url.origin}${url.pathname}`).toBe(`https://${siteId}.example.com/_passa/session`);
@@ -219,7 +219,7 @@ describe('magic links', () => {
     const browser = new Browser();
     await browser.post('/signin', { email: user.email });
     const token = tokenFor(user.email);
-    expect((await browser.post('/signin/continue', { token })).status).toBe(303);
+    expect((await browser.post('/signin/continue', { token })).status).toBe(200);
     const again = await new Browser().post('/signin/continue', { token });
     expect(again.status).toBe(400);
     expect(again.body).toContain('expired or has already been used');
@@ -342,7 +342,7 @@ describe('forms and responses', () => {
   it('send strict security headers and host-only cookies', async () => {
     const r = await fetch(`${base}/`);
     expect(r.headers.get('content-security-policy')).toBe(
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self' https://*.example.com; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     expect(r.headers.get('cache-control')).toBe('no-store');
     // Browsers only send a real Origin on form posts when this allows it.

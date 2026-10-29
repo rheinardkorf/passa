@@ -139,7 +139,19 @@ Details settled in step 5:
 - **Rate limits** are fixed windows counted in DynamoDB, per email and per IP (both hashed). Requests over the limit get the usual page and no email.
 - **Magic links aren't bound to the browser that asked**, so a link requested on a laptop can be opened on a phone. The token is single-use, short-lived and only in the fragment.
 - **Pages** load one stylesheet and one script from `auth.` itself (CSP `default-src 'none'`). The script moves the token from the fragment into the Continue form and removes it from the address bar.
-- **Locally,** the proxy serves `auth.localhost:8080` too. Emails go through Moto's SES, which delivers nothing, so the proxy also prints them.
+- **Locally,** the proxy serves sign-in at `localhost:8080` too (plain `localhost`, since OAuth clients only allow HTTP for that exact name). Emails go through Moto's SES, which delivers nothing, so the proxy also prints them.
+
+Details settled in step 6:
+
+- **One session.** `oidc-provider` runs in the `auth.` app. A login-policy check asks for a Passa sign-in unless there's a valid `auth.` session for the account `oidc-provider` remembers, so signing out of Passa also stops apps being authorized silently, and a cookie set by a site can't sign anyone in.
+- **Consent** shows the app's name and client ID, and most prominently the host it sends you back to. Non-publishers get no email for an app sign-in, and anyone signed in without publisher access is refused before consent. A grant lasts the refresh-token lifetime (30 days) from consent; after that the app has to be allowed again.
+- **After a form post, pages that lead elsewhere move on by themselves** (a meta refresh) instead of redirecting, because browsers check every redirect after a post against `form-action`, and the last one goes to the app. The CSP stays `form-action 'self'`.
+- **Access tokens** are ES256 JWTs signed in KMS, with the KMS key ID as `kid`. The MCP server verifies them with the key's public half from KMS, so it never calls `auth.`, and checks the grant on every call.
+- **Clients** are public or use a client secret; `private_key_jwt` is off, so no client `jwks_uri` is ever fetched. Client ID metadata documents are fetched under `oidc-provider`'s SSRF protection (special-use addresses refused after connecting, no redirects, 2.5 s, 5 KB), and names that only make sense on a private network are refused first. Dynamic registration is open, as MCP clients expect; WAF rate-limits it in step 7.
+- **The MCP endpoint** is stateless: `POST /mcp` only, plain JSON responses, one server per request. Tokens that fail are recorded as events; a client's first request, which has none, isn't.
+- **Secrets:** `oidc-provider`'s cookie keys are in Secrets Manager (`{ "cookieKeys": [...] }`; the first signs, all verify).
+- **Locally,** sign-in and the token endpoint are on plain `http://localhost:8080`, because MCP clients only allow plain HTTP for that exact name; MCP is on `mcp.localhost:8080`. `setup` creates the token key in Moto's KMS and the cookie keys in its Secrets Manager. Claude Code connects to the local MCP server for real.
+- **Browser tests** drive the installed Chrome through site sign-in and app consent (`playwright-core`, no browser download), since Origin headers, referrer policy, CSP and `__Host-` cookies only behave for real in a browser.
 
 The cookie signing key lives in KeyValueStore with a key ID so it can be rotated. CloudFront Functions can't read any secrets store, so this is the one secret held there, with write access limited to the roles that need it. Edge records hold no personal data.
 
@@ -157,7 +169,7 @@ Table `passa`, single-table design, on-demand billing, point-in-time recovery, T
 | Rate counter | `RATE#<name>` | `W#<window start>` | — (expires by TTL) |
 | Upload | `UPLOAD#<uploadId>` | `META` | — (expires by TTL) |
 | Pending purge | `PURGE#<siteId>` | `META` | — (its TTL, at the end of the grace period, triggers the hard delete) |
-| OAuth records | `OIDC#<model>#<id>` | `META` | `OIDCGRANT#<grantId>` / `OIDC#<model>#<id>` (revoking a grant finds all its tokens) |
+| OAuth records | `OIDC#<model>#<id>` | `META` | Tokens and codes: `OIDCGRANT#<grantId>` / `OIDC#<model>#<id>` (revoking a grant finds all its tokens). Sessions: `OIDCUID#<uid>` / `Session`. Grants: `OIDCACCOUNT#<userId>` / `OIDC#Grant#<id>` (the connected-apps page) |
 
 Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. Events go to a separate append-only `passa-events` table, keyed by day (`DAY#<date>`) and timestamp.
 

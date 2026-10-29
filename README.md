@@ -22,11 +22,21 @@ To try a site locally (with Moto running):
 
 ```sh
 pnpm local setup                        # tables, buckets, a signing key, admins from config
-pnpm local proxy                        # sites and sign-in on http://*.localhost:8080
+pnpm local proxy                        # sites, sign-in and MCP on port 8080
 pnpm local publish examples/hello       # in another terminal: prints the site URL
 ```
 
 Open the site URL and sign in with the first admin email from your config. Moto doesn't deliver email, so the proxy prints the magic link in its terminal. Use a browser that treats `*.localhost` as secure, such as Chrome or Firefox, since Passa's cookies are `Secure`.
+
+To publish from Claude Code against your local Passa:
+
+```sh
+claude mcp add --transport http passa-local http://mcp.localhost:8080/mcp
+```
+
+In a new Claude Code session, run `/mcp`, choose `passa-local` and authenticate: sign in with the admin email (the link is printed by the proxy) and allow access. Then ask Claude to publish something. Connected apps are listed at http://localhost:8080/apps.
+
+The integration tests (`pnpm test:int`) need Moto running and Google Chrome installed; set `PASSA_TEST_CHROME` to use another Chromium-based browser.
 
 ## License
 

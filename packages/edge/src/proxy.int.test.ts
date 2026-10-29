@@ -1,40 +1,29 @@
 // Sites end to end: publish with the real tools into Moto, then browse through
-// the local proxy, which runs the real edge handler.
-import { request as httpRequest, type RequestListener } from 'node:http';
-import type { AddressInfo, Server } from 'node:net';
-import { createAuthApp, type Email } from '@passa/auth';
-import { Publisher } from '@passa/mcp';
-import { addUser, type TestEnv, testEnv } from '@passa/mcp/testing';
+// the local proxy, which runs the real edge handler, auth app and MCP endpoint.
+import { createHash, randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import type { Publisher } from '@passa/mcp';
+import { addUser, type TestEnv } from '@passa/mcp/testing';
 import { contentSecurityPolicy, handoffUrl } from '@passa/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startProxy } from './proxy.ts';
+import { type Stack, startStack } from './testing.ts';
 
 let env: TestEnv;
-let server: Server;
+let stack: Stack;
 let port: number;
 let publisher: Publisher;
+let sent: { text: string }[] = [];
 const key = { kid: 'k1', secret: 'c'.repeat(64) };
 const alice = { userId: 'alice' };
-const sent: Email[] = [];
 
 beforeAll(async () => {
-  env = await testEnv();
+  stack = await startStack();
+  ({ env, port, publisher, sent } = stack);
   await addUser(env, { id: 'alice' });
   await env.edge.set('k:k1', key.secret);
-  // The auth app needs the proxy's port for its URLs, so it's created after.
-  let auth: RequestListener = () => undefined;
-  server = await startProxy({ edge: env.edge, s3: env.s3, bucket: env.buckets.sites, cdnAllowlist: env.config.cdnAllowlist, auth: (req, res) => auth(req, res) }, 0);
-  port = (server.address() as AddressInfo).port;
-  auth = createAuthApp({
-    ...env,
-    mailer: { send: async (email) => void sent.push(email) },
-    siteKey: async () => key,
-    urls: { auth: `http://auth.localhost:${port}`, site: (id) => `http://${id}.localhost:${port}` },
-  });
-  publisher = new Publisher({ ...env, siteUrl: (id) => `http://${id}.localhost:${port}/` });
 });
 
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+afterAll(() => stack.close());
 
 type Reply = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
 
@@ -76,6 +65,43 @@ class Browser {
     }
     return { ...r, url: u };
   }
+
+  // Follows redirects and continuing pages while they stay on localhost hosts
+  // the proxy serves; stops at a page, or at a redirect anywhere else.
+  async follow(url: string, form?: Record<string, string>): Promise<Reply & { url: URL }> {
+    let reply = await this.open(url, form);
+    for (let i = 0; i < 12; i++) {
+      const refresh = /content="0;url=([^"]+)"/.exec(reply.body)?.[1]?.replaceAll('&amp;', '&');
+      const next = reply.status >= 300 && reply.status < 400 ? String(reply.headers.location) : refresh;
+      if (!next) break;
+      const to = new URL(next, reply.url);
+      if (!to.host.endsWith(`localhost:${port}`)) return { ...reply, url: to };
+      reply = await this.open(to.href);
+    }
+    return reply;
+  }
+}
+
+const pkce = () => {
+  const verifier = randomBytes(32).toString('base64url');
+  return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
+};
+
+// JSON over the proxy, the way an MCP client or OAuth client calls it.
+async function call(url: string, init: { body?: unknown; form?: Record<string, string>; token?: string } = {}) {
+  const u = new URL(url);
+  const headers: Record<string, string> = { accept: 'application/json, text/event-stream' };
+  if (init.token) headers.authorization = `Bearer ${init.token}`;
+  let body: string | undefined;
+  if (init.body) {
+    headers['content-type'] = 'application/json';
+    body = JSON.stringify(init.body);
+  } else if (init.form) {
+    headers['content-type'] = 'application/x-www-form-urlencoded';
+    body = new URLSearchParams(init.form).toString();
+  }
+  const r = await send(u.host, u.pathname + u.search, { method: body ? 'POST' : 'GET', headers, ...(body ? { body } : {}) });
+  return { ...r, json: () => JSON.parse(r.body) as Record<string, unknown> };
 }
 
 // Follows the sign-in handoff the way a browser would, and returns the cookie.
@@ -89,6 +115,66 @@ async function signIn(siteId: string, accessVersion = 1): Promise<string> {
 
 const page = (body: string) => [{ path: 'index.html', content: new TextEncoder().encode(`<!doctype html>${body}`) }];
 
+describe('the M1 demo, locally', () => {
+  it('connects an agent over OAuth, publishes a page, and shows it to its owner', async () => {
+    const mcpUrl = `http://mcp.localhost:${port}/mcp`;
+    const initialize = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'agent', version: '1' } } };
+
+    // 1. The agent is told where to get a token (R21).
+    const anonymous = await call(mcpUrl, { body: initialize });
+    expect(anonymous.status).toBe(401);
+    const metadataUrl = /resource_metadata="([^"]+)"/.exec(String(anonymous.headers['www-authenticate']))?.[1] ?? '';
+    const issuer = String((await call(metadataUrl)).json().authorization_servers?.toString());
+    expect(issuer).toBe(`http://localhost:${port}`);
+    const as = (await call(`${issuer}/.well-known/oauth-authorization-server`)).json();
+
+    // 2. It registers and sends its user to authorize, with PKCE (R22, R23).
+    const reg = (await call(String(as.registration_endpoint), {
+      body: { client_name: 'Demo Agent', redirect_uris: ['http://127.0.0.1/callback'], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' },
+    })).json();
+    const { verifier, challenge } = pkce();
+    const redirectUri = 'http://127.0.0.1:61234/callback';
+    const authorize = `${String(as.authorization_endpoint)}?${new URLSearchParams({
+      client_id: String(reg.client_id), redirect_uri: redirectUri, response_type: 'code', scope: 'publish offline_access',
+      code_challenge: challenge, code_challenge_method: 'S256', resource: mcpUrl, state: 's1',
+    })}`;
+
+    // 3. The user signs in by magic link and allows it (R24).
+    const browser = new Browser();
+    const signin = await browser.follow(authorize);
+    expect(signin.body).toContain('An app wants to publish as you');
+    const uid = /name="interaction" value="([^"]+)"/.exec(signin.body)?.[1] ?? '';
+    await browser.open(`${issuer}/signin`, { email: 'alice@example.com', interaction: uid });
+    const token = /continue#t=([A-Za-z0-9_-]+)/.exec(sent.at(-1)?.text ?? '')?.[1] ?? '';
+    const consent = await browser.follow(`${issuer}/signin/continue`, { token });
+    expect(consent.body).toContain('Demo Agent');
+    const confirm = /action="(\/interaction\/[^"]+\/confirm)"/.exec(consent.body)?.[1] ?? '';
+    const back = (await browser.follow(`${issuer}${confirm}`, {})).url;
+    expect(`${back.origin}${back.pathname}`).toBe(redirectUri);
+
+    // 4. The agent swaps the code for tokens, signed in KMS (Moto's).
+    const tokens = (await call(String(as.token_endpoint), {
+      form: { grant_type: 'authorization_code', code: back.searchParams.get('code') ?? '', code_verifier: verifier, redirect_uri: redirectUri, client_id: String(reg.client_id), resource: mcpUrl },
+    })).json();
+    expect(tokens.access_token).toBeTruthy();
+
+    // 5. It publishes, as the user who allowed it (R1).
+    const published = await call(mcpUrl, {
+      token: String(tokens.access_token),
+      body: { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'publish', arguments: { title: 'Demo', files: [{ path: 'index.html', content: '<h1>Made by an agent</h1>' }] } } },
+    });
+    expect(published.status).toBe(200);
+    const site = JSON.parse((published.json().result as { content: { text: string }[] }).content[0]?.text ?? '{}') as { url: string };
+
+    // 6. The owner opens the link. Already signed in, there's no second email.
+    const emails = sent.length;
+    const page = await browser.follow(site.url);
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('<h1>Made by an agent</h1>');
+    expect(sent.length).toBe(emails);
+  });
+});
+
 describe('signing in', () => {
   it('takes the owner from a site link to the page by magic link, end to end', async () => {
     const site = await publisher.publish(alice, { title: 'Hello', content: { files: page('<h1>Signed in</h1>') } });
@@ -98,15 +184,16 @@ describe('signing in', () => {
 
     const form = await browser.open(String(start.headers.location));
     expect(form.body).toContain('Enter your email');
-    await browser.open(`http://auth.localhost:${port}/signin`, { email: 'alice@example.com', site: site.site_id, path: '/' });
-    const link = /(http:\/\/auth\.localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.at(-1)?.text ?? '');
+    await browser.open(`http://localhost:${port}/signin`, { email: 'alice@example.com', site: site.site_id, path: '/' });
+    const link = /(http:\/\/localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.at(-1)?.text ?? '');
     expect(link).not.toBeNull();
 
     // The fragment stays in the browser; the page's script posts it.
     await browser.open(link?.[1] ?? '');
     const continued = await browser.open(link?.[1] ?? '', { token: link?.[2] ?? '' });
-    expect(continued.status).toBe(303);
-    const handoff = await browser.open(new URL(String(continued.headers.location), continued.url).href);
+    expect(continued.status).toBe(200);
+    const next = (/content="0;url=([^"]+)"/.exec(continued.body)?.[1] ?? '').replaceAll('&amp;', '&');
+    const handoff = await browser.open(new URL(next, continued.url).href);
     expect(handoff.status).toBe(302);
     const landed = await browser.open(String(handoff.headers.location));
     expect(landed.status).toBe(302);
@@ -124,7 +211,7 @@ describe('viewing a private site', () => {
 
     const anonymous = await get(site.site_id, '/');
     expect(anonymous.status).toBe(302);
-    expect(anonymous.headers.location).toBe(`http://auth.localhost:${port}/site/signin?site=${site.site_id}&path=%2F`);
+    expect(anonymous.headers.location).toBe(`http://localhost:${port}/site/signin?site=${site.site_id}&path=%2F`);
 
     const cookie = await signIn(site.site_id);
     const r = await get(site.site_id, '/', { cookie });
