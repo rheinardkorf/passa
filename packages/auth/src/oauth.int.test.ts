@@ -41,7 +41,8 @@ class Browser {
   cookies = new Map<string, string>();
 
   async go(url: string, form?: Record<string, string>): Promise<Reply> {
-    const path = url.startsWith(AUTH) ? url.slice(AUTH.length) : url;
+    const parsed = new URL(url, AUTH);
+    const path = parsed.origin === AUTH ? parsed.pathname + parsed.search : url;
     const headers: Record<string, string> = { ...PROXIED, cookie: [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ') };
     let body: string | undefined;
     if (form) {
@@ -69,7 +70,7 @@ class Browser {
       const next = reply.status >= 300 && reply.status < 400 ? reply.location : refresh;
       if (!next) break;
       at = new URL(next, `${AUTH}${at.startsWith('/') ? at : ''}`).href;
-      if (!at.startsWith(AUTH)) break;
+      if (new URL(at).origin !== AUTH) break;
       reply = await this.go(at);
     }
     return { ...reply, url: at };
