@@ -120,6 +120,15 @@ s:<site-id> → { cur: "<version-id>", v: <access version>, r: [] }
 
 `r` (path rules) stays empty in M1, which means private. The Function reads the record, checks the site cookie (signature, site, expiry, access version), and rewrites the request to `/<site-id>/<version-id>/<path>`. DynamoDB is the source of truth; a standalone `reconcile` job rebuilds every edge record from it.
 
+Details settled in step 4:
+
+- **Sign-in handoff.** `auth.` can't set a cookie for a site's host, so after sign-in it redirects to `https://<site-id>.<siteDomain>/_passa/session` with a token signed with the cookie key. The token is valid for 60 seconds, bound to the site, its access version, the return path and the cookie lifetime. The Function checks it and sets the site cookie (`__Host-passa`, so host-only by construction). The Function can't record that a token was used, so a token copied within its 60 seconds works again. It only ever grants the same access to the same site.
+- **Missing sites look private.** A site with no edge record (never existed, or being deleted) gets the same sign-in redirect as a private one, so the redirect can't be used to test whether a site exists. Deleting a site removes its record at once; the grace period only allows undoing.
+- **Paths.** Only paths made of publishable characters reach storage; anything else is a 404. A path ending in `/`, or with no extension in its last part, serves that folder's `index.html`.
+- **Caching.** CloudFront caches each version's files indefinitely under their version path. Viewers get `Cache-Control: private, no-cache`, so browsers revalidate and see an update or rollback straight away.
+- **Site domain.** Sites are served from `<site-id>.<siteDomain>`, which defaults to `domain`. Deployments can choose a separate domain so that published pages, which run any script, aren't same-site with `auth.`: on one domain, `SameSite` cookies give `auth.` no protection from them, so `auth.` must rely on CSRF tokens (R20) and `__Host-` cookies. The edge only answers on the site domain, and its sign-in redirect goes to `https://auth.<domain>`, both fixed when the Function is built.
+- **Locally,** the proxy runs the same handler file, and a DynamoDB table in Moto stands in for KeyValueStore.
+
 The cookie signing key lives in KeyValueStore with a key ID so it can be rotated. CloudFront Functions can't read any secrets store, so this is the one secret held there, with write access limited to the roles that need it. Edge records hold no personal data.
 
 ### Data model (M1 entities)

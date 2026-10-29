@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { type Config, createTables, Events, SiteFiles, Store, type User } from '@passa/shared';
+import { type Config, createTables, Events, SiteFiles, Store, TableEdgeStore, type User } from '@passa/shared';
 import type { Deps } from '../publisher.ts';
 
 const endpoint = process.env.PASSA_TEST_AWS_ENDPOINT ?? 'http://127.0.0.1:5005';
@@ -22,11 +22,17 @@ export const testConfig: Config = {
   cdnAllowlist: ['cdn.jsdelivr.net'],
 };
 
-export type TestEnv = Deps & { db: DynamoDBDocumentClient; s3: S3Client; tables: { main: string; events: string }; buckets: { sites: string; uploads: string } };
+export type TestEnv = Deps & {
+  db: DynamoDBDocumentClient;
+  s3: S3Client;
+  edge: TableEdgeStore;
+  tables: { main: string; events: string; edge: string };
+  buckets: { sites: string; uploads: string };
+};
 
 export async function testEnv(config: Config = testConfig): Promise<TestEnv> {
   const id = randomBytes(4).toString('hex');
-  const tables = { main: `passa-${id}`, events: `passa-events-${id}` };
+  const tables = { main: `passa-${id}`, events: `passa-events-${id}`, edge: `passa-edge-${id}` };
   const buckets = { sites: `passa-sites-${id}`, uploads: `passa-uploads-${id}` };
   const client = new DynamoDBClient(aws);
   const db = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
@@ -44,6 +50,7 @@ export async function testEnv(config: Config = testConfig): Promise<TestEnv> {
     store: new Store(db, tables.main),
     files: new SiteFiles(s3, buckets),
     events: new Events(db, tables.events),
+    edge: new TableEdgeStore(db, tables.edge),
   };
 }
 
