@@ -30,6 +30,12 @@ export const configSchema = z.strictObject({
     file: bytes,
     files: z.number().int().positive(),
   }),
+  // Sign-in requests allowed per email and per IP in each window (R20).
+  rateLimits: z.strictObject({
+    window: seconds,
+    signinPerEmail: z.number().int().positive(),
+    signinPerIp: z.number().int().positive(),
+  }),
   deleteGraceDays: z.number().int().nonnegative(),
   cdnAllowlist: z.array(z.string().min(1)),
 });

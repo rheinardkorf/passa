@@ -1,18 +1,18 @@
 // Local development against Moto (see compose.yaml): set up storage, run the
-// edge proxy, publish a folder, and print a sign-in link. Run with `pnpm local`.
-// Until magic-link sign-in exists (M1 step 5), `signin` stands in for it.
+// edge proxy with the auth app, and publish a folder. Run with `pnpm local`.
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { CreateEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { createAuthApp, SesMailer } from '@passa/auth';
 import { Publisher } from '@passa/mcp';
 import {
   bootstrapAdmins,
   createTables,
   Events,
-  handoffUrl,
   loadConfigFile,
   signingKeyKey,
   SiteFiles,
@@ -38,19 +38,36 @@ function wiring() {
   const client = new DynamoDBClient(aws);
   const db = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
   const s3 = new S3Client({ ...aws, forcePathStyle: true });
+  const ses = new SESv2Client(aws);
   const store = new Store(db, tables.main);
   const edge = new TableEdgeStore(db, tables.edge);
+  const events = new Events(db, tables.events);
   const origin = (siteId: string) => `http://${siteId}.localhost:${PORT}`;
-  const deps = { store, edge, config, files: new SiteFiles(s3, buckets), events: new Events(db, tables.events), siteUrl: (id: string) => `${origin(id)}/` };
-  return { config, client, s3, store, edge, deps, origin };
+  const deps = { store, edge, config, events, files: new SiteFiles(s3, buckets), siteUrl: (id: string) => `${origin(id)}/` };
+  return { config, client, s3, ses, store, edge, events, deps, origin };
 }
 
-async function signinLink(w: ReturnType<typeof wiring>, siteId: string, path = '/') {
-  const site = await w.store.getSite(siteId);
-  if (!site) throw new Error(`no site ${siteId}`);
-  const key = { kid: KID, secret: await w.edge.get(signingKeyKey(KID)) };
-  return handoffUrl({ key, siteId, accessVersion: site.accessVersion, origin: w.origin(siteId), path, cookieLifetime: w.config.lifetimes.siteCookie });
+function authApp(w: ReturnType<typeof wiring>) {
+  const ses = new SesMailer(w.ses, w.config.email.from);
+  return createAuthApp({
+    store: w.store,
+    events: w.events,
+    config: w.config,
+    // Moto accepts the email but delivers nothing, so it's printed here too.
+    mailer: {
+      async send(email) {
+        await ses.send(email);
+        out(`\nEmail to ${email.to}: ${email.subject}\n${email.text}`);
+      },
+    },
+    siteKey: async () => ({ kid: KID, secret: await w.edge.get(signingKeyKey(KID)) }),
+    urls: { auth: `http://auth.localhost:${PORT}`, site: w.origin },
+    log: (message, data) => process.stderr.write(`${message} ${JSON.stringify(data ?? {})}\n`),
+  });
 }
+
+// The sender's domain, which SES (and Moto) require to be verified.
+const senderDomain = (from: string) => /@([^>\s]+)>?$/.exec(from)?.[1] ?? from;
 
 function readFolder(dir: string): { path: string; content: Uint8Array }[] {
   const root = resolve(dir);
@@ -72,6 +89,7 @@ const commands: Record<string, (w: ReturnType<typeof wiring>, args: string[]) =>
         if ((err as { name?: string }).name !== 'BucketAlreadyOwnedByYou') throw err;
       }
     }
+    await w.ses.send(new CreateEmailIdentityCommand({ EmailIdentity: senderDomain(w.config.email.from) }));
     try {
       await w.edge.get(signingKeyKey(KID));
     } catch {
@@ -82,8 +100,9 @@ const commands: Record<string, (w: ReturnType<typeof wiring>, args: string[]) =>
   },
 
   async proxy(w) {
-    await startProxy({ edge: w.edge, s3: w.s3, bucket: buckets.sites, cdnAllowlist: w.config.cdnAllowlist }, PORT);
-    out(`Sites at http://<site-id>.localhost:${PORT}/ (Ctrl-C to stop)`);
+    await startProxy({ edge: w.edge, s3: w.s3, bucket: buckets.sites, cdnAllowlist: w.config.cdnAllowlist, auth: authApp(w) }, PORT);
+    out(`Sites at http://<site-id>.localhost:${PORT}/, sign-in at http://auth.localhost:${PORT}/ (Ctrl-C to stop)`);
+    out('Sign-in emails are printed here.');
   },
 
   async publish(w, [dir, ...title]) {
@@ -92,12 +111,7 @@ const commands: Record<string, (w: ReturnType<typeof wiring>, args: string[]) =>
     if (!owner) throw new Error('run `pnpm local setup` first');
     const site = await new Publisher(w.deps).publish({ userId: owner.id }, { title: title.join(' ') || dir, content: { files: readFolder(dir) } });
     out(`Published ${site.url} (${site.files} files${site.skipped.length ? `, skipped ${site.skipped.join(', ')}` : ''})`);
-    out(`Sign in: ${await signinLink(w, site.site_id)}`);
-  },
-
-  async signin(w, [siteId, path]) {
-    if (!siteId) throw new Error('usage: pnpm local signin <site-id> [path]');
-    out(await signinLink(w, siteId, path));
+    out(`Open it and sign in as ${owner.email}.`);
   },
 };
 

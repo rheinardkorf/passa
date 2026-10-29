@@ -4,6 +4,10 @@ import { createHmac } from 'node:crypto';
 
 export type SigningKey = { kid: string; secret: string };
 
+// Paths the edge will serve, the same rule as PATH in edge/src/handler.js.
+const SITE_PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
+export const isSitePath = (path: string): boolean => path.startsWith('/') && SITE_PATH.test(path);
+
 // Handoff tokens are only valid briefly: long enough to follow one redirect.
 export const HANDOFF_TTL_S = 60;
 

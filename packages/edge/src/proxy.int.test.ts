@@ -1,7 +1,8 @@
 // Sites end to end: publish with the real tools into Moto, then browse through
 // the local proxy, which runs the real edge handler.
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type RequestListener } from 'node:http';
 import type { AddressInfo, Server } from 'node:net';
+import { createAuthApp, type Email } from '@passa/auth';
 import { Publisher } from '@passa/mcp';
 import { addUser, type TestEnv, testEnv } from '@passa/mcp/testing';
 import { contentSecurityPolicy, handoffUrl } from '@passa/shared';
@@ -14,13 +15,22 @@ let port: number;
 let publisher: Publisher;
 const key = { kid: 'k1', secret: 'c'.repeat(64) };
 const alice = { userId: 'alice' };
+const sent: Email[] = [];
 
 beforeAll(async () => {
   env = await testEnv();
   await addUser(env, { id: 'alice' });
   await env.edge.set('k:k1', key.secret);
-  server = await startProxy({ edge: env.edge, s3: env.s3, bucket: env.buckets.sites, cdnAllowlist: env.config.cdnAllowlist }, 0);
+  // The auth app needs the proxy's port for its URLs, so it's created after.
+  let auth: RequestListener = () => undefined;
+  server = await startProxy({ edge: env.edge, s3: env.s3, bucket: env.buckets.sites, cdnAllowlist: env.config.cdnAllowlist, auth: (req, res) => auth(req, res) }, 0);
   port = (server.address() as AddressInfo).port;
+  auth = createAuthApp({
+    ...env,
+    mailer: { send: async (email) => void sent.push(email) },
+    siteKey: async () => key,
+    urls: { auth: `http://auth.localhost:${port}`, site: (id) => `http://${id}.localhost:${port}` },
+  });
   publisher = new Publisher({ ...env, siteUrl: (id) => `http://${id}.localhost:${port}/` });
 });
 
@@ -29,17 +39,43 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 type Reply = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
 
 // Sends a request with a site's Host header to the proxy on 127.0.0.1.
-function get(siteId: string, path: string, headers: Record<string, string> = {}): Promise<Reply> {
+const get = (siteId: string, path: string, headers: Record<string, string> = {}) => send(`${siteId}.localhost:${port}`, path, { headers });
+
+function send(host: string, path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<Reply> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, headers: { host: `${siteId}.localhost:${port}`, ...headers } }, (res) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method: init.method ?? 'GET', headers: { host, ...init.headers } }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => (body += chunk));
       res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(init.body);
   });
+}
+
+// A browser's view: cookies kept per host, redirects followed by hand.
+class Browser {
+  jar = new Map<string, Map<string, string>>();
+
+  async open(url: string, form?: Record<string, string>): Promise<Reply & { url: URL }> {
+    const u = new URL(url);
+    const cookies = this.jar.get(u.host) ?? new Map<string, string>();
+    this.jar.set(u.host, cookies);
+    const headers: Record<string, string> = { cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join('; ') };
+    let body: string | undefined;
+    if (form) {
+      headers.origin = u.origin;
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+      body = new URLSearchParams({ ...form, csrf: cookies.get('__Host-passa-csrf') ?? '' }).toString();
+    }
+    const r = await send(u.host, u.pathname + u.search, { method: form ? 'POST' : 'GET', headers, ...(body ? { body } : {}) });
+    for (const c of (r.headers['set-cookie'] as string[] | undefined) ?? []) {
+      const pair = c.slice(0, c.indexOf(';'));
+      cookies.set(pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1));
+    }
+    return { ...r, url: u };
+  }
 }
 
 // Follows the sign-in handoff the way a browser would, and returns the cookie.
@@ -52,6 +88,34 @@ async function signIn(siteId: string, accessVersion = 1): Promise<string> {
 }
 
 const page = (body: string) => [{ path: 'index.html', content: new TextEncoder().encode(`<!doctype html>${body}`) }];
+
+describe('signing in', () => {
+  it('takes the owner from a site link to the page by magic link, end to end', async () => {
+    const site = await publisher.publish(alice, { title: 'Hello', content: { files: page('<h1>Signed in</h1>') } });
+    const browser = new Browser();
+    const start = await browser.open(site.url);
+    expect(start.status).toBe(302);
+
+    const form = await browser.open(String(start.headers.location));
+    expect(form.body).toContain('Enter your email');
+    await browser.open(`http://auth.localhost:${port}/signin`, { email: 'alice@example.com', site: site.site_id, path: '/' });
+    const link = /(http:\/\/auth\.localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.at(-1)?.text ?? '');
+    expect(link).not.toBeNull();
+
+    // The fragment stays in the browser; the page's script posts it.
+    await browser.open(link?.[1] ?? '');
+    const continued = await browser.open(link?.[1] ?? '', { token: link?.[2] ?? '' });
+    expect(continued.status).toBe(303);
+    const handoff = await browser.open(new URL(String(continued.headers.location), continued.url).href);
+    expect(handoff.status).toBe(302);
+    const landed = await browser.open(String(handoff.headers.location));
+    expect(landed.status).toBe(302);
+    expect(landed.headers.location).toBe('/');
+    const pageReply = await browser.open(site.url);
+    expect(pageReply.status).toBe(200);
+    expect(pageReply.body).toContain('<h1>Signed in</h1>');
+  });
+});
 
 describe('viewing a private site', () => {
   it('redirects to sign in, then serves the current version with site headers', async () => {

@@ -18,6 +18,7 @@ export const testConfig: Config = {
   email: { from: 'Passa <no-reply@example.com>' },
   lifetimes: { accessToken: 3600, refreshToken: 2592000, siteCookie: 3600, sessionIdle: 604800, sessionMax: 2592000, magicLink: 900, uploadUrl: 900 },
   limits: { inlinePublish: 64 * 1024, site: 256 * 1024, file: 128 * 1024, files: 20 },
+  rateLimits: { window: 3600, signinPerEmail: 3, signinPerIp: 100 },
   deleteGraceDays: 7,
   cdnAllowlist: ['cdn.jsdelivr.net'],
 };

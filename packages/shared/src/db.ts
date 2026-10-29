@@ -3,6 +3,7 @@
 import { ConditionalCheckFailedException, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   BatchWriteCommand,
+  DeleteCommand,
   type DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -58,6 +59,24 @@ export type Upload = {
   expiresAt: string;
 };
 
+// A magic link, stored under the hash of its token (R16). siteId and path say
+// where to go after sign-in.
+export type SignInToken = {
+  userId: string;
+  siteId?: string;
+  path?: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+// An auth. session, stored under the hash of its ID (R18).
+export type Session = {
+  userId: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string; // the maximum lifetime; idle expiry is checked from lastSeenAt
+};
+
 // Thrown when a conditional write fails: the item is missing, belongs to
 // someone else, or is in the wrong state. Callers report it as "not found".
 export class NotFoundOrConflict extends Error {}
@@ -67,6 +86,9 @@ const siteKey = (id: string) => ({ pk: `SITE#${id}`, sk: 'META' });
 const versionKey = (siteId: string, id: string) => ({ pk: `SITE#${siteId}`, sk: `VER#${id}` });
 const uploadKey = (id: string) => ({ pk: `UPLOAD#${id}`, sk: 'META' });
 const purgeKey = (siteId: string) => ({ pk: `PURGE#${siteId}`, sk: 'META' });
+const tokenKey = (hash: string) => ({ pk: `TOKEN#${hash}`, sk: 'META' });
+const sessionKey = (hash: string) => ({ pk: `SESSION#${hash}`, sk: 'META' });
+const rateKey = (name: string, windowStart: number) => ({ pk: `RATE#${name}`, sk: `W#${windowStart}` });
 
 const epochSeconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 
@@ -345,5 +367,68 @@ export class Store {
       if (isConditionFailure(err)) throw new NotFoundOrConflict();
       throw err;
     }
+  }
+
+  async putSignInToken(hash: string, token: SignInToken): Promise<void> {
+    await this.#db.send(new PutCommand({
+      TableName: this.#table,
+      Item: { ...tokenKey(hash), ...token, ttl: epochSeconds(token.expiresAt) },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    }));
+  }
+
+  // Deletes the token and returns it if it was still valid, so each link
+  // works at most once even when two requests race.
+  async takeSignInToken(hash: string, now: string): Promise<SignInToken | undefined> {
+    const { Attributes } = await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: tokenKey(hash), ReturnValues: 'ALL_OLD' }));
+    const token = entity<SignInToken>(Attributes);
+    return token && token.expiresAt > now ? token : undefined;
+  }
+
+  // ttl is when DynamoDB may remove it: the earlier of idle and maximum expiry.
+  async putSession(hash: string, session: Session, ttl: number): Promise<void> {
+    await this.#db.send(new PutCommand({
+      TableName: this.#table,
+      Item: { ...sessionKey(hash), ...session, ttl },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    }));
+  }
+
+  async getSession(hash: string): Promise<Session | undefined> {
+    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: sessionKey(hash), ConsistentRead: true }));
+    return entity<Session>(Item);
+  }
+
+  async touchSession(hash: string, lastSeenAt: string, ttl: number): Promise<void> {
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: sessionKey(hash),
+        UpdateExpression: 'SET lastSeenAt = :now, #ttl = :ttl',
+        ConditionExpression: 'attribute_exists(pk)',
+        ExpressionAttributeNames: { '#ttl': 'ttl' },
+        ExpressionAttributeValues: { ':now': lastSeenAt, ':ttl': ttl },
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new NotFoundOrConflict();
+      throw err;
+    }
+  }
+
+  async deleteSession(hash: string): Promise<void> {
+    await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: sessionKey(hash) }));
+  }
+
+  // Counts one request against a fixed window and returns the count so far.
+  async countRequest(name: string, windowStart: number, windowSeconds: number): Promise<number> {
+    const { Attributes } = await this.#db.send(new UpdateCommand({
+      TableName: this.#table,
+      Key: rateKey(name, windowStart),
+      UpdateExpression: 'ADD #count :one SET #ttl = :ttl',
+      ExpressionAttributeNames: { '#count': 'count', '#ttl': 'ttl' },
+      ExpressionAttributeValues: { ':one': 1, ':ttl': windowStart + windowSeconds },
+      ReturnValues: 'UPDATED_NEW',
+    }));
+    return Number(Attributes?.count ?? 0);
   }
 }

@@ -6,5 +6,16 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@passa/mcp": "workspace:*",
+    "@types/express": "5.0.6"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1152.0",
+    "@aws-sdk/client-sesv2": "3.1152.0",
+    "@aws-sdk/lib-dynamodb": "3.1152.0",
+    "@passa/shared": "workspace:*",
+    "express": "5.3.0"
   }
 }
