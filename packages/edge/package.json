@@ -9,11 +9,16 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1152.0",
+    "@aws-sdk/client-kms": "3.1152.0",
     "@aws-sdk/client-s3": "3.1152.0",
+    "@aws-sdk/client-secrets-manager": "3.1152.0",
     "@aws-sdk/client-sesv2": "3.1152.0",
     "@aws-sdk/lib-dynamodb": "3.1152.0",
     "@passa/auth": "workspace:*",
     "@passa/mcp": "workspace:*",
     "@passa/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "playwright-core": "1.64.1"
   }
 }

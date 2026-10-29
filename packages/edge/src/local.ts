@@ -4,16 +4,20 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { CreateAliasCommand, CreateKeyCommand, KMSClient, NotFoundException } from '@aws-sdk/client-kms';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { CreateSecretCommand, ResourceExistsException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { CreateEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { createAuthApp, SesMailer } from '@passa/auth';
-import { Publisher } from '@passa/mcp';
+import { createAuthApp, KmsSigningKey, loadAuthSecrets, SesMailer } from '@passa/auth';
+import { createMcpApp, Publisher } from '@passa/mcp';
 import {
   bootstrapAdmins,
   createTables,
   Events,
   loadConfigFile,
+  loadTokenKey,
+  OidcStore,
   signingKeyKey,
   SiteFiles,
   Store,
@@ -30,6 +34,8 @@ const aws = {
 const tables = { main: 'passa-local', events: 'passa-local-events', edge: 'passa-local-edge' };
 const buckets = { sites: 'passa-local-sites', uploads: 'passa-local-uploads' };
 const KID = 'local';
+const TOKEN_KEY = 'alias/passa-local-tokens';
+const AUTH_SECRET = 'passa-local-auth';
 
 const out = (line: string) => process.stdout.write(`${line}\n`);
 
@@ -39,16 +45,19 @@ function wiring() {
   const db = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
   const s3 = new S3Client({ ...aws, forcePathStyle: true });
   const ses = new SESv2Client(aws);
+  const kms = new KMSClient(aws);
+  const secrets = new SecretsManagerClient(aws);
   const store = new Store(db, tables.main);
   const edge = new TableEdgeStore(db, tables.edge);
   const events = new Events(db, tables.events);
   const origin = (siteId: string) => `http://${siteId}.localhost:${PORT}`;
   const deps = { store, edge, config, events, files: new SiteFiles(s3, buckets), siteUrl: (id: string) => `${origin(id)}/` };
-  return { config, client, s3, ses, store, edge, events, deps, origin };
+  return { config, client, db, s3, ses, kms, secrets, store, edge, events, deps, origin };
 }
 
-function authApp(w: ReturnType<typeof wiring>) {
+async function authApp(w: ReturnType<typeof wiring>) {
   const ses = new SesMailer(w.ses, w.config.email.from);
+  const { cookieKeys } = await loadAuthSecrets(w.secrets, AUTH_SECRET);
   return createAuthApp({
     store: w.store,
     events: w.events,
@@ -61,9 +70,34 @@ function authApp(w: ReturnType<typeof wiring>) {
       },
     },
     siteKey: async () => ({ kid: KID, secret: await w.edge.get(signingKeyKey(KID)) }),
-    urls: { auth: `http://auth.localhost:${PORT}`, site: w.origin },
+    urls: { auth: `http://localhost:${PORT}`, mcp: `http://mcp.localhost:${PORT}`, site: w.origin },
+    oidc: new OidcStore(w.db, tables.main),
+    tokenSigner: await KmsSigningKey.load(w.kms, TOKEN_KEY),
+    cookieKeys,
     log: (message, data) => process.stderr.write(`${message} ${JSON.stringify(data ?? {})}\n`),
   });
+}
+
+async function mcpApp(w: ReturnType<typeof wiring>) {
+  return createMcpApp({
+    ...w.deps,
+    oidc: new OidcStore(w.db, tables.main),
+    tokenKeys: [await loadTokenKey(w.kms, TOKEN_KEY)],
+    issuer: `http://localhost:${PORT}`,
+    resource: `http://mcp.localhost:${PORT}/mcp`,
+    log: (message, data) => process.stderr.write(`${message} ${JSON.stringify(data ?? {})}\n`),
+  });
+}
+
+// The access-token signing key: ECC P-256 in KMS, as in AWS.
+async function ensureTokenKey(kms: KMSClient) {
+  try {
+    await KmsSigningKey.load(kms, TOKEN_KEY);
+  } catch (err) {
+    if (!(err instanceof NotFoundException)) throw err;
+    const { KeyMetadata } = await kms.send(new CreateKeyCommand({ KeySpec: 'ECC_NIST_P256', KeyUsage: 'SIGN_VERIFY', Description: 'Passa local access tokens' }));
+    await kms.send(new CreateAliasCommand({ AliasName: TOKEN_KEY, TargetKeyId: KeyMetadata?.KeyId }));
+  }
 }
 
 // The sender's domain, which SES (and Moto) require to be verified.
@@ -90,6 +124,12 @@ const commands: Record<string, (w: ReturnType<typeof wiring>, args: string[]) =>
       }
     }
     await w.ses.send(new CreateEmailIdentityCommand({ EmailIdentity: senderDomain(w.config.email.from) }));
+    await ensureTokenKey(w.kms);
+    try {
+      await w.secrets.send(new CreateSecretCommand({ Name: AUTH_SECRET, SecretString: JSON.stringify({ cookieKeys: [randomBytes(32).toString('base64url')] }) }));
+    } catch (err) {
+      if (!(err instanceof ResourceExistsException)) throw err;
+    }
     try {
       await w.edge.get(signingKeyKey(KID));
     } catch {
@@ -100,8 +140,9 @@ const commands: Record<string, (w: ReturnType<typeof wiring>, args: string[]) =>
   },
 
   async proxy(w) {
-    await startProxy({ edge: w.edge, s3: w.s3, bucket: buckets.sites, cdnAllowlist: w.config.cdnAllowlist, auth: authApp(w) }, PORT);
-    out(`Sites at http://<site-id>.localhost:${PORT}/, sign-in at http://auth.localhost:${PORT}/ (Ctrl-C to stop)`);
+    await startProxy({ edge: w.edge, s3: w.s3, bucket: buckets.sites, cdnAllowlist: w.config.cdnAllowlist, auth: await authApp(w), mcp: await mcpApp(w) }, PORT);
+    out(`Sites at http://<site-id>.localhost:${PORT}/, sign-in at http://localhost:${PORT}/ (Ctrl-C to stop)`);
+    out(`MCP server: http://mcp.localhost:${PORT}/mcp (claude mcp add --transport http passa-local http://mcp.localhost:${PORT}/mcp)`);
     out('Sign-in emails are printed here.');
   },
 

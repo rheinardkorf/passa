@@ -59,12 +59,13 @@ export type Upload = {
   expiresAt: string;
 };
 
-// A magic link, stored under the hash of its token (R16). siteId and path say
-// where to go after sign-in.
+// A magic link, stored under the hash of its token (R16). siteId and path, or
+// an OAuth interaction, say where to go after sign-in.
 export type SignInToken = {
   userId: string;
   siteId?: string;
   path?: string;
+  interaction?: string;
   createdAt: string;
   expiresAt: string;
 };

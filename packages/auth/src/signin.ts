@@ -12,10 +12,11 @@ import {
   type User,
 } from '@passa/shared';
 import type { Mailer } from './mailer.ts';
-import { magicLinkEmail, type Target } from './pages.ts';
+import { magicLinkEmail, type Next, type Target } from './pages.ts';
 
 export type Urls = {
   auth: string; // the auth. origin
+  mcp: string; // the mcp. origin; the MCP endpoint is <mcp>/mcp
   site: (siteId: string) => string; // a site's origin
 };
 
@@ -39,7 +40,17 @@ const secret = () => randomBytes(32).toString('base64url');
 const TOUCH_AFTER_MS = 5 * 60 * 1000;
 
 export function defaultUrls(config: Config): Urls {
-  return { auth: `https://auth.${config.domain}`, site: (siteId) => `https://${siteId}.${siteDomain(config)}` };
+  return { auth: `https://auth.${config.domain}`, mcp: `https://mcp.${config.domain}`, site: (siteId) => `https://${siteId}.${siteDomain(config)}` };
+}
+
+export const isPublisher = (user: User) => user.status === 'active' && user.roles.includes('publisher');
+
+const INTERACTION = /^[A-Za-z0-9_-]{1,64}$/;
+export const isInteractionUid = (value: string) => INTERACTION.test(value);
+
+function nextFields(next: Next | undefined) {
+  if (!next) return {};
+  return 'site' in next ? { siteId: next.site.siteId, path: next.site.path } : { interaction: next.interaction };
 }
 
 export class SignIn {
@@ -62,8 +73,9 @@ export class SignIn {
   }
 
   // Always resolves the same way, whether or not an email is sent (R15).
-  // Requests over the rate limit count but send nothing (R20).
-  async requestLink(input: { email: string; ip: string; target?: Target | undefined }): Promise<void> {
+  // Requests over the rate limit count but send nothing (R20). For a site,
+  // only people who can view it get an email; for an app, only publishers (R24).
+  async requestLink(input: { email: string; ip: string; next?: Next | undefined }): Promise<void> {
     const { config, store, events } = this.#d;
     const email = input.email.trim().toLowerCase();
     const now = this.#now();
@@ -74,14 +86,16 @@ export class SignIn {
       store.countRequest(`signin-email:${sha256(email)}`, windowStart, window),
       store.countRequest(`signin-ip:${sha256(input.ip)}`, windowStart, window),
     ]);
-    const base = { action: 'signin.request', email, ip: input.ip, ...(input.target ? { siteId: input.target.siteId } : {}) };
+    const next = input.next;
+    const base = { action: 'signin.request', email, ip: input.ip, ...(next && 'site' in next ? { siteId: next.site.siteId } : {}) };
     if (byEmail > signinPerEmail || byIp > signinPerIp) {
       await events.record({ ...base, result: 'refused', detail: 'rate limited' });
       return;
     }
 
     const user = await store.findUserByEmail(email);
-    const allowed = !!user && user.status === 'active' && (!input.target || !!(await this.#viewableSite(user, input.target.siteId)));
+    const allowed = !!user && user.status === 'active'
+      && (!next || ('site' in next ? !!(await this.#viewableSite(user, next.site.siteId)) : isPublisher(user)));
     if (!user || !allowed) {
       await events.record({ ...base, result: 'refused', detail: 'no access' });
       return;
@@ -91,7 +105,7 @@ export class SignIn {
     const createdAt = new Date(now);
     await store.putSignInToken(sha256(token), {
       userId: user.id,
-      ...(input.target ? { siteId: input.target.siteId, path: input.target.path } : {}),
+      ...nextFields(next),
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(now + config.lifetimes.magicLink * 1000).toISOString(),
     });
@@ -102,7 +116,7 @@ export class SignIn {
   }
 
   // Uses up a magic-link token and starts a new session with a fresh ID (R16, R18).
-  async continue(input: { token: string; ip: string }): Promise<(SessionUser & { target?: Target }) | undefined> {
+  async continue(input: { token: string; ip: string }): Promise<(SessionUser & { next?: Next }) | undefined> {
     const { store, events, config } = this.#d;
     const now = this.#now();
     const token = input.token ? await store.takeSignInToken(sha256(input.token), new Date(now).toISOString()) : undefined;
@@ -117,8 +131,10 @@ export class SignIn {
     const expiresAt = now + config.lifetimes.sessionMax * 1000;
     await store.putSession(sha256(sessionId), { userId: user.id, createdAt: iso, lastSeenAt: iso, expiresAt: new Date(expiresAt).toISOString() }, this.#ttl(now, expiresAt));
     await events.record({ action: 'signin.continue', result: 'ok', userId: user.id, email: user.email, ip: input.ip });
-    const target = token.siteId && token.path ? { siteId: token.siteId, path: token.path } : undefined;
-    return { user, sessionId, ...(target ? { target } : {}) };
+    const next: Next | undefined = token.siteId && token.path
+      ? { site: { siteId: token.siteId, path: token.path } }
+      : token.interaction ? { interaction: token.interaction } : undefined;
+    return { user, sessionId, ...(next ? { next } : {}) };
   }
 
   // When DynamoDB may remove the session: whichever expiry comes first.

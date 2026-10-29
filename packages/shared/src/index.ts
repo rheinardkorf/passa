@@ -3,6 +3,8 @@ export * from './db.ts';
 export * from './edge.ts';
 export * from './events.ts';
 export * from './ids.ts';
+export * from './kms.ts';
+export * from './oidc.ts';
 export * from './site-headers.ts';
 export * from './site-tokens.ts';
 export * from './storage.ts';
