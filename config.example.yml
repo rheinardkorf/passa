@@ -1,8 +1,14 @@
 # Copy to config.yml (which is never committed) and fill in your values.
 
-# The domain sites are served from: <site-id>.<domain>, auth.<domain>, mcp.<domain>.
-# Use a domain that hosts nothing else.
+# Passa's domain: auth.<domain> for sign-in, mcp.<domain> for agents. Use a
+# domain that hosts nothing else.
 domain: example.com
+
+# Sites are served from <site-id>.<siteDomain>. Leave it out to use the domain
+# above. A separate domain (example-sites.com, say) is safer: published pages
+# run any script, and on the same domain they are same-site with auth., so the
+# browser's same-site protections don't separate them. See SECURITY.md.
+# siteDomain: example-sites.com
 
 # Region for everything that stores or processes data.
 region: ap-southeast-2

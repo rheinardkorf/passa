@@ -39,8 +39,17 @@ export const eventsTable = (TableName: string): CreateTableCommandInput => ({
   ],
 });
 
-export async function createTables(client: DynamoDBClient, names: { main: string; events: string }): Promise<void> {
-  for (const input of [mainTable(names.main), eventsTable(names.events)]) {
+// Local stand-in for the edge KeyValueStore (see TableEdgeStore).
+export const edgeTable = (TableName: string): CreateTableCommandInput => ({
+  TableName,
+  BillingMode: 'PAY_PER_REQUEST',
+  AttributeDefinitions: [{ AttributeName: 'key', AttributeType: 'S' }],
+  KeySchema: [{ AttributeName: 'key', KeyType: 'HASH' }],
+});
+
+export async function createTables(client: DynamoDBClient, names: { main: string; events: string; edge?: string }): Promise<void> {
+  const inputs = [mainTable(names.main), eventsTable(names.events), ...(names.edge ? [edgeTable(names.edge)] : [])];
+  for (const input of inputs) {
     try {
       await client.send(new CreateTableCommand(input));
     } catch (err) {

@@ -18,6 +18,17 @@ pnpm test:int       # integration tests against Moto
 pnpm local:down
 ```
 
+To try a site locally (with Moto running):
+
+```sh
+pnpm local setup                        # tables, buckets, a signing key, admins from config
+pnpm local proxy                        # sites at http://<site-id>.localhost:8080
+pnpm local publish examples/hello       # prints the site URL and a sign-in link
+pnpm local signin <site-id>             # a fresh sign-in link (valid for 60 seconds)
+```
+
+Until magic-link sign-in is built, `signin` stands in for it. Use a browser that treats `*.localhost` as secure, such as Chrome or Firefox, since the site cookie is `Secure`.
+
 ## License
 
 [MIT](LICENSE)

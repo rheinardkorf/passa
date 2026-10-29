@@ -2,6 +2,7 @@
 // caller's own sites: anything else looks exactly like a site that doesn't exist.
 import {
   type Config,
+  type EdgeRecords,
   type Events,
   type FileEntry,
   isSiteId,
@@ -13,7 +14,9 @@ import {
   NotFoundOrConflict,
   type Site,
   type SiteFiles,
+  siteDomain,
   type Store,
+  syncEdge,
   type Version,
 } from '@passa/shared';
 import { type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
@@ -24,8 +27,12 @@ export type Deps = {
   store: Store;
   files: SiteFiles;
   events: Events;
+  edge: EdgeRecords;
   config: Config;
   now?: () => Date;
+  // Where a site is served. Defaults to https://<site-id>.<siteDomain>/; the local
+  // proxy serves sites over http on its own port.
+  siteUrl?: (siteId: string) => string;
 };
 
 // A refusal the agent should see as it is. Anything else is reported generically.
@@ -69,7 +76,7 @@ export class Publisher {
   }
 
   #url(siteId: string) {
-    return `https://${siteId}.${this.#d.config.domain}/`;
+    return this.#d.siteUrl ? this.#d.siteUrl(siteId) : `https://${siteId}.${siteDomain(this.#d.config)}/`;
   }
 
   #summary(site: Site): SiteSummary {
@@ -178,6 +185,7 @@ export class Publisher {
       updatedAt: version.createdAt,
     };
     await this.#d.store.createSite(site, version);
+    await syncEdge(this.#d.edge, site);
     return { ...this.#summary(site), files: version.files.length, skipped };
   }
 
@@ -213,8 +221,10 @@ export class Publisher {
         ? 'The site changed while this update was running. Get the site again and retry.'
         : NOT_FOUND);
     }
+    const updated = { ...site, current: version.id, updatedAt: version.createdAt };
+    await syncEdge(this.#d.edge, updated);
     return {
-      ...this.#summary({ ...site, current: version.id, updatedAt: version.createdAt }),
+      ...this.#summary(updated),
       files: version.files.length,
       changed: version.files.length - kept,
       removed: remove.length,
@@ -273,7 +283,9 @@ export class Publisher {
       if (err instanceof NotFoundOrConflict) throw new ToolError('No version with that ID.');
       throw err;
     }
-    return this.#summary({ ...site, current: input.versionId, updatedAt: now });
+    const rolledBack = { ...site, current: input.versionId, updatedAt: now };
+    await syncEdge(this.#d.edge, rolledBack);
+    return this.#summary(rolledBack);
   }
 
   async delete(caller: Caller, input: { siteId: string; now: boolean }) {
@@ -291,12 +303,15 @@ export class Publisher {
       if (err instanceof NotFoundOrConflict) throw new ToolError(NOT_FOUND);
       throw err;
     }
+    // The site stops being served at once; the grace period is for undoing.
+    await this.#d.edge.remove(site.id);
     return { site_id: site.id, deleted: false, delete_at: purgeAt };
   }
 
-  // Hard delete: files first, then records, so a failure part-way leaves the
-  // records in place and the purge can simply run again.
+  // Hard delete: stop serving, then files, then records, so a failure part-way
+  // leaves the records in place and the purge can simply run again.
   async purge(siteId: string): Promise<void> {
+    await this.#d.edge.remove(siteId);
     await this.#d.files.deleteSite(siteId);
     await this.#d.store.deleteSiteRecords(siteId);
   }
