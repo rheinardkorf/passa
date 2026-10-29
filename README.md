@@ -22,12 +22,11 @@ To try a site locally (with Moto running):
 
 ```sh
 pnpm local setup                        # tables, buckets, a signing key, admins from config
-pnpm local proxy                        # sites at http://<site-id>.localhost:8080
-pnpm local publish examples/hello       # prints the site URL and a sign-in link
-pnpm local signin <site-id>             # a fresh sign-in link (valid for 60 seconds)
+pnpm local proxy                        # sites and sign-in on http://*.localhost:8080
+pnpm local publish examples/hello       # in another terminal: prints the site URL
 ```
 
-Until magic-link sign-in is built, `signin` stands in for it. Use a browser that treats `*.localhost` as secure, such as Chrome or Firefox, since the site cookie is `Secure`.
+Open the site URL and sign in with the first admin email from your config. Moto doesn't deliver email, so the proxy prints the magic link in its terminal. Use a browser that treats `*.localhost` as secure, such as Chrome or Firefox, since Passa's cookies are `Secure`.
 
 ## License
 

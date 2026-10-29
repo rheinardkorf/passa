@@ -1,8 +1,9 @@
 // The local edge: an HTTP server that runs the real edge handler on each
 // request, then serves the rewritten path from the sites bucket with the same
-// headers CloudFront adds. Sites are at http://<site-id>.localhost:<port>.
+// headers CloudFront adds. Sites are at http://<site-id>.localhost:<port>, and
+// auth.localhost:<port> goes to the auth app when one is given.
 import { createHmac } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from 'node:http';
 import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { type EdgeReader, siteHeaders } from '@passa/shared';
 import { type EdgeRequest, type Header, isResponse, loadHandler } from './load.ts';
@@ -12,6 +13,7 @@ export type ProxyOptions = {
   s3: S3Client;
   bucket: string;
   cdnAllowlist: string[];
+  auth?: RequestListener;
   now?: () => number;
 };
 
@@ -41,13 +43,17 @@ export function startProxy(options: ProxyOptions, port: number): Promise<Server>
   const headers = siteHeaders({ cdnAllowlist: options.cdnAllowlist });
 
   async function serve(req: IncomingMessage, res: ServerResponse) {
+    // Locally, sites are <site-id>.localhost:<port> and auth. is auth.localhost:<port>.
+    const address = server.address();
+    const sites = `localhost:${typeof address === 'object' && address ? address.port : port}`;
+    if (options.auth && req.headers.host?.toLowerCase() === `auth.${sites}`) {
+      options.auth(req, res);
+      return;
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { allow: 'GET, HEAD' }).end();
       return;
     }
-    // Locally, sites are <site-id>.localhost:<port> and auth. is auth.localhost:<port>.
-    const address = server.address();
-    const sites = `localhost:${typeof address === 'object' && address ? address.port : port}`;
     const result = await handle(toEvent(req), { kvs: options.edge, crypto, now: (options.now ?? Date.now)(), sites, auth: `http://auth.${sites}` });
     if (isResponse(result)) {
       for (const [name, { value }] of Object.entries(result.headers)) res.setHeader(name, value);

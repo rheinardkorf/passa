@@ -129,6 +129,18 @@ Details settled in step 4:
 - **Site domain.** Sites are served from `<site-id>.<siteDomain>`, which defaults to `domain`. Deployments can choose a separate domain so that published pages, which run any script, aren't same-site with `auth.`: on one domain, `SameSite` cookies give `auth.` no protection from them, so `auth.` must rely on CSRF tokens (R20) and `__Host-` cookies. The edge only answers on the site domain, and its sign-in redirect goes to `https://auth.<domain>`, both fixed when the Function is built.
 - **Locally,** the proxy runs the same handler file, and a DynamoDB table in Moto stands in for KeyValueStore.
 
+Details settled in step 5:
+
+- **The `auth.` app** is Express. Step 6 mounts `oidc-provider` in the same app, and its login step uses the session below rather than a second one.
+- **Sessions** are random 256-bit IDs in a `__Host-passa-session` cookie, stored only as a hash. Idle expiry counts from the last request (recorded at most every five minutes); the maximum lifetime counts from sign-in. Signing in ends any session the browser already had. A disabled user's session stops working at once.
+- **Site access in M1** is the owner of an active site. With a valid session, `/site/signin` redirects straight to the handoff, so other sites and expired site cookies need no email. Without access, the refused page is the same whether the site exists or not.
+- **Who gets an email:** an active user who can view the requested site, or any active user when no site is named. Everyone sees the same page. The response can take longer when an email is sent; rate limits and WAF bound what that reveals.
+- **CSRF:** every form carries the value of a `__Host-passa-csrf` cookie (double submit), and every post must come from the `auth.` origin. The `__Host-` prefix stops sites, even on the same domain, from setting either cookie.
+- **Rate limits** are fixed windows counted in DynamoDB, per email and per IP (both hashed). Requests over the limit get the usual page and no email.
+- **Magic links aren't bound to the browser that asked**, so a link requested on a laptop can be opened on a phone. The token is single-use, short-lived and only in the fragment.
+- **Pages** load one stylesheet and one script from `auth.` itself (CSP `default-src 'none'`). The script moves the token from the fragment into the Continue form and removes it from the address bar.
+- **Locally,** the proxy serves `auth.localhost:8080` too. Emails go through Moto's SES, which delivers nothing, so the proxy also prints them.
+
 The cookie signing key lives in KeyValueStore with a key ID so it can be rotated. CloudFront Functions can't read any secrets store, so this is the one secret held there, with write access limited to the roles that need it. Edge records hold no personal data.
 
 ### Data model (M1 entities)
@@ -140,7 +152,9 @@ Table `passa`, single-table design, on-demand billing, point-in-time recovery, T
 | User | `USER#<userId>` | `PROFILE` | `EMAIL#<email>` / `USER` |
 | Site | `SITE#<id>` | `META` | `OWNER#<ownerId>` / `SITE#<createdAt>` |
 | Version | `SITE#<id>` | `VER#<versionId>` | — |
-| Sign-in token | `TOKEN#<hash>` | `META` | — |
+| Sign-in token | `TOKEN#<hash>` | `META` | — (expires by TTL) |
+| Session | `SESSION#<hash>` | `META` | — (expires by TTL, at the earlier of idle and maximum expiry) |
+| Rate counter | `RATE#<name>` | `W#<window start>` | — (expires by TTL) |
 | Upload | `UPLOAD#<uploadId>` | `META` | — (expires by TTL) |
 | Pending purge | `PURGE#<siteId>` | `META` | — (its TTL, at the end of the grace period, triggers the hard delete) |
 | OAuth records | `OIDC#<model>#<id>` | `META` | `OIDCGRANT#<grantId>` / `OIDC#<model>#<id>` (revoking a grant finds all its tokens) |
@@ -188,6 +202,7 @@ All config, so they can change without code changes:
 | Site cookie | 1 hour |
 | `auth.` session | 7 days idle, 30 days maximum |
 | Magic link | 15 minutes |
+| Sign-in requests | 5 per email and 30 per IP, per hour |
 | Inline publish size | 1 MB total |
 | Site size | 100 MB total, 25 MB per file |
 | Delete grace period | 7 days |

@@ -43,6 +43,14 @@ limits:
   file: 26214400
   files: 1000
 
+# Sign-in requests (magic-link emails asked for) allowed per email address and
+# per IP address in each window of seconds. Requests over the limit get the
+# usual response but no email. WAF adds IP limits in front of auth.
+rateLimits:
+  window: 3600
+  signinPerEmail: 5
+  signinPerIp: 30
+
 deleteGraceDays: 7
 
 # Scripts, styles and fonts on sites may load only from these hosts.
