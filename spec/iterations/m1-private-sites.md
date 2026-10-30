@@ -31,9 +31,9 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 
 **Out (later milestones):**
 
-- Any tier other than `private`: path rules, sharing, public paths, members (M2).
-- Payments (M3) and scheduled access (M4).
-- Adding or disabling publishers after deployment (an admin CLI, M2).
+- Any tier other than `private`: path rules and public paths (M2); sharing and members (M3).
+- Payments (M4) and scheduled access (M5).
+- Adding or disabling publishers after deployment (an admin CLI, M3).
 - Site APIs under `/_passa/api/`. M1 only reserves the path.
 - A CloudFormation template and Launch Stack button.
 
