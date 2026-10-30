@@ -50,7 +50,7 @@ Make a site public and open it in a private window without signing in. Make one 
 ### Viewing
 
 - **R39** A request for a public path is served without a cookie or sign-in. A request for a private path works exactly as in M1.
-- **R40** Changing rules takes effect within seconds (edge propagation), with no cache invalidation: files stay cached under their version path, and the edge decides access on every request.
+- **R40** Changing rules takes effect within seconds, and everywhere within about a minute (KeyValueStore propagation), with no cache invalidation: files stay cached under their version path, and the edge decides access on every request. When a change makes something private, `set_access` says it can stay public for up to a minute.
 - **R41** A blocked site (M1's malware finding) serves nothing, whatever its rules.
 - **R42** Every site sends `X-Robots-Tag: noindex`, so search engines don't index pages unless that's later turned on for a site.
 

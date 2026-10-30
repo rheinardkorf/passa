@@ -1,7 +1,8 @@
 // The edge handler: runs as a CloudFront Function (JavaScript runtime 2.0) on
 // every request to <site-id>.<site domain>, and unchanged in the local proxy and
-// tests. It maps the host to a site, checks the site cookie against the
-// site's edge record, and rewrites the request to the current version's files.
+// tests. It maps the host to a site, serves public paths as they are, checks
+// the site cookie against the site's edge record for everything else, and
+// rewrites the request to the current version's files.
 //
 // The runtime is ES5.1 plus a few later features: no destructuring, spread,
 // optional chaining, classes, default parameters or async closures. Keep it
@@ -93,6 +94,24 @@ function indexPath(path) {
   return last.indexOf('.') === -1 ? path + '/index.html' : path;
 }
 
+// rules: the record's [prefix, tier] pairs, longest first, so the first match
+// decides; "p" is public. Anything unmatched, or malformed, is private.
+function isPublic(rules, served) {
+  if (!Array.isArray(rules)) return false;
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (Array.isArray(rule) && typeof rule[0] === 'string' && served.indexOf(rule[0]) === 0) return rule[1] === 'p';
+  }
+  return false;
+}
+
+function serve(request, siteId, version, served) {
+  request.uri = '/' + siteId + '/' + version + served;
+  request.querystring = {};
+  request.cookies = {};
+  return request;
+}
+
 // options: { kvs, crypto, now (ms), sites (the site domain), auth (auth. origin) }
 async function handle(event, options) {
   const request = event.request;
@@ -132,6 +151,11 @@ async function handle(event, options) {
   // Reserved for Passa; never served from storage (R14).
   if (path === '/_passa' || path.indexOf('/_passa/') === 0) return notFound();
 
+  // Public paths need no cookie (M2 R39). Rules match the path as served, so
+  // /docs and /docs/ are both covered by /docs/.
+  const served = indexPath(path);
+  if (record && isPublic(record.r, served)) return serve(request, siteId, record.cur, served);
+
   const cookie = parseSigned(request.cookies[COOKIE] ? request.cookies[COOKIE].value : null);
   const key = cookie ? await readKey(options.kvs, cookie.kid) : null;
   const allowed = cookie && key && record && cookie.site === siteId && cookie.v === record.v && cookie.exp > now
@@ -143,8 +167,5 @@ async function handle(event, options) {
     return respond(302, 'Found', { location: signin });
   }
 
-  request.uri = '/' + siteId + '/' + record.cur + indexPath(path);
-  request.querystring = {};
-  request.cookies = {};
-  return request;
+  return serve(request, siteId, record.cur, served);
 }

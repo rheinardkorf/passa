@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { Publisher } from '@passa/mcp';
 import { addUser, type TestEnv } from '@passa/mcp/testing';
-import { contentSecurityPolicy, handoffUrl } from '@passa/shared';
+import { contentSecurityPolicy, handoffUrl, type Rule, syncEdge } from '@passa/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Stack, startStack } from './testing.ts';
 
@@ -257,5 +257,48 @@ describe('viewing a private site', () => {
       httpRequest({ host: '127.0.0.1', port, path: '/', method: 'POST', headers: { host: `abcdefghijkm.localhost:${port}` } }, (res) => resolve(res.statusCode ?? 0)).end();
     });
     expect(r).toBe(405);
+  });
+});
+
+describe('viewing a public site (M2)', () => {
+  // set_access arrives in step 2; until then rules go straight to the edge record.
+  async function withRules(siteId: string, rules: Rule[], status: 'active' | 'blocked' = 'active') {
+    const site = await env.store.getSite(siteId);
+    if (!site) throw new Error('no site');
+    await syncEdge(env.edge, { ...site, rules, status });
+  }
+
+  it('serves public paths to anyone, keeps private folders private, and 404s missing public paths', async () => {
+    const site = await publisher.publish(alice, {
+      title: 'Mixed',
+      content: { files: [...page('<h1>Public</h1>'), { path: 'notes/index.html', content: new TextEncoder().encode('secret notes') }] },
+    });
+    await withRules(site.site_id, [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }]);
+
+    const home = await get(site.site_id, '/');
+    expect(home.status).toBe(200);
+    expect(home.body).toContain('<h1>Public</h1>');
+    expect(home.headers['content-security-policy']).toBe(contentSecurityPolicy(env.config.cdnAllowlist));
+    expect((await get(site.site_id, '/missing.html')).status).toBe(404);
+
+    // A private folder, whether or not the file exists, looks the same: sign in.
+    for (const path of ['/notes/', '/notes/missing.html']) {
+      const r = await get(site.site_id, path);
+      expect(r.status, path).toBe(302);
+      expect(String(r.headers.location), path).toContain('/site/signin');
+    }
+    expect((await get(site.site_id, '/notes/', { cookie: await signIn(site.site_id) })).body).toBe('secret notes');
+
+    // Back to private: takes effect on the next request, with no invalidation (R40).
+    await withRules(site.site_id, []);
+    expect((await get(site.site_id, '/')).status).toBe(302);
+  });
+
+  it('serves nothing from a blocked site, whatever its rules (R41)', async () => {
+    const site = await publisher.publish(alice, { title: 'Blocked', content: { files: page('x') } });
+    await withRules(site.site_id, [{ path: '/', tier: 'public' }]);
+    expect((await get(site.site_id, '/')).status).toBe(200);
+    await withRules(site.site_id, [{ path: '/', tier: 'public' }], 'blocked');
+    expect((await get(site.site_id, '/')).status).toBe(302);
   });
 });

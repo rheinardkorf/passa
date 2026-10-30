@@ -108,6 +108,45 @@ describe('without a valid cookie (R10, R12)', () => {
   });
 });
 
+describe('public paths (M2 R32, R33, R39)', () => {
+  const rules = (r: unknown) => kvs.put(SITE, { cur: VERSION, v: 1, r } as never);
+
+  it('serves a public site without a cookie, stripping cookies and query strings', async () => {
+    await rules([['/', 'p']]);
+    expect(await rewrite(request('/'))).toBe(`/${SITE}/${VERSION}/index.html`);
+    expect(await rewrite(request('/css/site.css'))).toBe(`/${SITE}/${VERSION}/css/site.css`);
+    const result = (await run(request('/', { cookie: 'anything', query: { a: '1' } }))) as EdgeRequest;
+    expect([result.cookies, result.querystring]).toEqual([{}, {}]);
+  });
+
+  it('keeps a private folder inside a public site private, matching the path as served', async () => {
+    await rules([['/notes/', 'x'], ['/', 'p']]);
+    for (const uri of ['/notes/', '/notes', '/notes/a.html']) expect((await response(request(uri))).headers.location?.value, uri).toBe(signinFor(uri));
+    for (const uri of ['/', '/notes.html', '/notesx/']) expect(await rewrite(request(uri)), uri).toContain(`/${SITE}/${VERSION}/`);
+    // The owner still gets in with a cookie.
+    expect(await rewrite(request('/notes/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/notes/index.html`);
+  });
+
+  it('makes only a public folder public in a private site', async () => {
+    await rules([['/docs/', 'p']]);
+    expect(await rewrite(request('/docs'))).toBe(`/${SITE}/${VERSION}/docs/index.html`);
+    expect(await rewrite(request('/docs/a.png'))).toBe(`/${SITE}/${VERSION}/docs/a.png`);
+    for (const uri of ['/', '/docs.html', '/other/']) expect((await response(request(uri))).statusCode, uri).toBe(302);
+  });
+
+  it('still refuses reserved and impossible paths', async () => {
+    await rules([['/', 'p']]);
+    for (const uri of ['/_passa', '/_passa/x.html', '/../x', '/.env']) expect((await response(request(uri))).statusCode, uri).toBe(404);
+  });
+
+  it('treats malformed rules as private', async () => {
+    for (const r of ['/', [['/', 'P']], [[1, 'p']], [['/']], [null], { '/': 'p' }]) {
+      await rules(r);
+      expect((await response(request('/'))).statusCode, JSON.stringify(r)).toBe(302);
+    }
+  });
+});
+
 describe('paths', () => {
   it('returns 404 for paths that no published file can have', async () => {
     const c = cookie();

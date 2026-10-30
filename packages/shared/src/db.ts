@@ -11,6 +11,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import type { Rule } from './rules.ts';
 
 export type Role = 'admin' | 'publisher';
 
@@ -33,6 +34,8 @@ export type Site = {
   accessVersion: number;
   // blocked: a file failed a malware scan, so the site isn't served.
   status: 'active' | 'deleting' | 'blocked';
+  // Path rules (M2). None means the whole site is private.
+  rules?: Rule[];
   purgeAt?: string;
   createdAt: string;
   updatedAt: string;

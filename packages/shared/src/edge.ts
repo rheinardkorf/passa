@@ -3,16 +3,18 @@
 // source of truth; records are rewritten whenever a site changes.
 import { DeleteCommand, type DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import type { Site } from './db.ts';
+import { type EdgeRule, edgeRules } from './rules.ts';
 
-// cur: current version. v: access version (cookies must match it). r: path rules, empty (private) in M1.
-export type EdgeRecord = { cur: string; v: number; r: unknown[] };
+// cur: current version. v: access version (cookies must match it). r: path
+// rules, longest first; empty when nothing is public.
+export type EdgeRecord = { cur: string; v: number; r: EdgeRule[] };
 
 export const siteKey = (siteId: string) => `s:${siteId}`;
 export const signingKeyKey = (kid: string) => `k:${kid}`;
 
 // Only active sites are served; a site being deleted has no record.
 export function edgeRecord(site: Site): EdgeRecord | undefined {
-  return site.status === 'active' ? { cur: site.current, v: site.accessVersion, r: [] } : undefined;
+  return site.status === 'active' ? { cur: site.current, v: site.accessVersion, r: edgeRules(site.rules ?? []) } : undefined;
 }
 
 export interface EdgeRecords {
