@@ -13,6 +13,7 @@ export const ENV = {
   authSecret: 'PASSA_AUTH_SECRET',
   edgeStore: 'PASSA_EDGE_STORE', // KeyValueStore ARN
   configurationSet: 'PASSA_SES_CONFIGURATION_SET', // optional: reports bounces and complaints
+  malwareScan: 'PASSA_MALWARE_SCAN', // "1" when GuardDuty scans the buckets
 } as const;
 
 export type RuntimeEnv = {
@@ -23,6 +24,7 @@ export type RuntimeEnv = {
   authSecret: string;
   edgeStore: string;
   configurationSet?: string;
+  malwareScan: boolean;
 };
 
 export function runtimeEnv(env: Record<string, string | undefined> = process.env): RuntimeEnv {
@@ -40,6 +42,7 @@ export function runtimeEnv(env: Record<string, string | undefined> = process.env
     authSecret: get(ENV.authSecret),
     edgeStore: get(ENV.edgeStore),
     ...(configurationSet ? { configurationSet } : {}),
+    malwareScan: env[ENV.malwareScan] === '1',
   };
 }
 

@@ -23,6 +23,8 @@ import { FunctionUrlOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
+import { Rule } from 'aws-cdk-lib/aws-events';
+import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { FilterCriteria, FilterRule, FunctionUrlAuthType, StartingPosition } from 'aws-cdk-lib/aws-lambda';
 import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -77,6 +79,7 @@ export class ServicesStack extends Stack {
       [ENV.authSecret]: data.authSecret.secretArn,
       [ENV.edgeStore]: data.edgeStore.keyValueStoreArn,
       [ENV.configurationSet]: mail.configurationSetName,
+      [ENV.malwareScan]: '1',
       NODE_OPTIONS: '--enable-source-maps',
     };
 
@@ -176,7 +179,7 @@ export class ServicesStack extends Stack {
     data.events.grantWriteData(purge);
     data.sites.grantRead(purge);
     data.sites.grantDelete(purge);
-    purge.addToRolePolicy(kvsWritePolicy(data.edgeStore));
+    purge.addToRolePolicy(kvsWritePolicy(data.edgeStore, 'remove'));
     // TableV2's typings clash with exactOptionalPropertyTypes; it is an ITable.
     purge.addEventSource(new DynamoEventSource(data.table as unknown as ITable, {
       startingPosition: StartingPosition.LATEST,
@@ -227,7 +230,31 @@ export class ServicesStack extends Stack {
     const reputation = (metricName: string) => new Metric({ namespace: 'AWS/SES', metricName, statistic: 'Maximum', period: Duration.hours(1) });
     alarm('bounce-rate', reputation('Reputation.BounceRate'), 0.02, 'SES bounce rate is high');
     alarm('complaint-rate', reputation('Reputation.ComplaintRate'), 0.0005, 'SES complaint rate is high');
-    for (const [name, fn, threshold] of [['auth', auth, 5], ['mcp', mcp, 5], ['purge', purge, 1], ['bounces', bounces, 1]] as const) {
+    // Malware findings (GuardDuty scans both buckets, see the data stack).
+    const scans = nodeFunction(this, 'ScansFunction', {
+      entry: 'packages/mcp/src/scans.ts',
+      environment,
+      description: `Passa ${props.stage} malware findings`,
+      removalPolicy: data.removalPolicy,
+    });
+    data.table.grantReadWriteData(scans);
+    data.events.grantWriteData(scans);
+    scans.addToRolePolicy(kvsWritePolicy(data.edgeStore, 'remove'));
+    const findings = new Rule(this, 'MalwareFindings', {
+      description: 'GuardDuty found malware in a Passa bucket',
+      eventPattern: {
+        source: ['aws.guardduty'],
+        detailType: ['GuardDuty Malware Protection Object Scan Result'],
+        detail: {
+          scanResultDetails: { scanResultStatus: ['THREATS_FOUND'] },
+          s3ObjectDetails: { bucketName: [data.sites.bucketName, data.uploads.bucketName] },
+        },
+      },
+      targets: [new LambdaFunction(scans, { retryAttempts: 10 })],
+    });
+    alarm('malware-found', new Metric({ namespace: 'AWS/Events', metricName: 'MatchedEvents', dimensionsMap: { RuleName: findings.ruleName }, statistic: 'Sum', period: Duration.minutes(5) }), 1, 'GuardDuty found malware in a published or uploaded file');
+
+    for (const [name, fn, threshold] of [['auth', auth, 5], ['mcp', mcp, 5], ['purge', purge, 1], ['bounces', bounces, 1], ['scans', scans, 1]] as const) {
       alarm(`${name}-errors`, fn.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }), threshold, `Passa ${name} function errors`);
     }
 

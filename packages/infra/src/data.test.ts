@@ -36,6 +36,12 @@ describe('data stack', () => {
     template.hasResourceProperties('AWS::S3::Bucket', { LifecycleConfiguration: { Rules: [Match.objectLike({ ExpirationInDays: 1 })] } });
   });
 
+  it('scans both buckets for malware and tags each object with the result', () => {
+    const template = synth('prod');
+    template.resourceCountIs('AWS::GuardDuty::MalwareProtectionPlan', 2);
+    template.allResourcesProperties('AWS::GuardDuty::MalwareProtectionPlan', { Actions: { Tagging: { Status: 'ENABLED' } } });
+  });
+
   it('signs access tokens with a P-256 key in KMS', () => {
     synth('prod').hasResourceProperties('AWS::KMS::Key', { KeySpec: 'ECC_NIST_P256', KeyUsage: 'SIGN_VERIFY' });
   });

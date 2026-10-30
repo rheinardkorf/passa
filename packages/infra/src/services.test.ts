@@ -47,12 +47,14 @@ describe('services stack', () => {
     services.hasResourceProperties('AWS::ApiGatewayV2::DomainName', { DomainName: 'mcp.example.com' });
   });
 
-  it('lets only auth. sign tokens and send email, and only mcp. write site files (purge may edit edge records)', () => {
+  it('lets only auth. sign tokens and send email, and only mcp. write site files and edge records', () => {
     const policies = Object.entries(services.findResources('AWS::IAM::Policy')).map(([id, p]) => ({ id, text: JSON.stringify(p) }));
     const holders = (action: string) => policies.filter((p) => p.text.includes(action)).map((p) => p.id.replace(/ServiceRole.*/, ''));
     expect(holders('kms:Sign')).toEqual(['AuthFunction']);
     expect(holders('ses:SendEmail')).toEqual(['AuthFunction']);
-    expect(holders('cloudfront-keyvaluestore:PutKey')).toEqual(['McpFunction', 'PurgeFunction']);
+    expect(holders('cloudfront-keyvaluestore:PutKey')).toEqual(['McpFunction']);
+    // Purge and malware findings can only take sites down.
+    expect(holders('cloudfront-keyvaluestore:DeleteKey')).toEqual(['McpFunction', 'PurgeFunction', 'ScansFunction']);
     expect(holders('s3:PutObject')).toEqual(['McpFunction']);
   });
 
@@ -74,6 +76,18 @@ describe('services stack', () => {
     for (const name of ['bounce-rate', 'complaint-rate', 'auth-errors', 'mcp-errors', 'purge-errors', 'bounces-errors']) {
       services.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: `passa-prod-${name}`, AlarmActions: [Match.anyValue()] });
     }
+  });
+
+  it('acts on malware findings in either bucket, alarms on them, and turns on the publish check', () => {
+    services.hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: Match.objectLike({
+        source: ['aws.guardduty'],
+        'detail-type': ['GuardDuty Malware Protection Object Scan Result'],
+        detail: Match.objectLike({ scanResultDetails: { scanResultStatus: ['THREATS_FOUND'] } }),
+      }),
+    });
+    services.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: 'passa-prod-malware-found' });
+    services.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: Match.objectLike({ PASSA_MALWARE_SCAN: '1' }) } });
   });
 
   it('purges only on TTL removals of PURGE items', () => {

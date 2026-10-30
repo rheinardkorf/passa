@@ -6,7 +6,8 @@ import { type Config, eventsTable, mainTable } from '@passa/shared';
 import { CustomResource, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import { KeyValueStore } from 'aws-cdk-lib/aws-cloudfront';
 import { AttributeType, Billing, StreamViewType, TableV2, type TablePropsV2 } from 'aws-cdk-lib/aws-dynamodb';
-import { PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { CfnMalwareProtectionPlan } from 'aws-cdk-lib/aws-guardduty';
+import { PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Alias, Key, KeySpec, KeyUsage } from 'aws-cdk-lib/aws-kms';
 import { BlockPublicAccess, Bucket, BucketEncryption, ObjectOwnership } from 'aws-cdk-lib/aws-s3';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
@@ -79,6 +80,32 @@ export class DataStack extends Stack {
     // Uploads are only staged here until publish copies them; S3 expires the rest.
     this.uploads = new Bucket(this, 'Uploads', { ...bucket, lifecycleRules: [{ expiration: Duration.days(1), abortIncompleteMultipartUploadAfter: Duration.days(1) }] });
 
+    // GuardDuty Malware Protection scans every new object in both buckets and
+    // tags it with the result. Publish checks the tag on uploads; a finding in
+    // the sites bucket blocks the site (see the services stack).
+    const scanRole = new Role(this, 'MalwareScanRole', { assumedBy: new ServicePrincipal('malware-protection-plan.guardduty.amazonaws.com') });
+    const managedRule = this.formatArn({ service: 'events', resource: 'rule', resourceName: 'DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*' });
+    scanRole.addToPolicy(new PolicyStatement({
+      actions: ['events:PutRule', 'events:DeleteRule', 'events:PutTargets', 'events:RemoveTargets'],
+      resources: [managedRule],
+      conditions: { StringLike: { 'events:ManagedBy': 'malware-protection-plan.guardduty.amazonaws.com' } },
+    }));
+    scanRole.addToPolicy(new PolicyStatement({ actions: ['events:DescribeRule', 'events:ListTargetsByRule'], resources: [managedRule] }));
+    [this.sites, this.uploads].forEach((scanned, i) => {
+      scanRole.addToPolicy(new PolicyStatement({ actions: ['s3:PutBucketNotification', 's3:GetBucketNotification', 's3:ListBucket'], resources: [scanned.bucketArn] }));
+      scanRole.addToPolicy(new PolicyStatement({
+        actions: ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectTagging', 's3:GetObjectVersionTagging', 's3:PutObjectTagging', 's3:PutObjectVersionTagging'],
+        resources: [scanned.arnForObjects('*')],
+      }));
+      scanRole.addToPolicy(new PolicyStatement({ actions: ['s3:PutObject'], resources: [scanned.arnForObjects('malware-protection-resource-validation-object')] }));
+      const plan = new CfnMalwareProtectionPlan(this, i === 0 ? 'SitesScan' : 'UploadsScan', {
+        role: scanRole.roleArn,
+        protectedResource: { s3Bucket: { bucketName: scanned.bucketName } },
+        actions: { tagging: { status: 'ENABLED' } },
+      });
+      plan.node.addDependency(scanRole);
+    });
+
     // Access tokens are signed in KMS; the private key never leaves it.
     this.tokenKey = new Key(this, 'TokenKey', { keySpec: KeySpec.ECC_NIST_P256, keyUsage: KeyUsage.SIGN_VERIFY, description: `${prefix} access tokens`, removalPolicy });
     this.tokenKeyAlias = this.tokenKey.addAlias(`alias/${prefix}-tokens`);
@@ -104,10 +131,12 @@ export class DataStack extends Stack {
   }
 }
 
-// KeyValueStore's data-plane API.
-export function kvsWritePolicy(store: KeyValueStore): PolicyStatement {
+// KeyValueStore's data-plane API: writing records, or only removing them
+// (purge and malware findings take sites down, never put them up).
+export function kvsWritePolicy(store: KeyValueStore, only: 'write' | 'remove' = 'write'): PolicyStatement {
+  const writes = only === 'write' ? ['cloudfront-keyvaluestore:GetKey', 'cloudfront-keyvaluestore:PutKey'] : [];
   return new PolicyStatement({
-    actions: ['cloudfront-keyvaluestore:DescribeKeyValueStore', 'cloudfront-keyvaluestore:GetKey', 'cloudfront-keyvaluestore:PutKey', 'cloudfront-keyvaluestore:DeleteKey'],
+    actions: ['cloudfront-keyvaluestore:DescribeKeyValueStore', ...writes, 'cloudfront-keyvaluestore:DeleteKey'],
     resources: [store.keyValueStoreArn],
   });
 }

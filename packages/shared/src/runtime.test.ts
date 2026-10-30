@@ -20,6 +20,7 @@ describe('runtime environment', () => {
     expect([read.config.domain, read.tables, read.buckets, read.edgeStore]).toEqual(['example.com', { main: 't', events: 'e' }, { sites: 's', uploads: 'u' }, 'arn:kvs']);
     expect(read).not.toHaveProperty('configurationSet');
     expect(runtimeEnv({ ...env, [ENV.configurationSet]: 'cs' }).configurationSet).toBe('cs');
+    expect([read.malwareScan, runtimeEnv({ ...env, [ENV.malwareScan]: '1' }).malwareScan]).toEqual([false, true]);
   });
 
   it('fails clearly when something is missing', () => {

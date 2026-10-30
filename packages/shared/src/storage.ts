@@ -6,6 +6,7 @@ import {
   CopyObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  GetObjectTaggingCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -16,6 +17,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 export type Buckets = { sites: string; uploads: string };
 
 const IMMUTABLE = 'public, max-age=31536000, immutable';
+
+// The tag GuardDuty Malware Protection for S3 puts on each object it scans.
+export const SCAN_STATUS_TAG = 'GuardDutyMalwareScanStatus';
+export const NO_THREATS = 'NO_THREATS_FOUND';
+export const THREATS = 'THREATS_FOUND';
 
 function bytes(body: { transformToByteArray(): Promise<Uint8Array> } | undefined): Promise<Uint8Array> {
   if (!body) throw new Error('S3 returned no body');
@@ -83,6 +89,13 @@ export class SiteFiles {
   async getUploadedFile(uploadId: string, path: string): Promise<Uint8Array> {
     const { Body } = await this.#s3.send(new GetObjectCommand({ Bucket: this.#buckets.uploads, Key: `${uploadId}/${path}` }));
     return bytes(Body);
+  }
+
+  // GuardDuty Malware Protection's result for an uploaded file, from the tag
+  // it adds once the scan is done; undefined while it's still scanning.
+  async uploadScanStatus(uploadId: string, path: string): Promise<string | undefined> {
+    const { TagSet = [] } = await this.#s3.send(new GetObjectTaggingCommand({ Bucket: this.#buckets.uploads, Key: `${uploadId}/${path}` }));
+    return TagSet.find((tag) => tag.Key === SCAN_STATUS_TAG)?.Value;
   }
 
   deleteUpload(uploadId: string): Promise<void> {
