@@ -61,7 +61,7 @@ export function startProxy(options: ProxyOptions, port: number): Promise<Server>
       res.writeHead(405, { allow: 'GET, HEAD' }).end();
       return;
     }
-    const result = await handle(toEvent(req), { kvs: options.edge, crypto, now: (options.now ?? Date.now)(), sites, auth: `http://${sites}` });
+    const result = await handle(toEvent(req), { kvs: options.edge, crypto, now: (options.now ?? Date.now)(), sites, auth: `http://${sites}`, scheme: 'http' });
     if (isResponse(result)) {
       for (const [name, { value }] of Object.entries(result.headers)) res.setHeader(name, value);
       const cookies = Object.entries(result.cookies ?? {}).map(([name, c]) => `${name}=${c.value}; ${c.attributes}`);

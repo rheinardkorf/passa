@@ -1,17 +1,26 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
+import { ADJECTIVES, NOUNS } from './words.ts';
 
-// Site IDs appear in every URL, so they are fully random. Lowercase only (they
-// are DNS labels), without look-alike characters (0, o, 1, l).
-const SITE_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
-const SITE_ID_LENGTH = 12; // 12 × 5 bits = 60 random bits
+// Site IDs appear in every URL: <adjective>-<noun>-<6 random characters>, such
+// as brave-otter-k3x9qm. Two words from lists of 512 (9 bits each) and 6
+// characters from 28 (about 29 bits): about 47 bits in all. The random part has
+// no vowels, so it can't spell words, and no look-alikes (0, 1, l, o).
+const SITE_ID_RANDOM = 'bcdfghjkmnpqrstvwxyz23456789';
+const SITE_ID_RANDOM_LENGTH = 6;
+
+// The shape alone tells a site ID from a name (M2 R43, R44); names can't match
+// it. The edge handler has the same pattern, and a test keeps them equal.
+export const SITE_ID_PATTERN = /^[a-z]{3,6}-[a-z]{3,6}-[b-df-hj-km-np-tv-z2-9]{6}$/;
+
+const pick = <T>(items: readonly T[]): T => items[randomInt(items.length)] as T;
 
 export function newSiteId(): string {
-  // The alphabet has 32 characters, so taking each byte modulo 32 is unbiased.
-  return Array.from(randomBytes(SITE_ID_LENGTH), (b) => SITE_ID_ALPHABET[b % SITE_ID_ALPHABET.length]).join('');
+  const random = Array.from({ length: SITE_ID_RANDOM_LENGTH }, () => pick([...SITE_ID_RANDOM])).join('');
+  return `${pick(ADJECTIVES)}-${pick(NOUNS)}-${random}`;
 }
 
 export function isSiteId(value: string): boolean {
-  return value.length === SITE_ID_LENGTH && [...value].every((c) => SITE_ID_ALPHABET.includes(c));
+  return SITE_ID_PATTERN.test(value);
 }
 
 // Version IDs are ULIDs: 48 bits of millisecond time, then 80 random bits, in

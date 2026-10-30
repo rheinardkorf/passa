@@ -5,6 +5,7 @@ import {
   type Config,
   type Events,
   handoffUrl,
+  isSiteId,
   type SigningKey,
   type Site,
   siteDomain,
@@ -17,7 +18,7 @@ import { magicLinkEmail, type Next, type Target } from './pages.ts';
 export type Urls = {
   auth: string; // the auth. origin
   mcp: string; // the mcp. origin; the MCP endpoint is <mcp>/mcp
-  site: (siteId: string) => string; // a site's origin
+  site: (label: string) => string; // a site's origin, by its ID or name
 };
 
 export type SignInDeps = {
@@ -66,9 +67,12 @@ export class SignIn {
     return (this.#d.now?.() ?? new Date()).getTime();
   }
 
-  // M1: only a site's owner may view it, and only while it's active.
-  async #viewableSite(user: User, siteId: string): Promise<Site | undefined> {
-    const site = await this.#d.store.getSite(siteId);
+  // Only a site's owner may view it, and only while it's active. A name counts
+  // only while it's the site's current one; held names redirect at the edge.
+  async #viewableSite(user: User, label: string): Promise<Site | undefined> {
+    const siteId = isSiteId(label) ? label : (await this.#d.store.getName(label))?.siteId;
+    const site = siteId ? await this.#d.store.getSite(siteId) : undefined;
+    if (!isSiteId(label) && site?.name !== label) return undefined;
     return site && site.status === 'active' && site.ownerId === user.id ? site : undefined;
   }
 
@@ -177,7 +181,8 @@ export class SignIn {
       key: await this.#d.siteKey(),
       siteId: site.id,
       accessVersion: site.accessVersion,
-      origin: this.urls.site(site.id),
+      // The site's current address, from the database, never from the request (M2 R45).
+      origin: this.urls.site(site.name ?? site.id),
       path: target.path,
       cookieLifetime: this.#d.config.lifetimes.siteCookie,
       now: this.#now(),

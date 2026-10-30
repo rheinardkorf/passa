@@ -188,6 +188,10 @@ export class ServicesStack extends Stack {
         eventName: FilterRule.isEqual('REMOVE'),
         userIdentity: { principalId: FilterRule.isEqual('dynamodb.amazonaws.com') },
         dynamodb: { OldImage: { pk: { S: FilterRule.beginsWith('PURGE#') } } },
+      }), FilterCriteria.filter({
+        eventName: FilterRule.isEqual('REMOVE'),
+        userIdentity: { principalId: FilterRule.isEqual('dynamodb.amazonaws.com') },
+        dynamodb: { OldImage: { pk: { S: FilterRule.beginsWith('NAME#') } } },
       })],
     }));
 

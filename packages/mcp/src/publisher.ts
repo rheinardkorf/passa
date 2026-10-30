@@ -1,6 +1,10 @@
 // The publishing tools, independent of MCP. Every method acts only on the
 // caller's own sites: anything else looks exactly like a site that doesn't exist.
 import {
+  type Access,
+  accessChanges,
+  accessOf,
+  checkRules,
   type Config,
   type EdgeRecords,
   type Events,
@@ -8,12 +12,17 @@ import {
   isSiteId,
   isUploadId,
   isVersionId,
+  NameTaken,
+  nameProblem,
   newSiteId,
   newUploadId,
   newVersionId,
   NO_THREATS,
   NotFoundOrConflict,
+  regions,
+  type Rule,
   type Site,
+  type SiteDetails,
   type SiteFiles,
   siteDomain,
   type Store,
@@ -32,9 +41,9 @@ export type Deps = {
   edge: EdgeRecords;
   config: Config;
   now?: () => Date;
-  // Where a site is served. Defaults to https://<site-id>.<siteDomain>/; the local
-  // proxy serves sites over http on its own port.
-  siteUrl?: (siteId: string) => string;
+  // Where a site is served, by its ID or name. Defaults to
+  // https://<label>.<siteDomain>/; the local proxy serves sites over http on its own port.
+  siteUrl?: (label: string) => string;
   // Uploads are scanned by GuardDuty Malware Protection (in AWS, not locally),
   // and publish checks each file's result first.
   malwareScan?: boolean;
@@ -58,7 +67,13 @@ export type SiteSummary = {
   data_source?: string;
   data_as_of?: string;
   delete_at?: string;
+  name?: string;
+  access: Access;
+  rules?: Rule[];
 };
+
+// What a change of rules did, for the response and the event (R48).
+export type AccessChange = { made_public: string[]; made_private: string[] };
 
 export type SiteFile = { path: string; size: number; content_type: string; sha256: string; content?: string; download_url?: string };
 
@@ -93,14 +108,17 @@ export class Publisher {
     return (this.#d.now ?? (() => new Date()))();
   }
 
-  #url(siteId: string) {
-    return this.#d.siteUrl ? this.#d.siteUrl(siteId) : `https://${siteId}.${siteDomain(this.#d.config)}/`;
+  // A site's one address: its name when it has one (M2 R45, R47).
+  #url(site: Pick<Site, 'id' | 'name'>) {
+    const label = site.name ?? site.id;
+    return this.#d.siteUrl ? this.#d.siteUrl(label) : `https://${label}.${siteDomain(this.#d.config)}/`;
   }
 
   #summary(site: Site): SiteSummary {
     return {
       site_id: site.id,
-      url: this.#url(site.id),
+      url: this.#url(site),
+      ...(site.name ? { name: site.name } : {}),
       title: site.title,
       status: site.status,
       current_version: site.current,
@@ -109,6 +127,40 @@ export class Publisher {
       ...(site.dataSource ? { data_source: site.dataSource } : {}),
       ...(site.dataAsOf ? { data_as_of: site.dataAsOf } : {}),
       ...(site.purgeAt ? { delete_at: site.purgeAt } : {}),
+      access: accessOf(site.rules ?? []),
+      ...(site.rules?.length ? { rules: site.rules } : {}),
+    };
+  }
+
+  // Writes the edge record from the site as stored now, not as this call read
+  // it, so a concurrent change (such as rules made private) is never undone.
+  async #sync(siteId: string): Promise<Site | undefined> {
+    const site = await this.#d.store.getSite(siteId);
+    await (site ? syncEdge(this.#d.edge, site) : this.#d.edge.remove(siteId));
+    return site;
+  }
+
+  // Checks new rules against the current ones. Anything that would become
+  // public needs confirmPublic (R37), whichever way it happens.
+  #checkAccess(before: Rule[], after: Rule[], confirmPublic: boolean): AccessChange {
+    const problems = checkRules(after);
+    if (problems.length) throw new PublishRefused(problems);
+    const { madePublic, madePrivate } = accessChanges(before, after);
+    if (madePublic.length && !confirmPublic) {
+      throw new ToolError(`This would make ${madePublic.join(', ')} public: anyone with the link could open ${madePublic.length > 1 ? 'them' : 'it'} without signing in. `
+        + 'Check with the person first, then call again with confirm_public set to true.');
+    }
+    return { made_public: madePublic, made_private: madePrivate };
+  }
+
+  // The public URLs, and a reminder when something was made private, since the
+  // edge can take up to a minute everywhere (R40).
+  #accessResult(site: Site, change: AccessChange) {
+    const open = regions(site.rules ?? []).public;
+    return {
+      ...change,
+      public_urls: open.map((p) => this.#url(site) + p.slice(1)),
+      ...(change.made_private.length ? { note: 'Paths made private can stay public at some edge locations for up to a minute.' } : {}),
     };
   }
 
@@ -212,7 +264,8 @@ export class Publisher {
     if (unscanned.length) throw new PublishRefused(unscanned.map((r) => `${r.path}: couldn't be scanned for malware (${r.status})`));
   }
 
-  async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string }) {
+  async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string; rules?: Rule[]; confirmPublic?: boolean }) {
+    const change = input.rules ? this.#checkAccess([], input.rules, input.confirmPublic ?? false) : undefined;
     const siteId = newSiteId();
     const { version, skipped } = await this.#storeVersion(caller, siteId, { content: input.content });
     const site: Site = {
@@ -221,6 +274,7 @@ export class Publisher {
       title: input.title,
       ...(input.dataSource ? { dataSource: input.dataSource } : {}),
       ...(input.dataAsOf ? { dataAsOf: input.dataAsOf } : {}),
+      ...(input.rules?.length ? { rules: input.rules } : {}),
       current: version.id,
       accessVersion: 1,
       status: 'active',
@@ -228,20 +282,38 @@ export class Publisher {
       updatedAt: version.createdAt,
     };
     await this.#d.store.createSite(site, version);
-    await syncEdge(this.#d.edge, site);
-    return { ...this.#summary(site), files: version.files.length, skipped };
+    await this.#sync(site.id);
+    return { ...this.#summary(site), files: version.files.length, skipped, ...(change ? this.#accessResult(site, change) : {}) };
   }
 
   // By default the new version is the current one with the changes applied.
   // With replaceAll, the files sent are the whole new version.
   // With baseVersion, the update is refused if the site has moved on from the
   // version the agent last read.
-  async update(caller: Caller, input: { siteId: string; content?: Content; remove?: string[]; edits?: Edit[]; replaceAll?: boolean; baseVersion?: string }) {
+  // With rules, the site's rules are replaced along with the new version.
+  // Details (title, data source and date) can change with or without files;
+  // on their own they make no new version.
+  async update(caller: Caller, input: {
+    siteId: string;
+    content?: Content;
+    remove?: string[];
+    edits?: Edit[];
+    replaceAll?: boolean;
+    baseVersion?: string;
+    rules?: Rule[];
+    confirmPublic?: boolean;
+    details?: SiteDetails;
+  }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
     if (input.baseVersion && input.baseVersion !== site.current) {
       throw new ToolError(`The site has changed since version ${input.baseVersion}: its current version is ${site.current}. Get the site again and retry.`);
     }
+    if (!input.content && !input.remove?.length && !input.edits?.length) {
+      await this.#setDetails(caller, site, input.details ?? {});
+      return { ...this.#summary((await this.#d.store.getSite(site.id)) ?? site), changed: 0, removed: 0 };
+    }
+    const change = input.rules ? this.#checkAccess(site.rules ?? [], input.rules, input.confirmPublic ?? false) : undefined;
     const remove = input.remove ?? [];
     const edits = input.edits ?? [];
     const base = input.replaceAll ? undefined : await this.#d.store.getVersion(site.id, site.current);
@@ -266,7 +338,7 @@ export class Publisher {
     });
     try {
       // Fails if another update landed first, so neither silently undoes the other.
-      await this.#d.store.addVersion(caller.userId, version, site.current);
+      await this.#d.store.addVersion(caller.userId, version, site.current, input.rules ? { rules: input.rules, seen: site.updatedAt } : undefined);
     } catch (err) {
       if (!(err instanceof NotFoundOrConflict)) throw err;
       const now = await this.#d.store.getSite(site.id);
@@ -274,15 +346,25 @@ export class Publisher {
         ? 'The site changed while this update was running. Get the site again and retry.'
         : NOT_FOUND);
     }
-    const updated = { ...site, current: version.id, updatedAt: version.createdAt };
-    await syncEdge(this.#d.edge, updated);
+    if (input.details) await this.#setDetails(caller, site, input.details);
+    const updated = (await this.#sync(site.id)) ?? site;
     return {
       ...this.#summary(updated),
       files: version.files.length,
       changed: version.files.length - kept,
       removed: remove.length,
       skipped,
+      ...(change ? this.#accessResult(updated, change) : {}),
     };
+  }
+
+  async #setDetails(caller: Caller, site: Site, details: SiteDetails) {
+    try {
+      await this.#d.store.setDetails(caller.userId, site.id, details, this.#now().toISOString());
+    } catch (err) {
+      if (err instanceof NotFoundOrConflict) throw new ToolError(NOT_FOUND);
+      throw err;
+    }
   }
 
   // Applies each file's edits in order, refusing all of them if any doesn't
@@ -373,7 +455,8 @@ export class Publisher {
   // previous page.
   async findSites(caller: Caller, input: { query?: string; limit: number; cursor?: string }) {
     const query = input.query?.trim().toLowerCase();
-    const sites = (await this.#d.store.listSitesByOwner(caller.userId)).filter((s) => !query || s.title.toLowerCase().includes(query));
+    const sites = (await this.#d.store.listSitesByOwner(caller.userId))
+      .filter((s) => !query || s.title.toLowerCase().includes(query) || !!s.name?.includes(query));
     const start = input.cursor ? sites.findIndex((s) => s.id === input.cursor) + 1 : 0;
     if (input.cursor && start === 0) throw new ToolError(BAD_CURSOR);
     const page = sites.slice(start, start + input.limit);
@@ -392,9 +475,25 @@ export class Publisher {
       if (err instanceof NotFoundOrConflict) throw new ToolError('No version with that ID.');
       throw err;
     }
-    const rolledBack = { ...site, current: input.versionId, updatedAt: now };
-    await syncEdge(this.#d.edge, rolledBack);
-    return this.#summary(rolledBack);
+    return this.#summary((await this.#sync(site.id)) ?? site);
+  }
+
+  // Replaces a site's rules (R34). The check runs against the rules as read, and
+  // the write is refused if the site changed in between, so a confirmation
+  // always covers what actually becomes public.
+  async setAccess(caller: Caller, input: { siteId: string; rules: Rule[]; confirmPublic: boolean }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    this.#assertChangeable(site);
+    const change = this.#checkAccess(site.rules ?? [], input.rules, input.confirmPublic);
+    try {
+      await this.#d.store.setRules(caller.userId, site.id, input.rules, this.#now().toISOString(), site.updatedAt);
+    } catch (err) {
+      if (!(err instanceof NotFoundOrConflict)) throw err;
+      const now = await this.#d.store.getSite(site.id);
+      throw new ToolError(now?.ownerId === caller.userId && now.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
+    }
+    const updated = (await this.#sync(site.id)) ?? site;
+    return { ...this.#summary(updated), ...this.#accessResult(updated, change) };
   }
 
   async delete(caller: Caller, input: { siteId: string; now: boolean }) {
@@ -421,8 +520,57 @@ export class Publisher {
   // leaves the records in place and the purge can simply run again.
   async purge(siteId: string): Promise<void> {
     await this.#d.edge.remove(siteId);
+    for (const { name } of await this.#d.store.namesOf(siteId)) await this.#d.edge.removeName(name);
     await this.#d.files.deleteSite(siteId);
     await this.#d.store.deleteSiteRecords(siteId);
+  }
+
+  // Gives a site a name, a new one, or none (M2 R44, R46). The old name is held
+  // for the owner, and keeps redirecting to the site, for nameHoldDays.
+  async setName(caller: Caller, input: { siteId: string; name: string | null }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    this.#assertChangeable(site);
+    const to = input.name ?? undefined;
+    const problem = to && nameProblem(to, this.#d.config.reservedNames);
+    if (problem) throw new ToolError(problem);
+    if (to === site.name) return { ...this.#summary(site), name_change: { from: site.name ?? null, to: to ?? null } };
+    const now = this.#now();
+    const holdUntil = new Date(now.getTime() + this.#d.config.nameHoldDays * 86_400_000).toISOString();
+    try {
+      await this.#d.store.setName({ ownerId: caller.userId, siteId: site.id, ...(site.name ? { from: site.name } : {}), ...(to ? { to } : {}), now: now.toISOString(), holdUntil });
+    } catch (err) {
+      if (err instanceof NameTaken) throw new ToolError('That name is taken.');
+      if (!(err instanceof NotFoundOrConflict)) throw err;
+      const current = await this.#d.store.getSite(site.id);
+      throw new ToolError(current?.ownerId === caller.userId && current.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
+    }
+    // The new name before the site record, so its redirect has somewhere to go.
+    if (to) await this.syncName(to);
+    const updated = (await this.#sync(site.id)) ?? site;
+    if (site.name) await this.syncName(site.name);
+    return {
+      ...this.#summary(updated),
+      name_change: { from: site.name ?? null, to: to ?? null },
+      ...(site.name ? { held: { name: site.name, until: holdUntil, note: 'The old name redirects here until then, and only you can claim it again.' } } : {}),
+    };
+  }
+
+  // Writes a name's edge record from DynamoDB as it is now: pointing at its
+  // site while it's current or held, and gone once its hold has ended.
+  async syncName(name: string): Promise<void> {
+    const record = await this.#liveName(name);
+    await (record ? this.#d.edge.putName(name, record.siteId) : this.#d.edge.removeName(name));
+  }
+
+  // After DynamoDB expires a held name: removes its edge record, unless the
+  // name has been claimed again since (whoever claimed it wrote the record).
+  async expireName(name: string): Promise<void> {
+    if (!(await this.#liveName(name))) await this.#d.edge.removeName(name);
+  }
+
+  async #liveName(name: string) {
+    const record = await this.#d.store.getName(name);
+    return record && (!record.heldUntil || record.heldUntil > this.#now().toISOString()) ? record : undefined;
   }
 
   async beginUpload(caller: Caller, input: { files: { path: string; size: number }[] }) {

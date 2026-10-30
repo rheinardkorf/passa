@@ -9,7 +9,7 @@ import {
   GetKeyCommand,
   PutKeyCommand,
 } from '@aws-sdk/client-cloudfront-keyvaluestore';
-import { type EdgeReader, type EdgeRecord, type EdgeRecords, siteKey } from './edge.ts';
+import { type EdgeReader, type EdgeRecord, type EdgeRecords, nameKey, siteKey } from './edge.ts';
 
 const ATTEMPTS = 5;
 const errorName = (err: unknown) => (err as { name?: string }).name;
@@ -37,9 +37,21 @@ export class KvsEdgeStore implements EdgeRecords, EdgeReader {
     return this.set(siteKey(siteId), JSON.stringify(record));
   }
 
-  async remove(siteId: string): Promise<void> {
+  remove(siteId: string): Promise<void> {
+    return this.#delete(siteKey(siteId));
+  }
+
+  putName(name: string, siteId: string): Promise<void> {
+    return this.set(nameKey(name), siteId);
+  }
+
+  removeName(name: string): Promise<void> {
+    return this.#delete(nameKey(name));
+  }
+
+  async #delete(key: string): Promise<void> {
     try {
-      await this.#write((etag) => this.#client.send(new DeleteKeyCommand({ KvsARN: this.#arn, Key: siteKey(siteId), IfMatch: etag })));
+      await this.#write((etag) => this.#client.send(new DeleteKeyCommand({ KvsARN: this.#arn, Key: key, IfMatch: etag })));
     } catch (err) {
       if (errorName(err) !== 'ResourceNotFoundException') throw err;
     }

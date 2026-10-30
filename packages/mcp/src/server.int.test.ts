@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { newVersionId, NotFoundOrConflict } from '@passa/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { Publisher } from './publisher.ts';
 import { createServer } from './server.ts';
 import { addUser, type TestEnv, testEnv } from './testing/moto.ts';
 
@@ -23,8 +24,8 @@ beforeAll(async () => {
 
 type Result = { isError?: boolean; text: string; json: () => Record<string, unknown> };
 
-async function as(userId: string) {
-  const server = createServer(env, { userId, ip: '203.0.113.7' }, (msg, data) => logs.push({ msg, ...data }));
+async function as(userId: string, now?: Date) {
+  const server = createServer({ ...env, ...(now ? { now: () => now } : {}) }, { userId, ip: '203.0.113.7' }, (msg, data) => logs.push({ msg, ...data }));
   const client = new Client({ name: 'test', version: '0.0.0' });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
@@ -60,7 +61,7 @@ describe('publish, update and rollback', () => {
     const r = await call('publish', { files: page('<h1>One</h1>'), title: 'Quarterly numbers', data_source: 'Finance sheet', data_as_of: '2026-10-01T00:00:00Z' });
     expect(r.isError).toBe(false);
     const site = r.json();
-    expect(site.url).toMatch(/^https:\/\/[a-z2-9]{12}\.example\.com\/$/);
+    expect(site.url).toMatch(/^https:\/\/[a-z]{3,6}-[a-z]{3,6}-[a-z2-9]{6}\.example\.com\/$/);
     expect(site).toMatchObject({ title: 'Quarterly numbers', status: 'active', data_source: 'Finance sheet', files: 1 });
 
     // Stored under an immutable version prefix (R13).
@@ -232,6 +233,20 @@ describe('updating part of a site (R3)', () => {
     expect(Object.keys(await files(call, site.site_id))).toEqual(['index.html']);
   });
 
+  it('changes the title and data details, with or without files', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Old title', files: page('x'), data_source: 'Sheet', data_as_of: '2026-10-01T00:00:00Z' })).json();
+    const renamed = (await call('update', { site_id: site.site_id, title: 'New title', data_source: null })).json();
+    expect(renamed).toMatchObject({ title: 'New title', current_version: site.current_version, changed: 0, data_as_of: '2026-10-01T00:00:00Z' });
+    expect(renamed.data_source).toBeUndefined();
+    expect((await call('get_site', { site_id: site.site_id })).json().versions).toHaveLength(1);
+
+    const both = (await call('update', { site_id: site.site_id, files: page('y'), title: 'Newer title', data_as_of: '2026-10-31T00:00:00Z' })).json();
+    expect(both).toMatchObject({ title: 'Newer title', data_as_of: '2026-10-31T00:00:00Z', changed: 1 });
+    expect(((await call('find_sites', { query: 'newer' })).json().sites as { site_id: string }[]).map((f) => f.site_id)).toEqual([site.site_id]);
+    expect((await call('update', { site_id: site.site_id, rules: [] })).text).toContain('To change only the rules, use set_access');
+  });
+
   it('rejects update calls that say nothing, or mix replace_all with remove', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Invalid updates', files: page('x') })).json();
@@ -329,12 +344,226 @@ describe('tool descriptions', () => {
   });
 });
 
+describe('public access (M2)', () => {
+  const edgeRules = async (siteId: unknown) => JSON.parse(await env.edge.get(`s:${String(siteId)}`)).r;
+  const PUBLIC = [{ path: '/', tier: 'public' }];
+
+  it('makes a site public only when confirmed, and says exactly what is public (R34, R37)', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Going public', files: page('hi') })).json();
+    expect(site.access).toBe('private');
+
+    const unconfirmed = await call('set_access', { site_id: site.site_id, rules: PUBLIC });
+    expect(unconfirmed.text).toBe('This would make / public: anyone with the link could open it without signing in. Check with the person first, then call again with confirm_public set to true.');
+    expect(await edgeRules(site.site_id)).toEqual([]);
+
+    const r = (await call('set_access', { site_id: site.site_id, rules: [...PUBLIC, { path: '/notes/', tier: 'private' }], confirm_public: true })).json();
+    expect(r).toMatchObject({ access: 'mixed', made_public: ['/'], made_private: [], public_urls: [site.url] });
+    expect(r.note).toBeUndefined();
+    expect(await edgeRules(site.site_id)).toEqual([['/notes/', 'x'], ['/', 'p']]);
+
+    // Shown by get_site and find_sites (R36).
+    const got = (await call('get_site', { site_id: site.site_id })).json();
+    expect(got).toMatchObject({ access: 'mixed', rules: [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }] });
+    const found = (await call('find_sites', { query: 'Going public' })).json().sites as { access: string }[];
+    expect(found.map((f) => f.access)).toEqual(['mixed']);
+  });
+
+  it('needs confirming when removing a private rule exposes a folder', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Exposed', files: page('x'), rules: [...PUBLIC, { path: '/notes/', tier: 'private' }], confirm_public: true })).json();
+    expect((await call('set_access', { site_id: site.site_id, rules: PUBLIC })).text).toContain('This would make /notes/ public');
+    expect((await call('set_access', { site_id: site.site_id, rules: PUBLIC, confirm_public: true })).json()).toMatchObject({ made_public: ['/notes/'], access: 'public' });
+  });
+
+  it('makes things private without confirming, and warns about edge propagation (R40)', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Back to private', files: page('x'), rules: PUBLIC, confirm_public: true })).json();
+    expect(site).toMatchObject({ access: 'public', public_urls: [site.url] });
+    const r = (await call('set_access', { site_id: site.site_id, rules: [] })).json();
+    expect(r).toMatchObject({ access: 'private', made_private: ['/'], public_urls: [], note: 'Paths made private can stay public at some edge locations for up to a minute.' });
+    expect(r.rules).toBeUndefined();
+    expect(await edgeRules(site.site_id)).toEqual([]);
+  });
+
+  it('refuses invalid rules, and public rules on publish without confirming, storing nothing', async () => {
+    const call = await as('alice');
+    const before = ((await call('find_sites', {})).json().sites as unknown[]).length;
+    expect((await call('publish', { title: 'Unconfirmed', files: page('x'), rules: PUBLIC })).text).toContain('confirm_public');
+    expect((await call('publish', { title: 'Bad rule', files: page('x'), rules: [{ path: '/docs', tier: 'public' }], confirm_public: true })).text)
+      .toBe('Publish refused: "/docs": use / or a folder ending in /, such as /docs/');
+    expect(((await call('find_sites', {})).json().sites as unknown[]).length).toBe(before);
+
+    const site = (await call('publish', { title: 'Rules', files: page('x') })).json();
+    const many = Array.from({ length: 21 }, (_, n) => ({ path: `/f${n}/`, tier: 'private' }));
+    expect((await call('set_access', { site_id: site.site_id, rules: many })).text).toBe('Publish refused: more than 20 rules');
+    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'shared' }] })).text).toContain('Input validation error');
+  });
+
+  it('replaces rules with an update, or keeps them when none are sent (R35)', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Update rules', files: page('v1'), rules: PUBLIC, confirm_public: true })).json();
+    expect((await call('update', { site_id: site.site_id, files: page('v2') })).json()).toMatchObject({ access: 'public' });
+    const docs = [{ path: '/docs/', tier: 'public' }];
+    expect((await call('update', { site_id: site.site_id, files: page('v3'), rules: docs })).json())
+      .toMatchObject({ access: 'mixed', made_public: [], made_private: ['/'] });
+    expect((await call('update', { site_id: site.site_id, files: page('v4'), rules: PUBLIC })).text).toContain('This would make / public');
+    expect(await edgeRules(site.site_id)).toEqual([['/docs/', 'p']]);
+  });
+
+  it('keeps rules on the edge through updates and rollbacks', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Keeps rules', files: page('v1') })).json();
+    await call('update', { site_id: site.site_id, files: page('v2') });
+    await call('set_access', { site_id: site.site_id, rules: PUBLIC, confirm_public: true });
+    await call('rollback', { site_id: site.site_id, version_id: site.current_version });
+    expect(await edgeRules(site.site_id)).toEqual([['/', 'p']]);
+  });
+
+  it('refuses rule changes on sites that are being deleted, and on other people\'s sites', async () => {
+    const alice = await as('alice');
+    const bob = await as('bob');
+    const site = (await alice('publish', { title: 'Not changeable', files: page('x') })).json();
+    expect((await bob('set_access', { site_id: site.site_id, rules: [] })).text).toBe('No site with that ID.');
+    await alice('delete', { site_id: site.site_id });
+    expect((await alice('set_access', { site_id: site.site_id, rules: PUBLIC, confirm_public: true })).text).toBe('This site is being deleted.');
+  });
+
+  it('refuses a rules write when the site changed after it was read', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Stale rules', files: page('x') })).json();
+    const read = await env.store.getSite(String(site.site_id));
+    await call('update', { site_id: site.site_id, files: page('y') });
+    await expect(env.store.setRules('alice', String(site.site_id), [{ path: '/', tier: 'public' }], new Date().toISOString(), read?.updatedAt ?? ''))
+      .rejects.toBeInstanceOf(NotFoundOrConflict);
+  });
+
+  it('records what each change made public or private (R48)', async () => {
+    const events = (await eventsFor('alice')).filter((e) => e.action === 'set_access' && e.result === 'ok');
+    expect(events.map((e) => e.detail)).toContain('made public: /; made private: nothing');
+    expect(events.map((e) => e.detail)).toContain('made public: nothing; made private: /');
+  });
+});
+
+describe('named sites (M2 R44–R48)', () => {
+  const edgeValue = (key: string) => env.edge.get(key).catch(() => undefined);
+  const record = async (siteId: unknown) => JSON.parse((await edgeValue(`s:${String(siteId)}`)) ?? 'null');
+
+  it('names a site, which becomes its address everywhere', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Named', files: page('x') })).json();
+    const r = (await call('set_name', { site_id: site.site_id, name: 'my-cv' })).json();
+    expect(r).toMatchObject({ name: 'my-cv', url: 'https://my-cv.example.com/', name_change: { from: null, to: 'my-cv' } });
+    expect(r.held).toBeUndefined();
+    expect(await edgeValue('n:my-cv')).toBe(site.site_id);
+    expect((await record(site.site_id)).n).toBe('my-cv');
+    expect((await call('get_site', { site_id: site.site_id })).json()).toMatchObject({ name: 'my-cv', url: 'https://my-cv.example.com/' });
+    expect(((await call('find_sites', { query: 'my-cv' })).json().sites as { site_id: string }[]).map((f) => f.site_id)).toEqual([site.site_id]);
+    // Public URLs use the name too.
+    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/docs/', tier: 'public' }], confirm_public: true })).json().public_urls).toEqual(['https://my-cv.example.com/docs/']);
+  });
+
+  it('refuses names that are malformed, reserved, look like IDs, or are taken', async () => {
+    const alice = await as('alice');
+    const bob = await as('bob');
+    const site = (await bob('publish', { title: 'Wants a name', files: page('x') })).json();
+    const mine = (await alice('publish', { title: 'Has a name', files: page('x') })).json();
+    await alice('set_name', { site_id: mine.site_id, name: 'taken' });
+    for (const [name, text] of [
+      ['my--cv', 'Use 2–40 lowercase letters'],
+      ['www', 'That name is reserved.'],
+      ['blog', 'That name is reserved.'],
+      [String(site.site_id), 'That looks like a site ID'],
+      ['taken', 'That name is taken.'],
+    ]) expect((await bob('set_name', { site_id: site.site_id, name })).text, name).toContain(text);
+    // Not even the owner can take a name another of their sites is using.
+    const second = (await alice('publish', { title: 'Second', files: page('x') })).json();
+    expect((await alice('set_name', { site_id: second.site_id, name: 'taken' })).text).toBe('That name is taken.');
+    expect((await bob('set_name', { site_id: mine.site_id, name: 'other' })).text).toBe('No site with that ID.');
+  });
+
+  it('holds the old name after a rename: it still points here, and only the owner can claim it', async () => {
+    const alice = await as('alice');
+    const bob = await as('bob');
+    const site = (await alice('publish', { title: 'Renamed', files: page('x') })).json();
+    await alice('set_name', { site_id: site.site_id, name: 'old-name' });
+    const r = (await alice('set_name', { site_id: site.site_id, name: 'new-name' })).json();
+    expect(r).toMatchObject({ url: 'https://new-name.example.com/', name_change: { from: 'old-name', to: 'new-name' }, held: { name: 'old-name' } });
+    expect(Date.parse((r.held as { until: string }).until) - Date.now()).toBeGreaterThan(6.9 * 86_400_000);
+    expect([await edgeValue('n:old-name'), await edgeValue('n:new-name'), (await record(site.site_id)).n]).toEqual([site.site_id, site.site_id, 'new-name']);
+
+    const theirs = (await bob('publish', { title: 'Bob\'s', files: page('x') })).json();
+    expect((await bob('set_name', { site_id: theirs.site_id, name: 'old-name' })).text).toBe('That name is taken.');
+    // The owner can claim it again, for any of their sites.
+    const other = (await alice('publish', { title: 'Other', files: page('x') })).json();
+    expect((await alice('set_name', { site_id: other.site_id, name: 'old-name' })).isError).toBe(false);
+    expect(await edgeValue('n:old-name')).toBe(other.site_id);
+  });
+
+  it('frees a held name once its hold has passed, even before DynamoDB removes it', async () => {
+    const alice = await as('alice');
+    const site = (await alice('publish', { title: 'Let go', files: page('x') })).json();
+    await alice('set_name', { site_id: site.site_id, name: 'let-go' });
+    const removed = (await alice('set_name', { site_id: site.site_id, name: null })).json();
+    expect(removed).toMatchObject({ url: site.url, name_change: { from: 'let-go', to: null } });
+    expect((await record(site.site_id)).n).toBeUndefined();
+
+    const later = new Date(Date.now() + 8 * 86_400_000);
+    const bob = await as('bob', later);
+    const theirs = (await bob('publish', { title: 'Bob claims it', files: page('x') })).json();
+    expect((await bob('set_name', { site_id: theirs.site_id, name: 'let-go' })).isError).toBe(false);
+    expect(await edgeValue('n:let-go')).toBe(theirs.site_id);
+    // Purging alice's site later doesn't touch bob's name.
+    await alice('delete', { site_id: site.site_id, now: true });
+    expect(await edgeValue('n:let-go')).toBe(theirs.site_id);
+    expect((await env.store.getName('let-go'))?.siteId).toBe(theirs.site_id);
+  });
+
+  it('removes an expired name from the edge, unless it was claimed again', async () => {
+    const alice = await as('alice');
+    const site = (await alice('publish', { title: 'Expiring', files: page('x') })).json();
+    await alice('set_name', { site_id: site.site_id, name: 'expiring' });
+    await alice('set_name', { site_id: site.site_id, name: null });
+    const publisher = new Publisher({ ...env, now: () => new Date(Date.now() + 8 * 86_400_000) });
+    await publisher.expireName('expiring');
+    expect(await edgeValue('n:expiring')).toBeUndefined();
+
+    await alice('set_name', { site_id: site.site_id, name: 'reclaimed' });
+    await new Publisher(env).expireName('reclaimed');
+    expect(await edgeValue('n:reclaimed')).toBe(site.site_id);
+  });
+
+  it('keeps a deleted site\'s names until it is purged, then removes them everywhere', async () => {
+    const alice = await as('alice');
+    const bob = await as('bob');
+    const site = (await alice('publish', { title: 'Purged', files: page('x') })).json();
+    await alice('set_name', { site_id: site.site_id, name: 'purged-a' });
+    await alice('set_name', { site_id: site.site_id, name: 'purged-b' });
+    await alice('delete', { site_id: site.site_id });
+    const theirs = (await bob('publish', { title: 'Waiting', files: page('x') })).json();
+    expect((await bob('set_name', { site_id: theirs.site_id, name: 'purged-b' })).text).toBe('That name is taken.');
+    expect((await alice('set_name', { site_id: site.site_id, name: 'x-y' })).text).toBe('This site is being deleted.');
+
+    await alice('delete', { site_id: site.site_id, now: true });
+    expect([await edgeValue('n:purged-a'), await edgeValue('n:purged-b')]).toEqual([undefined, undefined]);
+    expect([await env.store.getName('purged-a'), await env.store.getName('purged-b')]).toEqual([undefined, undefined]);
+    expect((await bob('set_name', { site_id: theirs.site_id, name: 'purged-b' })).isError).toBe(false);
+  });
+
+  it('records every change of name (R48)', async () => {
+    const details = (await eventsFor('alice')).filter((e) => e.action === 'set_name' && e.result === 'ok').map((e) => e.detail);
+    expect(details).toContain('name: none → my-cv');
+    expect(details).toContain('name: old-name → new-name');
+    expect(details).toContain('name: let-go → none');
+  });
+});
+
 describe('ownership and access (R8)', () => {
   it('treats another publisher\'s site exactly like a missing one', async () => {
     const alice = await as('alice');
     const bob = await as('bob');
     const site = (await alice('publish', { files: page('mine'), title: 'Private' })).json();
-    const missing = 'abcdefghijkm';
+    const missing = 'calm-heron-bcdfgh';
     for (const [name, args] of [
       ['get_site', {}],
       ['get_files', { paths: ['index.html'] }],

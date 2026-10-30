@@ -201,13 +201,37 @@ describe('signing in to view a site', () => {
     const missing = await browser.request(`/site/signin?site=${newSiteId()}&path=%2F`);
     expect(refused.status).toBe(403);
     expect(refused.body).not.toContain('Secret plans');
-    expect(refused.body.replace(siteId, 'X')).toBe(missing.body.replace(/name="site" value="[a-z2-9]{12}"/, `name="site" value="X"`));
+    expect(refused.body.replace(siteId, 'X')).toBe(missing.body.replace(/name="site" value="[a-z2-9-]+"/, `name="site" value="X"`));
     expect((await events('site.view')).some((e) => e.userId === other.id && e.siteId === siteId && e.result === 'refused')).toBe(true);
+  });
+
+  it('resolves names: the current one hands back to the name, anything else is refused (M2 R45)', async () => {
+    const user = await newUser();
+    const siteId = await newSite(user.id);
+    const now = new Date(clock).toISOString();
+    const hold = new Date(clock + 86_400_000).toISOString();
+    await env.store.setName({ ownerId: user.id, siteId, to: 'held-one', now, holdUntil: hold });
+    await env.store.setName({ ownerId: user.id, siteId, from: 'held-one', to: 'current-one', now, holdUntil: hold });
+    // A site stored under a label that's a name, not an ID (like M1's IDs now).
+    const legacy = 'hzfb9wff2xyk';
+    await env.store.createSite(
+      { id: legacy, ownerId: user.id, title: 'Old', current: newVersionId(), accessVersion: 1, status: 'active', createdAt: now, updatedAt: now },
+      { id: newVersionId(), siteId: legacy, files: [], size: 0, createdAt: now, createdBy: user.id },
+    );
+    const browser = new Browser();
+    await signIn(browser, user);
+
+    for (const label of [siteId, 'current-one']) {
+      const r = await browser.request(`/site/signin?site=${label}&path=%2F`);
+      expect(r.status, label).toBe(302);
+      expect(new URL(r.location).host, label).toBe('current-one.example.com');
+    }
+    for (const label of ['held-one', legacy, 'never-named']) expect((await browser.request(`/site/signin?site=${label}&path=%2F`)).status, label).toBe(403);
   });
 
   it('rejects site and path values the edge would never send', async () => {
     const browser = new Browser();
-    for (const query of ['site=nope&path=%2F', `site=${newSiteId()}&path=%2F%2Fevil.example`, `site=${newSiteId()}&path=x`, `site=${newSiteId()}`]) {
+    for (const query of ['site=no--pe&path=%2F', 'site=Nope&path=%2F', 'site=a&path=%2F', `site=${newSiteId()}&path=%2F%2Fevil.example`, `site=${newSiteId()}&path=x`, `site=${newSiteId()}`]) {
       expect((await browser.request(`/site/signin?${query}`)).status, query).toBe(400);
     }
   });

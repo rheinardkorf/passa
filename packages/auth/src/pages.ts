@@ -59,6 +59,7 @@ ${script ? `<script src="${script}"></script>` : ''}
 
 const csrfField = (csrf: string) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;
 
+// siteId is the label the visitor came from: a site ID or a name.
 export type Target = { siteId: string; path: string };
 // Where a sign-in continues: a site, or an app asking to connect (OAuth).
 export type Next = { site: Target } | { interaction: string };
