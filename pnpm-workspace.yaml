@@ -6,3 +6,5 @@ saveExact: true
 minimumReleaseAge: 20160 # 14 days, in minutes
 blockExoticSubdeps: true
 trustPolicy: no-downgrade
+allowBuilds:
+  esbuild: false

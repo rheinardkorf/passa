@@ -6,5 +6,21 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "scripts": {
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudfront-keyvaluestore": "3.1152.0",
+    "@aws-sdk/client-secrets-manager": "3.1152.0",
+    "@passa/auth": "workspace:*",
+    "@passa/edge": "workspace:*",
+    "@passa/shared": "workspace:*",
+    "aws-cdk-lib": "2.273.0",
+    "constructs": "10.8.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "8.10.164",
+    "aws-cdk": "2.1145.0"
   }
 }

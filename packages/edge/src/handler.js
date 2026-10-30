@@ -30,6 +30,17 @@ function notFound() {
   return respond(404, 'Not Found', { 'content-type': 'text/plain; charset=utf-8' }, { body: 'Not found' });
 }
 
+// A site's record reaches the edge a few seconds after it's published. A valid
+// handoff proves auth. allowed the visit, so the page waits for the record
+// rather than failing; the token stays valid for long enough.
+function notReady() {
+  return respond(503, 'Service Unavailable', { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' }, {
+    body: '<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta http-equiv="refresh" content="2">'
+      + '<title>One moment</title><style>body{font:14px system-ui,sans-serif;opacity:.6;display:grid;place-items:center;height:90vh}</style>'
+      + '<p>Opening the page…</p>',
+  });
+}
+
 // Constant-time comparison of two hex strings.
 function sameHex(a, b) {
   if (typeof a !== 'string' || a.length !== b.length) return false;
@@ -51,7 +62,8 @@ function parseSigned(value) {
 
 async function readJson(kvs, key) {
   try {
-    return JSON.parse(await kvs.get(key));
+    const raw = await kvs.get(key); // CloudFront doesn't allow await in arguments
+    return JSON.parse(raw);
   } catch (e) {
     return null; // missing (get throws) or unreadable: treated as absent
   }
@@ -102,10 +114,12 @@ async function handle(event, options) {
     // The cookie lifetime (seconds) is set by auth. and covered by the signature.
     const life = q.l && /^\d{1,5}$/.test(q.l.value) ? Number(q.l.value) : 0;
     const key = token ? await readKey(options.kvs, token.kid) : null;
-    const valid = token && key && record && token.site === siteId && token.v === record.v && token.exp > now
+    const signed = token && key && token.site === siteId && token.exp > now
       && life > 0 && life <= 86400 && to.charAt(0) === '/' && PATH.test(to)
       && sameHex(token.sig, sign(options.crypto, key, 'handoff', [token.kid, token.site, token.v, token.exp, life, to]));
-    if (!valid) return notFound();
+    if (!signed) return notFound();
+    if (!record || token.v > record.v) return notReady();
+    if (token.v !== record.v) return notFound();
     const fields = [token.kid, siteId, record.v, now + life];
     const cookies = {};
     cookies[COOKIE] = {

@@ -4,6 +4,7 @@
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import type { AddressInfo, Server } from 'node:net';
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { configure } from '@codegenie/serverless-express';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OidcStore } from '@passa/shared';
@@ -141,5 +142,25 @@ describe('the MCP endpoint', () => {
     const bad = await fetch(`${base}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: '{nope' });
     expect(bad.status).toBe(400);
     expect(await bad.json()).toEqual({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
+  });
+
+  it('works behind the Lambda adapter, which hands over the body already read', async () => {
+    const app = createMcpApp({ ...env, oidc, tokenKeys: [{ kid: 'k1', publicKey }], issuer: ISSUER, resource: RESOURCE, log: () => undefined });
+    const handler = configure({ app }) as unknown as (event: unknown, context: unknown, callback: () => void) => Promise<{ statusCode: number; body: string }>;
+    const call = async (body: string) => handler({
+      version: '2.0',
+      routeKey: '$default',
+      rawPath: '/mcp',
+      rawQueryString: '',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${await token()}`, host: 'mcp.example.com' },
+      requestContext: { http: { method: 'POST', path: '/mcp', sourceIp: '203.0.113.7' }, requestId: 'r1', stage: '$default' },
+      body,
+      isBase64Encoded: false,
+    }, {}, () => undefined);
+    const listed = await call(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
+    expect(listed.statusCode).toBe(200);
+    expect(JSON.parse(listed.body).result.tools.length).toBeGreaterThan(0);
+    const bad = await call('{nope');
+    expect([bad.statusCode, JSON.parse(bad.body).error.code]).toEqual([400, -32700]);
   });
 });

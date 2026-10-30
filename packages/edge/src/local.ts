@@ -1,6 +1,5 @@
 // Local development against Moto (see compose.yaml): set up storage, run the
 // edge proxy with the auth app, and publish a folder. Run with `pnpm local`.
-import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -9,7 +8,7 @@ import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
 import { CreateSecretCommand, ResourceExistsException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { CreateEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { createAuthApp, KmsSigningKey, loadAuthSecrets, SesMailer } from '@passa/auth';
+import { createAuthApp, KmsSigningKey, loadAuthSecrets, newAuthSecrets, SesMailer } from '@passa/auth';
 import { createMcpApp, Publisher } from '@passa/mcp';
 import {
   bootstrapAdmins,
@@ -18,6 +17,7 @@ import {
   loadConfigFile,
   loadTokenKey,
   OidcStore,
+  senderDomain,
   signingKeyKey,
   SiteFiles,
   Store,
@@ -57,7 +57,9 @@ function wiring() {
 
 async function authApp(w: ReturnType<typeof wiring>) {
   const ses = new SesMailer(w.ses, w.config.email.from);
-  const { cookieKeys } = await loadAuthSecrets(w.secrets, AUTH_SECRET);
+  const { cookieKeys, siteKeys } = await loadAuthSecrets(w.secrets, AUTH_SECRET);
+  const [siteKey] = siteKeys;
+  if (!siteKey) throw new Error('no site key');
   return createAuthApp({
     store: w.store,
     events: w.events,
@@ -69,7 +71,7 @@ async function authApp(w: ReturnType<typeof wiring>) {
         out(`\nEmail to ${email.to}: ${email.subject}\n${email.text}`);
       },
     },
-    siteKey: async () => ({ kid: KID, secret: await w.edge.get(signingKeyKey(KID)) }),
+    siteKey: async () => siteKey,
     urls: { auth: `http://localhost:${PORT}`, mcp: `http://mcp.localhost:${PORT}`, site: w.origin },
     oidc: new OidcStore(w.db, tables.main),
     tokenSigner: await KmsSigningKey.load(w.kms, TOKEN_KEY),
@@ -100,9 +102,6 @@ async function ensureTokenKey(kms: KMSClient) {
   }
 }
 
-// The sender's domain, which SES (and Moto) require to be verified.
-const senderDomain = (from: string) => /@([^>\s]+)>?$/.exec(from)?.[1] ?? from;
-
 function readFolder(dir: string): { path: string; content: Uint8Array }[] {
   const root = resolve(dir);
   return readdirSync(root, { recursive: true, withFileTypes: true })
@@ -126,15 +125,12 @@ const commands: Record<string, (w: ReturnType<typeof wiring>, args: string[]) =>
     await w.ses.send(new CreateEmailIdentityCommand({ EmailIdentity: senderDomain(w.config.email.from) }));
     await ensureTokenKey(w.kms);
     try {
-      await w.secrets.send(new CreateSecretCommand({ Name: AUTH_SECRET, SecretString: JSON.stringify({ cookieKeys: [randomBytes(32).toString('base64url')] }) }));
+      await w.secrets.send(new CreateSecretCommand({ Name: AUTH_SECRET, SecretString: JSON.stringify(newAuthSecrets(KID)) }));
     } catch (err) {
       if (!(err instanceof ResourceExistsException)) throw err;
     }
-    try {
-      await w.edge.get(signingKeyKey(KID));
-    } catch {
-      await w.edge.set(signingKeyKey(KID), randomBytes(32).toString('hex'));
-    }
+    // As on deploy: copy the site keys to where the edge reads them.
+    for (const { kid, secret } of (await loadAuthSecrets(w.secrets, AUTH_SECRET)).siteKeys) await w.edge.set(signingKeyKey(kid), secret);
     const admins = await bootstrapAdmins(w.store, w.config.admins);
     out(`Ready. Admins: ${admins.map((u) => u.email).join(', ')}`);
   },

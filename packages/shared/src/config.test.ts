@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfigFile, parseConfig, siteDomain } from './config.ts';
+import { loadConfigFile, parseConfig, senderAddress, senderDomain, siteDomain, stageConfig } from './config.ts';
 
 const example = loadConfigFile(new URL('../../../config.example.yml', import.meta.url).pathname);
 
@@ -11,6 +11,20 @@ describe('config', () => {
   it('serves sites from the main domain unless a site domain is set', () => {
     expect(siteDomain(example)).toBe('example.com');
     expect(siteDomain(parseConfig({ ...example, siteDomain: 'example-sites.com' }))).toBe('example-sites.com');
+  });
+
+  it('applies a stage’s overrides and keeps everything else', () => {
+    const config = parseConfig({ ...example, stages: { dev: { domain: 'dev.example.com', siteDomain: 'dev.example-sites.com' } } });
+    const dev = stageConfig(config, 'dev');
+    expect([dev.domain, siteDomain(dev), dev.email.from]).toEqual(['dev.example.com', 'dev.example-sites.com', example.email.from]);
+    expect(dev).not.toHaveProperty('stages');
+    expect(stageConfig(config, 'prod').domain).toBe('example.com');
+    expect(() => parseConfig({ ...example, stages: { dev: { region: 'us-east-1' } } })).toThrow();
+  });
+
+  it('reads the sender’s address and domain', () => {
+    expect([senderAddress('Passa <no-reply@example.com>'), senderDomain('Passa <no-reply@example.com>')]).toEqual(['no-reply@example.com', 'example.com']);
+    expect([senderAddress('no-reply@example.com'), senderDomain('no-reply@example.com')]).toEqual(['no-reply@example.com', 'example.com']);
   });
 
   it('refuses site domains that are not plain domain names', () => {

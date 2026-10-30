@@ -33,6 +33,7 @@ export default tseslint.config(
         { selector: 'ArrowFunctionExpression[async=true], FunctionExpression[async=true]', message: 'Async closures are not supported at the edge.' },
         { selector: 'ForOfStatement', message: 'for...of is not supported at the edge.' },
         { selector: 'TaggedTemplateExpression', message: 'Tagged templates are not supported at the edge.' },
+        { selector: 'CallExpression > AwaitExpression.arguments, NewExpression > AwaitExpression.arguments', message: 'await in arguments is not supported at the edge: assign it first.' },
         { selector: 'ImportDeclaration, ExportNamedDeclaration, ExportDefaultDeclaration', message: 'build.ts adds the imports.' },
       ],
     },

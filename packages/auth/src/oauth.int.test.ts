@@ -175,6 +175,8 @@ describe('metadata (R21)', () => {
     expect(meta.registration_endpoint).toBe(`${AUTH}/reg`);
     expect(meta.client_id_metadata_document_supported).toBe(true);
     expect(meta.scopes_supported).toContain('publish');
+    expect(meta.response_types_supported).toEqual(['code']);
+    expect(meta.grant_types_supported).not.toContain('implicit');
   });
 });
 
