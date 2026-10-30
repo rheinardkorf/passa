@@ -1,5 +1,6 @@
 // The publishing tools end to end: an MCP client calls the server in memory,
 // and the server stores into Moto.
+import { createHash } from 'node:crypto';
 import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -35,6 +36,17 @@ async function as(userId: string) {
 }
 
 const page = (body: string) => [{ path: 'index.html', content: `<!doctype html><title>t</title>${body}` }];
+const sha256 = (content: string | Buffer) => createHash('sha256').update(content).digest('hex');
+
+type SiteFile = { path: string; size: number; content_type: string; sha256: string; content?: string; download_url?: string };
+
+// Every file's contents, by path: listed by get_site, then read with get_files.
+async function contents(call: Awaited<ReturnType<typeof as>>, siteId: unknown, versionId?: unknown): Promise<Record<string, string | undefined>> {
+  const version = versionId ? { version_id: versionId } : {};
+  const listed = (await call('get_site', { site_id: siteId, ...version })).json().files as SiteFile[];
+  const got = (await call('get_files', { site_id: siteId, ...version, paths: listed.map((f) => f.path) })).json().files as SiteFile[];
+  return Object.fromEntries(got.map((f) => [f.path, f.content]));
+}
 
 async function eventsFor(userId: string) {
   const day = new Date().toISOString().slice(0, 10);
@@ -64,21 +76,18 @@ describe('publish, update and rollback', () => {
     expect(second.url).toBe(first.url);
     expect(second.current_version).not.toBe(first.current_version);
 
-    let got = (await call('get_site', { site_id: first.site_id })).json();
-    expect(got.versions).toHaveLength(2);
-    expect(got.files).toEqual([expect.objectContaining({ path: 'index.html', content: expect.stringContaining('v2'), encoding: 'utf8' })]);
+    expect((await call('get_site', { site_id: first.site_id })).json().versions).toHaveLength(2);
+    expect((await contents(call, first.site_id))['index.html']).toContain('v2');
 
     const back = await call('rollback', { site_id: first.site_id, version_id: first.current_version });
     expect(back.json().current_version).toBe(first.current_version);
-    got = (await call('get_site', { site_id: first.site_id })).json();
-    expect((got.files as { content: string }[])[0]?.content).toContain('v1');
+    expect((await contents(call, first.site_id))['index.html']).toContain('v1');
 
     // An older version can still be read without making it current.
-    const v2 = (await call('get_site', { site_id: first.site_id, version_id: second.current_version })).json();
-    expect((v2.files as { content: string }[])[0]?.content).toContain('v2');
+    expect((await contents(call, first.site_id, second.current_version))['index.html']).toContain('v2');
   });
 
-  it('returns binary files as base64 and skips dotfiles', async () => {
+  it('returns binary files as download links, never inline, and skips dotfiles', async () => {
     const call = await as('alice');
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
     const r = (await call('publish', {
@@ -86,9 +95,11 @@ describe('publish, update and rollback', () => {
       title: 'With an image',
     })).json();
     expect(r.skipped).toEqual(['.env']);
-    const got = (await call('get_site', { site_id: r.site_id })).json();
-    expect((got.files as { path: string }[]).map((f) => f.path)).toEqual(['dot.png', 'index.html']);
-    expect((got.files as { content: string }[])[0]?.content).toBe(png.toString('base64'));
+    expect(((await call('get_site', { site_id: r.site_id })).json().files as SiteFile[]).map((f) => f.path)).toEqual(['dot.png', 'index.html']);
+    const [image] = (await call('get_files', { site_id: r.site_id, paths: ['dot.png'] })).json().files as SiteFile[];
+    expect(image).toMatchObject({ content_type: 'image/png', size: png.length, sha256: sha256(png), download_url: expect.any(String) });
+    expect(image?.content).toBeUndefined();
+    expect(Buffer.from(await (await fetch(image?.download_url ?? '')).arrayBuffer())).toEqual(png);
   });
 
   it('finds the caller\'s own sites by title (R5)', async () => {
@@ -101,10 +112,80 @@ describe('publish, update and rollback', () => {
   });
 });
 
+describe('reading a site (R4)', () => {
+  it('lists file details and hashes, and returns contents only for the paths asked for', async () => {
+    const call = await as('alice');
+    const html = page('<h1>Details</h1>')[0]?.content ?? '';
+    const site = (await call('publish', { title: 'Details', files: [...page('<h1>Details</h1>'), { path: 'site.css', content: 'h1{}' }] })).json();
+
+    const listed = (await call('get_site', { site_id: site.site_id })).json().files as SiteFile[];
+    expect(listed).toEqual([
+      { path: 'index.html', size: html.length, content_type: 'text/html; charset=utf-8', sha256: sha256(html) },
+      { path: 'site.css', size: 4, content_type: 'text/css; charset=utf-8', sha256: sha256('h1{}') },
+    ]);
+
+    expect((await call('get_files', { site_id: site.site_id, paths: ['site.css'] })).json()).toEqual({
+      site_id: site.site_id,
+      version: site.current_version,
+      files: [{ path: 'site.css', size: 4, content_type: 'text/css; charset=utf-8', sha256: sha256('h1{}'), content: 'h1{}' }],
+    });
+    expect((await call('get_files', { site_id: site.site_id, paths: ['nope.html'] })).text).toBe('Not in this version: nope.html.');
+    expect((await call('get_files', { site_id: site.site_id, paths: ['site.css'], version_id: 'nope' })).text).toBe('No version with that ID.');
+  });
+
+  it('returns text past the inline limit as a download link', async () => {
+    const call = await as('alice');
+    const big = (c: string) => `<!doctype html>${c.repeat(40 * 1024)}`;
+    const site = (await call('publish', { title: 'Big', files: [{ path: 'a.html', content: big('a') }] })).json();
+    await call('update', { site_id: site.site_id, files: [{ path: 'b.html', content: big('b') }] });
+    const [a, b] = (await call('get_files', { site_id: site.site_id, paths: ['a.html', 'b.html'] })).json().files as SiteFile[];
+    expect(a?.content).toBe(big('a'));
+    expect(b?.content).toBeUndefined();
+    expect(await (await fetch(b?.download_url ?? '')).text()).toBe(big('b'));
+  });
+});
+
+describe('paging', () => {
+  it('pages through a site\'s versions, newest first', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Many versions', files: page('v1') })).json();
+    const ids = [site.current_version];
+    for (const n of [2, 3, 4, 5]) ids.unshift((await call('update', { site_id: site.site_id, files: page(`v${n}`) })).json().current_version);
+
+    const first = (await call('get_site', { site_id: site.site_id, limit: 2 })).json();
+    expect((first.versions as { version_id: string }[]).map((v) => v.version_id)).toEqual(ids.slice(0, 2));
+    expect(first.next_cursor).toBe(ids[1]);
+    const second = (await call('get_site', { site_id: site.site_id, limit: 2, cursor: first.next_cursor })).json();
+    expect((second.versions as { version_id: string }[]).map((v) => v.version_id)).toEqual(ids.slice(2, 4));
+    const last = (await call('get_site', { site_id: site.site_id, limit: 2, cursor: second.next_cursor })).json();
+    expect((last.versions as { version_id: string }[]).map((v) => v.version_id)).toEqual(ids.slice(4));
+    expect(last.next_cursor).toBeUndefined();
+
+    // The files listed are still the current version's, whichever page.
+    expect(last.version).toBe(ids[0]);
+    expect((await call('get_site', { site_id: site.site_id, limit: 5 })).json().next_cursor).toBeUndefined();
+    expect((await call('get_site', { site_id: site.site_id, cursor: 'nope' })).text).toMatch(/^That cursor doesn't match/);
+    expect((await call('get_site', { site_id: site.site_id, limit: 101 })).isError).toBe(true);
+  });
+
+  it('pages through the caller\'s sites, newest first, after filtering by title', async () => {
+    await addUser(env, { id: 'erin' });
+    const call = await as('erin');
+    const titles = ['Report 1', 'Other', 'Report 2', 'Report 3'];
+    for (const title of titles) await call('publish', { title, files: page(title) });
+
+    const first = (await call('find_sites', { query: 'report', limit: 2 })).json();
+    expect((first.sites as { title: string }[]).map((s) => s.title)).toEqual(['Report 3', 'Report 2']);
+    const second = (await call('find_sites', { query: 'report', limit: 2, cursor: first.next_cursor })).json();
+    expect((second.sites as { title: string }[]).map((s) => s.title)).toEqual(['Report 1']);
+    expect(second.next_cursor).toBeUndefined();
+    expect(((await call('find_sites', {})).json().sites as unknown[])).toHaveLength(4);
+    expect((await call('find_sites', { cursor: 'nope' })).text).toMatch(/^That cursor doesn't match/);
+  });
+});
+
 describe('updating part of a site (R3)', () => {
-  const files = (call: Awaited<ReturnType<typeof as>>, siteId: unknown, versionId?: unknown) =>
-    call('get_site', { site_id: siteId, ...(versionId ? { version_id: versionId } : {}) })
-      .then((r) => Object.fromEntries((r.json().files as { path: string; content: string }[]).map((f) => [f.path, f.content])));
+  const files = contents;
 
   it('changes only the files sent, and copies the rest', async () => {
     const call = await as('alice');
@@ -168,6 +249,86 @@ describe('updating part of a site (R3)', () => {
   });
 });
 
+describe('editing text files', () => {
+  it('replaces text that appears exactly once, applying edits in order', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Edits', files: [...page('<h1>Helo wrold</h1><p>one</p>'), { path: 'site.css', content: 'h1{}' }] })).json();
+    const r = (await call('update', {
+      site_id: site.site_id,
+      edits: [
+        { path: 'index.html', old: 'Helo', new: 'Hello' },
+        { path: 'index.html', old: 'Hello wrold', new: 'Hello world' },
+      ],
+    })).json();
+    expect(r).toMatchObject({ files: 2, changed: 1, removed: 0 });
+    expect(await contents(call, site.site_id)).toEqual({ 'index.html': expect.stringContaining('<h1>Hello world</h1><p>one</p>'), 'site.css': 'h1{}' });
+  });
+
+  it('refuses edits that don\'t match exactly once, and applies none of them', async () => {
+    const call = await as('alice');
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+    const site = (await call('publish', {
+      title: 'Bad edits',
+      files: [...page('<p>a</p><p>a</p>'), { path: 'dot.png', content: png.toString('base64'), encoding: 'base64' }, { path: 'site.css', content: 'h1{}' }],
+    })).json();
+    const r = await call('update', {
+      site_id: site.site_id,
+      edits: [
+        { path: 'site.css', old: 'h1', new: 'h2' },
+        { path: 'index.html', old: '<p>a</p>', new: '<p>b</p>' },
+        { path: 'index.html', old: 'missing', new: 'x' },
+        { path: 'dot.png', old: 'PNG', new: 'GIF' },
+        { path: 'nope.html', old: 'x', new: 'y' },
+      ],
+    });
+    expect(r.text).toBe('Publish refused: '
+      + 'dot.png: only text files can be edited; send the whole file instead; '
+      + 'index.html: edit 2\'s old text appears more than once; include more of the surrounding text; '
+      + 'nope.html: not in the current version, so it can\'t be edited');
+    expect((await call('update', { site_id: site.site_id, edits: [{ path: 'site.css', old: 'h9', new: 'x' }] })).text).toContain('edit 1\'s old text isn\'t in the file');
+    expect((await call('get_site', { site_id: site.site_id })).json().current_version).toBe(site.current_version);
+  });
+
+  it('checks edited files like any other, and refuses edits mixed with sending or removing the same file', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Edit checks', files: [...page('<p>key</p>'), { path: 'a.html', content: 'a' }] })).json();
+    const key = { path: 'index.html', old: 'key', new: `AKIA${'Q'.repeat(16)}` };
+    expect((await call('update', { site_id: site.site_id, edits: [key] })).text).toContain('AWS access key');
+    const fix = { path: 'a.html', old: 'a', new: 'b' };
+    expect((await call('update', { site_id: site.site_id, edits: [fix], files: [{ path: 'a.html', content: 'c' }] })).text).toContain('a.html: both sent and edited');
+    expect((await call('update', { site_id: site.site_id, edits: [fix], remove: ['a.html'] })).text).toContain('a.html: both edited and removed');
+    expect((await call('update', { site_id: site.site_id, edits: [fix], files: page('x'), replace_all: true })).text).toContain('Input validation error');
+  });
+});
+
+describe('base_version', () => {
+  it('refuses an update when the site changed since the agent read it', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Stale reads', files: page('<p>v1</p>') })).json();
+    const read = String(site.current_version);
+    const other = (await call('update', { site_id: site.site_id, files: page('<p>v2</p>') })).json();
+    expect((await call('update', { site_id: site.site_id, base_version: read, edits: [{ path: 'index.html', old: 'v1', new: 'v3' }] })).text)
+      .toBe(`The site has changed since version ${read}: its current version is ${String(other.current_version)}. Get the site again and retry.`);
+    expect((await call('update', { site_id: site.site_id, base_version: other.current_version, edits: [{ path: 'index.html', old: 'v2', new: 'v3' }] })).isError).toBe(false);
+  });
+});
+
+describe('tool descriptions', () => {
+  it('state this deployment\'s limits and grace period', async () => {
+    const server = createServer(env, { userId: 'alice' }, () => undefined);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+    const tools = Object.fromEntries((await client.listTools()).tools.map((t) => [t.name, t.description ?? '']));
+    expect(tools.delete).toContain('after 7 days');
+    expect(tools.publish).toContain('up to 64 KB in total');
+    expect(tools.publish).toContain('Limits: 20 files, 128 KB per file, 256 KB per site.');
+    expect(tools.begin_upload).toContain('valid for 15 minutes');
+    expect(tools.begin_upload).toContain('curl -T');
+    expect(tools.get_files).toContain('up to 64 KB in total');
+  });
+});
+
 describe('ownership and access (R8)', () => {
   it('treats another publisher\'s site exactly like a missing one', async () => {
     const alice = await as('alice');
@@ -176,6 +337,7 @@ describe('ownership and access (R8)', () => {
     const missing = 'abcdefghijkm';
     for (const [name, args] of [
       ['get_site', {}],
+      ['get_files', { paths: ['index.html'] }],
       ['update', { files: page('theirs') }],
       ['rollback', { version_id: site.current_version }],
       ['delete', { now: true }],
@@ -250,8 +412,7 @@ describe('uploads (R2)', () => {
 
     const site = (await call('publish', { upload_id: begun.upload_id, title: 'Uploaded site' })).json();
     expect(site.files).toBe(2);
-    const got = (await call('get_site', { site_id: site.site_id })).json();
-    expect((got.files as { content: string }[]).map((f) => f.content)).toEqual([html, css]);
+    expect(await contents(call, site.site_id)).toEqual({ 'index.html': html, 'site.css': css });
 
     // The upload is used up, and its staging files are gone.
     expect((await call('publish', { upload_id: begun.upload_id, title: 'Again' })).text).toBe('No upload with that ID.');

@@ -44,6 +44,7 @@ export type Deps = {
 export class ToolError extends Error {}
 
 const NOT_FOUND = 'No site with that ID.';
+const BAD_CURSOR = 'That cursor doesn\'t match this list. Call again without it to start from the beginning.';
 const PARALLEL = 16;
 
 export type SiteSummary = {
@@ -59,11 +60,23 @@ export type SiteSummary = {
   delete_at?: string;
 };
 
-export type SiteContent = { files: ({ path: string; size: number; content_type: string } & ({ content: string; encoding: 'utf8' | 'base64' } | { download_url: string }))[] };
+export type SiteFile = { path: string; size: number; content_type: string; sha256: string; content?: string; download_url?: string };
 
 export type Content = { files: InputFile[] } | { uploadId: string };
 
-type Changes = { content?: Content; base?: Version; remove?: string[] };
+// Replaces old with new in a text file; old must appear exactly once.
+export type Edit = { path: string; old: string; new: string };
+
+type Changes = { content?: Content; edited?: InputFile[]; base?: Version; remove?: string[] };
+
+const isText = (f: FileEntry) => f.contentType.includes('charset=utf-8');
+
+// Counts overlapping matches too, stopping at two: only exactly one is usable.
+function occurrences(text: string, find: string): number {
+  let count = 0;
+  for (let at = text.indexOf(find); at !== -1 && count < 2; at = text.indexOf(find, at + 1)) count++;
+  return count;
+}
 
 async function inBatches<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
   for (let i = 0; i < items.length; i += PARALLEL) await Promise.all(items.slice(i, i + PARALLEL).map(fn));
@@ -121,11 +134,15 @@ export class Publisher {
   // Runs every check, then writes a complete new version: the files sent, plus
   // the base version's other files (copied within S3) unless removed.
   async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; kept: number }> {
-    const { content, base, remove = [] } = changes;
-    const { files, skipped } = !content
+    const { content, edited = [], base, remove = [] } = changes;
+    const sent = !content
       ? { files: [], skipped: [] }
       : 'files' in content ? this.#checkInline(content.files) : await this.#takeUpload(caller, content.uploadId);
-    const checked = await checkContent(files);
+    const editedPaths = new Set(edited.map((f) => f.path.toLowerCase()));
+    const overlap = sent.files.filter((f) => editedPaths.has(f.path.toLowerCase())).map((f) => `${f.path}: both sent and edited`);
+    if (overlap.length) throw new PublishRefused(overlap);
+    const { skipped } = sent;
+    const checked = await checkContent([...sent.files, ...edited]);
     const replaced = new Set([...checked, ...remove.map((path) => ({ path }))].map((f) => f.path.toLowerCase()));
     const kept = (base?.files ?? []).filter((f) => !replaced.has(f.path.toLowerCase()));
     const entries = [...kept, ...checked.map((f): FileEntry => ({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256 }))]
@@ -217,24 +234,34 @@ export class Publisher {
 
   // By default the new version is the current one with the changes applied.
   // With replaceAll, the files sent are the whole new version.
-  async update(caller: Caller, input: { siteId: string; content?: Content; remove?: string[]; replaceAll?: boolean }) {
+  // With baseVersion, the update is refused if the site has moved on from the
+  // version the agent last read.
+  async update(caller: Caller, input: { siteId: string; content?: Content; remove?: string[]; edits?: Edit[]; replaceAll?: boolean; baseVersion?: string }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
+    if (input.baseVersion && input.baseVersion !== site.current) {
+      throw new ToolError(`The site has changed since version ${input.baseVersion}: its current version is ${site.current}. Get the site again and retry.`);
+    }
     const remove = input.remove ?? [];
+    const edits = input.edits ?? [];
     const base = input.replaceAll ? undefined : await this.#d.store.getVersion(site.id, site.current);
     if (base) {
       // Checked before anything is stored or an upload is claimed.
       const current = new Set(base.files.map((f) => f.path));
       const sent = new Set(input.content && 'files' in input.content ? input.content.files.map((f) => f.path) : []);
+      const edited = new Set(edits.map((e) => e.path));
       const problems = [
         ...remove.filter((p) => !current.has(p)).map((p) => `${p}: not in the current version, so it can't be removed`),
         ...remove.filter((p) => sent.has(p)).map((p) => `${p}: both sent and removed`),
+        ...remove.filter((p) => edited.has(p)).map((p) => `${p}: both edited and removed`),
       ];
       if (problems.length) throw new PublishRefused(problems);
     }
+    const edited = base && edits.length ? await this.#applyEdits(base, edits) : [];
     const { version, skipped, kept } = await this.#storeVersion(caller, site.id, {
       ...(input.content ? { content: input.content } : {}),
       ...(base ? { base } : {}),
+      edited,
       remove,
     });
     try {
@@ -258,44 +285,100 @@ export class Publisher {
     };
   }
 
-  async getSite(caller: Caller, input: { siteId: string; versionId?: string }) {
+  // Applies each file's edits in order, refusing all of them if any doesn't
+  // match exactly once, so nothing is half-edited.
+  async #applyEdits(base: Version, edits: Edit[]): Promise<InputFile[]> {
+    const problems: string[] = [];
+    const byPath = new Map<string, { edit: Edit; n: number }[]>();
+    edits.forEach((edit, i) => byPath.set(edit.path, [...(byPath.get(edit.path) ?? []), { edit, n: i + 1 }]));
+    const files: InputFile[] = [];
+    await inBatches([...byPath], async ([path, list]) => {
+      const entry = base.files.find((f) => f.path === path);
+      if (!entry) return void problems.push(`${path}: not in the current version, so it can't be edited`);
+      if (!isText(entry)) return void problems.push(`${path}: only text files can be edited; send the whole file instead`);
+      let text = Buffer.from(await this.#d.files.getVersionFile(base.siteId, base.id, path)).toString('utf8');
+      for (const { edit, n } of list) {
+        const count = occurrences(text, edit.old);
+        if (count !== 1) {
+          return void problems.push(count === 0
+            ? `${path}: edit ${n}'s old text isn't in the file`
+            : `${path}: edit ${n}'s old text appears more than once; include more of the surrounding text`);
+        }
+        const at = text.indexOf(edit.old);
+        text = text.slice(0, at) + edit.new + text.slice(at + edit.old.length);
+      }
+      files.push({ path, content: new TextEncoder().encode(text) });
+    });
+    if (problems.length) throw new PublishRefused(problems.sort());
+    return files;
+  }
+
+  // Details, one page of versions, and every file's details and hash in one
+  // version, but no contents.
+  async getSite(caller: Caller, input: { siteId: string; versionId?: string; limit: number; cursor?: string }) {
     const site = await this.#ownSite(caller, input.siteId);
-    const versions = await this.#d.store.listVersions(site.id);
-    const versionId = input.versionId ?? site.current;
-    const version = versions.find((v) => v.id === versionId);
-    if (!version) throw new ToolError('No version with that ID.');
+    if (input.cursor && !isVersionId(input.cursor)) throw new ToolError(BAD_CURSOR);
+    const [version, page] = await Promise.all([
+      this.#version(site, input.versionId),
+      this.#d.store.listVersionsPage(site.id, { limit: input.limit, ...(input.cursor ? { after: input.cursor } : {}) }),
+    ]);
     return {
       ...this.#summary(site),
       version: version.id,
-      versions: versions.map((v) => ({ version_id: v.id, created_at: v.createdAt, files: v.files.length, size: v.size, current: v.id === site.current })),
-      ...(await this.#content(version)),
+      versions: page.versions.map((v) => ({ version_id: v.id, created_at: v.createdAt, files: v.files.length, size: v.size, current: v.id === site.current })),
+      ...(page.next ? { next_cursor: page.next } : {}),
+      files: version.files.map((f) => this.#fileDetails(f)),
     };
   }
 
-  // Small versions come back inline so any agent can continue the site; larger
-  // ones come back as short-lived download links.
-  async #content(version: Version): Promise<SiteContent> {
+  // The contents of the files asked for: text inline up to the inline limit in
+  // total, and anything else (binary files, or text past the limit) as a
+  // short-lived download link.
+  async getFiles(caller: Caller, input: { siteId: string; versionId?: string; paths: string[] }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    const version = await this.#version(site, input.versionId);
     const { config } = this.#d;
-    const inline = version.size <= config.limits.inlinePublish;
-    const files: SiteContent['files'] = [];
-    await inBatches(version.files, async (f) => {
-      const meta = { path: f.path, size: f.size, content_type: f.contentType };
-      if (!inline) {
-        files.push({ ...meta, download_url: await this.#d.files.presignVersionFile(version.siteId, version.id, f.path, config.lifetimes.uploadUrl) });
-        return;
-      }
-      const body = await this.#d.files.getVersionFile(version.siteId, version.id, f.path);
-      const text = f.contentType.includes('charset=utf-8');
-      files.push({ ...meta, content: Buffer.from(body).toString(text ? 'utf8' : 'base64'), encoding: text ? 'utf8' : 'base64' });
+    const wanted = new Set(input.paths);
+    const missing = [...wanted].filter((p) => !version.files.some((f) => f.path === p));
+    if (missing.length) throw new ToolError(`Not in this version: ${missing.join(', ')}.`);
+    let budget = config.limits.inlinePublish;
+    const files = version.files.filter((f) => wanted.has(f.path)).map((f) => {
+      const inline = isText(f) && f.size <= budget;
+      if (inline) budget -= f.size;
+      return { entry: f, inline };
     });
-    files.sort((a, b) => a.path.localeCompare(b.path));
-    return { files };
+    return {
+      site_id: site.id,
+      version: version.id,
+      files: await Promise.all(files.map(async ({ entry: f, inline }): Promise<SiteFile> => ({
+        ...this.#fileDetails(f),
+        ...(inline
+          ? { content: Buffer.from(await this.#d.files.getVersionFile(version.siteId, version.id, f.path)).toString('utf8') }
+          : { download_url: await this.#d.files.presignVersionFile(version.siteId, version.id, f.path, config.lifetimes.uploadUrl) }),
+      }))),
+    };
   }
 
-  async findSites(caller: Caller, input: { query?: string }) {
+  async #version(site: Site, versionId = site.current): Promise<Version> {
+    const version = isVersionId(versionId) ? await this.#d.store.getVersion(site.id, versionId) : undefined;
+    if (!version) throw new ToolError('No version with that ID.');
+    return version;
+  }
+
+  #fileDetails(f: FileEntry): SiteFile {
+    return { path: f.path, size: f.size, content_type: f.contentType, sha256: f.sha256 };
+  }
+
+  // Newest first, one page at a time. The cursor is the last site of the
+  // previous page.
+  async findSites(caller: Caller, input: { query?: string; limit: number; cursor?: string }) {
     const query = input.query?.trim().toLowerCase();
-    const sites = await this.#d.store.listSitesByOwner(caller.userId);
-    return { sites: sites.filter((s) => !query || s.title.toLowerCase().includes(query)).map((s) => this.#summary(s)) };
+    const sites = (await this.#d.store.listSitesByOwner(caller.userId)).filter((s) => !query || s.title.toLowerCase().includes(query));
+    const start = input.cursor ? sites.findIndex((s) => s.id === input.cursor) + 1 : 0;
+    if (input.cursor && start === 0) throw new ToolError(BAD_CURSOR);
+    const page = sites.slice(start, start + input.limit);
+    const more = start + input.limit < sites.length;
+    return { sites: page.map((s) => this.#summary(s)), ...(more ? { next_cursor: page[page.length - 1]?.id } : {}) };
   }
 
   async rollback(caller: Caller, input: { siteId: string; versionId: string }) {

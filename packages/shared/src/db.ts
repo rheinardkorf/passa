@@ -239,6 +239,29 @@ export class Store {
     return versions;
   }
 
+  // One page of versions, newest first, starting after the version given. next
+  // is the last version returned, and only set when more follow.
+  async listVersionsPage(siteId: string, page: { limit: number; after?: string }): Promise<{ versions: Version[]; next?: string }> {
+    const versions: Version[] = [];
+    let ExclusiveStartKey: Record<string, unknown> | undefined = page.after ? versionKey(siteId, page.after) : undefined;
+    // Reads one more than asked for, to know whether another page follows.
+    do {
+      const result = await this.#db.send(new QueryCommand({
+        TableName: this.#table,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
+        ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': 'VER#' },
+        ScanIndexForward: false,
+        Limit: page.limit + 1 - versions.length,
+        ExclusiveStartKey,
+      }));
+      for (const item of result.Items ?? []) versions.push(strip<Version>(item));
+      ExclusiveStartKey = result.LastEvaluatedKey;
+    } while (ExclusiveStartKey && versions.length <= page.limit);
+    const shown = versions.slice(0, page.limit);
+    const last = shown.at(-1);
+    return last && versions.length > page.limit ? { versions: shown, next: last.id } : { versions: shown };
+  }
+
   // Makes an existing version current again (rollback).
   async setCurrentVersion(ownerId: string, siteId: string, versionId: string, now: string): Promise<void> {
     try {
