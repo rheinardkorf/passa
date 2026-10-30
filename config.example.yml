@@ -26,6 +26,15 @@ admins:
 email:
   from: Passa <no-reply@example.com>
 
+# A stage can use its own domains and sender; everything else is shared. Give
+# dev its own subdomains so it never touches production's names.
+# stages:
+#   dev:
+#     domain: dev.example.com
+#     siteDomain: dev.example-sites.com
+#     email:
+#       from: Passa <no-reply@dev.example.com>
+
 # Lifetimes, in seconds.
 lifetimes:
   accessToken: 3600
@@ -50,6 +59,13 @@ rateLimits:
   window: 3600
   signinPerEmail: 5
   signinPerIp: 30
+  # WAF in front of auth.: requests per IP in any 5 minutes, in all and to the
+  # sign-in and client registration endpoints (WAF's minimum is 10).
+  authPerIp: 600
+  authFormsPerIp: 30
+  # API Gateway throttling on mcp.: requests per second, and the burst allowed.
+  mcpPerSecond: 20
+  mcpBurst: 40
 
 deleteGraceDays: 7
 

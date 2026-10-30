@@ -80,6 +80,8 @@ export function createProvider(deps: OAuthDeps, signin: SignIn): Provider {
       return user && isPublisher(user) ? { accountId: sub, claims: async () => ({ sub }) } : undefined;
     },
     interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}`, policy },
+    // The authorization code flow only: no implicit or hybrid responses.
+    responseTypes: ['code'],
     pkce: { required: () => true },
     issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
     rotateRefreshToken: true,

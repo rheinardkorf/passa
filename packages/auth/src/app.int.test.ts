@@ -337,6 +337,11 @@ describe('forms and responses', () => {
     ];
     for (const r of cases) expect(r.status).toBe(403);
     expect(emailsTo(user.email)).toBe(0);
+    // Each is a security event with its reason, never the token.
+    const details = (await events('form.post')).filter((e) => e.result === 'refused').map((e) => String(e.detail));
+    for (const reason of ['/signin: no csrf field', '/signin: csrf mismatch', '/signin: origin https://', '/signin: origin missing']) {
+      expect(details.some((d) => d.startsWith(reason)), reason).toBe(true);
+    }
   });
 
   it('send strict security headers and host-only cookies', async () => {

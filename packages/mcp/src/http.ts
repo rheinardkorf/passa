@@ -66,7 +66,19 @@ export function createMcpApp(deps: McpHttpDeps): express.Express {
 
   // Inline publishes are base64 inside JSON, so the limit is a third above the
   // inline size, plus room for the rest of the request.
-  const json = express.json({ limit: Math.ceil((deps.config.limits.inlinePublish * 4) / 3) + 256 * 1024 });
+  const limit = Math.ceil((deps.config.limits.inlinePublish * 4) / 3) + 256 * 1024;
+  const json = express.json({ limit });
+  // On Lambda, the adapter hands over the body already read, as a Buffer, and
+  // express.json leaves it alone; it's parsed here under the same limit.
+  const bodyOf = (req: Request): unknown => {
+    if (!Buffer.isBuffer(req.body)) return req.body;
+    if (req.body.length > limit) throw Object.assign(new Error('too large'), { status: 413 });
+    try {
+      return JSON.parse(req.body.toString('utf8'));
+    } catch {
+      throw Object.assign(new Error('not JSON'), { status: 400 });
+    }
+  };
 
   app.post('/mcp', async (req, res, next) => {
     const header = req.headers.authorization ?? '';
@@ -89,6 +101,7 @@ export function createMcpApp(deps: McpHttpDeps): express.Express {
     json(req, res, async (parseError?: unknown) => {
       if (parseError) return next(parseError);
       try {
+        const body = bodyOf(req);
         const server = createServer(deps, { userId: caller.userId, ip: ipOf(req) }, deps.log);
         // No session ID generator means stateless mode.
         const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
@@ -98,7 +111,7 @@ export function createMcpApp(deps: McpHttpDeps): express.Express {
         });
         // The SDK's transport types don't satisfy exactOptionalPropertyTypes.
         await server.connect(transport as unknown as Parameters<typeof server.connect>[0]);
-        await transport.handleRequest(req, res, req.body);
+        await transport.handleRequest(req, res, body);
       } catch (err) {
         next(err);
       }

@@ -169,11 +169,11 @@ describe('sign-in handoff', () => {
     expect(set?.value).toBe(cookie({ expires: now + 3600 }));
   });
 
-  it('refuses tokens that are expired, for another site or access version, or tampered with', async () => {
+  it('refuses tokens that are expired, for another site or an older access version, or tampered with', async () => {
     const cases = [
       handoff({ now: NOW - 61_000 }),
       handoff({ siteId: 'm2n3p4q5r6s7' }),
-      handoff({ accessVersion: 2 }),
+      handoff({ accessVersion: 0 }),
       handoff({ key: { kid: 'k1', secret: 'b'.repeat(64) } }),
     ];
     const longer = handoff();
@@ -182,6 +182,24 @@ describe('sign-in handoff', () => {
     elsewhere.request.querystring.p = { value: '%2Fother' };
     const offsite = handoff({ path: '//evil.example' });
     for (const event of [...cases, longer, elsewhere, offsite]) expect((await response(event)).statusCode).toBe(404);
+  });
+
+  it('waits, instead of failing, while a new site or access version reaches the edge', async () => {
+    const fresh = 'q2r3s4t5u6v7';
+    const forFresh = () => {
+      const event = handoff({ siteId: fresh, origin: `https://${fresh}.example.com` });
+      event.request.headers.host = { value: `${fresh}.example.com` };
+      return event;
+    };
+    const waiting = await response(forFresh());
+    expect([waiting.statusCode, waiting.headers['retry-after']?.value]).toEqual([503, '2']);
+    expect(waiting.body?.data).toContain('http-equiv="refresh" content="2"');
+    expect(waiting.body?.data).toContain('content="light dark"');
+    expect((await response(handoff({ accessVersion: 2 }))).statusCode).toBe(503);
+    // Once the record arrives, the same token works.
+    await kvs.put(fresh, { cur: VERSION, v: 1, r: [] });
+    expect((await response(forFresh())).statusCode).toBe(302);
+    await kvs.remove(fresh);
   });
 
   it('does not accept a handoff token as a cookie, or a cookie as a handoff token', async () => {

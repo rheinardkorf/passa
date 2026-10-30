@@ -116,10 +116,16 @@ export function createAuthApp(deps: AuthDeps): express.Express {
   });
 
   const form = express.urlencoded({ extended: false, limit: '4kb', parameterLimit: 10 });
-  const checkPost = (req: Request, res: Response, next: NextFunction) => {
+  // Refused posts are security events (R31); the reason never includes token values.
+  const checkPost = async (req: Request, res: Response, next: NextFunction) => {
     const cookie = cookiesOf(res)[CSRF_COOKIE] ?? '';
-    const ok = req.headers.origin === urls.auth && cookie !== '' && sameSecret(field(req.body?.csrf), cookie);
-    if (!ok) {
+    const origin = req.headers.origin;
+    const reason = origin !== urls.auth ? `origin ${String(origin ?? 'missing').slice(0, 100)}`
+      : !cookie ? 'no csrf cookie'
+      : !sameSecret(field(req.body?.csrf), cookie) ? (field(req.body?.csrf) ? 'csrf mismatch' : 'no csrf field')
+      : undefined;
+    if (reason) {
+      await event({ action: 'form.post', result: 'refused', ip: ipOf(req), detail: `${req.path}: ${reason}` });
       res.status(403).type('html').send(errorPage(403));
       return;
     }
@@ -244,6 +250,8 @@ export function createAuthApp(deps: AuthDeps): express.Express {
     const current = await sessionOf(res);
     if (!details) return html(res, interactionGonePage(!!current), 400);
     if (details.prompt.name !== 'consent' || !current || !isPublisher(current.user) || current.user.id !== details.session?.accountId) {
+      const reason = details.prompt.name !== 'consent' ? `prompt ${details.prompt.name}` : !current ? 'no session' : !isPublisher(current.user) ? 'not a publisher' : 'session for another account';
+      await event({ action: 'oauth.consent', result: 'refused', ip: ipOf(req), ...(current ? { userId: current.user.id } : {}), detail: reason });
       return html(res, errorPage(403), 403);
     }
     const missing = details.prompt.details as {
