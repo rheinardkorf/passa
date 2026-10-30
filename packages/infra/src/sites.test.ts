@@ -39,7 +39,7 @@ describe('sites stack', () => {
     sites.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
         SecurityHeadersConfig: Match.objectLike({ ContentSecurityPolicy: { ContentSecurityPolicy: headers['content-security-policy'], Override: true } }),
-        CustomHeadersConfig: { Items: Match.arrayWith([{ Header: 'cache-control', Value: 'private, no-cache', Override: true }]) },
+        CustomHeadersConfig: { Items: Match.arrayWith([{ Header: 'cache-control', Value: 'private, no-cache', Override: true }, { Header: 'x-robots-tag', Value: 'noindex', Override: true }]) },
       }),
     });
   });

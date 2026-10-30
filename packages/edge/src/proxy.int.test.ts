@@ -279,6 +279,7 @@ describe('viewing a public site (M2)', () => {
     expect(home.status).toBe(200);
     expect(home.body).toContain('<h1>Public</h1>');
     expect(home.headers['content-security-policy']).toBe(contentSecurityPolicy(env.config.cdnAllowlist));
+    expect(home.headers['x-robots-tag']).toBe('noindex');
     expect((await get(site.site_id, '/missing.html')).status).toBe(404);
 
     // A private folder, whether or not the file exists, looks the same: sign in.
