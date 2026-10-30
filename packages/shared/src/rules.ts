@@ -51,3 +51,37 @@ export function edgeRules(rules: Rule[]): EdgeRule[] {
 export function tierFor(rules: Rule[], servedPath: string): Tier {
   return [...rules].sort(byLength).find((r) => servedPath.startsWith(r.path))?.tier ?? 'private';
 }
+
+// The rules split a site into regions: the paths under a prefix that no longer
+// prefix covers. P + "\0" stands for a path directly under P, since "\0" is in
+// no published path or rule. Each region is named by its prefix.
+const under = (prefix: string) => `${prefix}\0`;
+const prefixes = (...sets: Rule[][]) => [...new Set(['/', ...sets.flat().map((r) => r.path)])].sort();
+
+export type Access = 'private' | 'public' | 'mixed';
+
+// Which regions are public and which private.
+export function regions(rules: Rule[]): { public: string[]; private: string[] } {
+  const result = { public: [] as string[], private: [] as string[] };
+  for (const p of prefixes(rules)) result[tierFor(rules, under(p))].push(p);
+  return result;
+}
+
+export function accessOf(rules: Rule[]): Access {
+  const { public: open, private: closed } = regions(rules);
+  return !open.length ? 'private' : closed.length ? 'mixed' : 'public';
+}
+
+// What a change of rules makes public or private. Checking regions, not
+// rules, catches every way to expose a path, such as removing a private rule
+// inside a public folder.
+export function accessChanges(before: Rule[], after: Rule[]): { madePublic: string[]; madePrivate: string[] } {
+  const madePublic: string[] = [];
+  const madePrivate: string[] = [];
+  for (const p of prefixes(before, after)) {
+    const was = tierFor(before, under(p));
+    const now = tierFor(after, under(p));
+    if (was !== now) (now === 'public' ? madePublic : madePrivate).push(p);
+  }
+  return { madePublic, madePrivate };
+}

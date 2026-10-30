@@ -62,7 +62,7 @@ Make a site public and open it in a private window without signing in. Make one 
 
 ### Events
 
-- **R46** Every change to rules or names is recorded as an event, with the public paths before and after.
+- **R46** Every change to rules or names is recorded as an event, with the paths it made public or private.
 
 ## Security and quality requirements
 

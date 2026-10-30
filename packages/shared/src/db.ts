@@ -41,6 +41,9 @@ export type Site = {
   updatedAt: string;
 };
 
+// The details update can change. Only these names reach setDetails' expression.
+export type SiteDetails = { title?: string; dataSource?: string | null; dataAsOf?: string | null };
+
 export type FileEntry = { path: string; size: number; contentType: string; sha256: string };
 
 export type Version = {
@@ -190,8 +193,10 @@ export class Store {
   }
 
   // Adds a version and makes it current, if the site is the owner's, active,
-  // and still on the version this one was built from.
-  async addVersion(ownerId: string, version: Version, baseVersionId: string): Promise<void> {
+  // and still on the version this one was built from. Rules, when given, are
+  // replaced in the same write, if the site is unchanged since it was read
+  // (seen: its updatedAt then), since they were checked against what was read.
+  async addVersion(ownerId: string, version: Version, baseVersionId: string, rules?: { rules: Rule[]; seen: string }): Promise<void> {
     try {
       await this.#db.send(new TransactWriteCommand({
         TransactItems: [
@@ -206,10 +211,17 @@ export class Store {
             Update: {
               TableName: this.#table,
               Key: siteKey(version.siteId),
-              UpdateExpression: 'SET #current = :v, updatedAt = :now',
-              ConditionExpression: 'ownerId = :owner AND #status = :active AND #current = :base',
-              ExpressionAttributeNames: { '#current': 'current', '#status': 'status' },
-              ExpressionAttributeValues: { ':v': version.id, ':now': version.createdAt, ':owner': ownerId, ':active': 'active', ':base': baseVersionId },
+              UpdateExpression: `SET #current = :v, updatedAt = :now${rules ? ', #rules = :rules' : ''}`,
+              ConditionExpression: `ownerId = :owner AND #status = :active AND #current = :base${rules ? ' AND updatedAt = :seen' : ''}`,
+              ExpressionAttributeNames: { '#current': 'current', '#status': 'status', ...(rules ? { '#rules': 'rules' } : {}) },
+              ExpressionAttributeValues: {
+                ':v': version.id,
+                ':now': version.createdAt,
+                ':owner': ownerId,
+                ':active': 'active',
+                ':base': baseVersionId,
+                ...(rules ? { ':rules': rules.rules, ':seen': rules.seen } : {}),
+              },
             },
           },
         ],
@@ -263,6 +275,53 @@ export class Store {
     const shown = versions.slice(0, page.limit);
     const last = shown.at(-1);
     return last && versions.length > page.limit ? { versions: shown, next: last.id } : { versions: shown };
+  }
+
+  // Changes a site's title or data details, if the site is the owner's and
+  // active. null removes a data detail.
+  async setDetails(ownerId: string, siteId: string, details: SiteDetails, now: string): Promise<void> {
+    const set = ['updatedAt = :now'];
+    const remove: string[] = [];
+    const values: Record<string, unknown> = { ':now': now, ':owner': ownerId, ':active': 'active' };
+    for (const [name, value] of Object.entries(details)) {
+      if (value === undefined) continue;
+      if (value === null) remove.push(name);
+      else {
+        set.push(`${name} = :${name}`);
+        values[`:${name}`] = value;
+      }
+    }
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: siteKey(siteId),
+        UpdateExpression: `SET ${set.join(', ')}${remove.length ? ` REMOVE ${remove.join(', ')}` : ''}`,
+        ConditionExpression: 'ownerId = :owner AND #status = :active',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: values,
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new NotFoundOrConflict();
+      throw err;
+    }
+  }
+
+  // Replaces a site's path rules, if the site is the owner's, active, and
+  // unchanged since it was read (seen: its updatedAt then).
+  async setRules(ownerId: string, siteId: string, rules: Rule[], now: string, seen: string): Promise<void> {
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: siteKey(siteId),
+        UpdateExpression: 'SET #rules = :rules, updatedAt = :now',
+        ConditionExpression: 'ownerId = :owner AND #status = :active AND updatedAt = :seen',
+        ExpressionAttributeNames: { '#rules': 'rules', '#status': 'status' },
+        ExpressionAttributeValues: { ':rules': rules, ':now': now, ':owner': ownerId, ':active': 'active', ':seen': seen },
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new NotFoundOrConflict();
+      throw err;
+    }
   }
 
   // Makes an existing version current again (rollback).

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkRules, edgeRules, MAX_RULES, type Rule, tierFor } from './rules.ts';
+import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, tierFor } from './rules.ts';
 
 const pub = (path: string): Rule => ({ path, tier: 'public' });
 const priv = (path: string): Rule => ({ path, tier: 'private' });
@@ -72,5 +72,38 @@ describe('tierFor', () => {
     expect(tierFor([], '/index.html')).toBe('private');
     expect(tierFor([pub('/docs/')], '/index.html')).toBe('private');
     expect(tierFor([pub('/docs/')], '/docs.html')).toBe('private');
+  });
+});
+
+describe('regions and access', () => {
+  it('names each region by its prefix', () => {
+    expect(regions([])).toEqual({ public: [], private: ['/'] });
+    expect(regions([pub('/'), priv('/notes/')])).toEqual({ public: ['/'], private: ['/notes/'] });
+    expect(regions([pub('/docs/')])).toEqual({ public: ['/docs/'], private: ['/'] });
+  });
+
+  it('summarises a site as private, public or mixed', () => {
+    expect(accessOf([])).toBe('private');
+    expect(accessOf([priv('/'), priv('/a/')])).toBe('private');
+    expect(accessOf([pub('/')])).toBe('public');
+    expect(accessOf([pub('/'), pub('/a/')])).toBe('public');
+    expect(accessOf([pub('/'), priv('/a/')])).toBe('mixed');
+  });
+});
+
+describe('accessChanges', () => {
+  it('finds what becomes public or private', () => {
+    expect(accessChanges([], [pub('/')])).toEqual({ madePublic: ['/'], madePrivate: [] });
+    expect(accessChanges([pub('/')], [])).toEqual({ madePublic: [], madePrivate: ['/'] });
+    expect(accessChanges([pub('/')], [pub('/'), priv('/notes/')])).toEqual({ madePublic: [], madePrivate: ['/notes/'] });
+  });
+
+  it('catches a path exposed by removing a private rule', () => {
+    expect(accessChanges([pub('/'), priv('/notes/')], [pub('/')])).toEqual({ madePublic: ['/notes/'], madePrivate: [] });
+  });
+
+  it('sees no change when rules are rewritten without changing access', () => {
+    expect(accessChanges([pub('/')], [pub('/'), pub('/docs/')])).toEqual({ madePublic: [], madePrivate: [] });
+    expect(accessChanges([], [priv('/'), priv('/a/')])).toEqual({ madePublic: [], madePrivate: [] });
   });
 });
