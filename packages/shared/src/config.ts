@@ -56,6 +56,10 @@ export const configSchema = z.strictObject({
     mcpBurst: z.number().int().positive(),
   }),
   deleteGraceDays: z.number().int().nonnegative(),
+  // How long a site's old name is held for its owner after a rename (M2 R46).
+  nameHoldDays: z.number().int().nonnegative().default(7),
+  // Names publishers can't use, besides the built-in ones (www, auth, ...).
+  reservedNames: z.array(z.string().min(1)).default([]),
   cdnAllowlist: z.array(z.string().min(1)),
 });
 

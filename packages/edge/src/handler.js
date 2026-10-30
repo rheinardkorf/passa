@@ -9,8 +9,11 @@
 // that way; a test checks. build.ts adds the CloudFront wrapper.
 
 const COOKIE = '__Host-passa';
-// The site ID alphabet (shared/ids.ts): a–z without l and o, and 2–9.
-const SITE_ID = /^[a-km-np-z2-9]{12}$/;
+// Site IDs (shared/ids.ts, SITE_ID_PATTERN): <adjective>-<noun>-<6 random>.
+const SITE_ID = /^[a-z]{3,6}-[a-z]{3,6}-[b-df-hj-km-np-tv-z2-9]{6}$/;
+// Site names (shared/names.ts, NAME_PATTERN). Checked after SITE_ID, so a
+// label that is an ID is never looked up as a name.
+const NAME = /^(?=[a-z0-9-]{2,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // Same characters as publishable paths. Anything else (including %-escapes,
 // "..", dotfiles and empty segments) can't match a published file.
 const PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
@@ -70,12 +73,16 @@ async function readJson(kvs, key) {
   }
 }
 
-async function readKey(kvs, kid) {
+async function readText(kvs, key) {
   try {
-    return await kvs.get('k:' + kid);
+    return await kvs.get(key);
   } catch (e) {
     return null;
   }
+}
+
+function readKey(kvs, kid) {
+  return readText(kvs, 'k:' + kid);
 }
 
 // Safe paths contain no "%", so decoding is the same whether or not the value
@@ -112,17 +119,20 @@ function serve(request, siteId, version, served) {
   return request;
 }
 
-// options: { kvs, crypto, now (ms), sites (the site domain), auth (auth. origin) }
+// options: { kvs, crypto, now (ms), sites (the site domain), auth (auth. origin), scheme (https unless local) }
 async function handle(event, options) {
   const request = event.request;
   const host = request.headers.host ? request.headers.host.value.toLowerCase() : '';
   const suffix = '.' + options.sites;
-  const siteId = host.endsWith(suffix) ? host.slice(0, -suffix.length) : '';
+  // The host's label is a site ID or a name (M2 R44); a name is looked up.
+  const label = host.endsWith(suffix) ? host.slice(0, -suffix.length) : '';
+  const byId = SITE_ID.test(label);
   const path = request.uri;
-  if (!SITE_ID.test(siteId) || !PATH.test(path)) return notFound();
+  if ((!byId && !NAME.test(label)) || !PATH.test(path)) return notFound();
 
   const now = Math.floor(options.now / 1000);
-  const record = await readJson(options.kvs, 's:' + siteId);
+  const siteId = byId ? label : await readText(options.kvs, 'n:' + label);
+  const record = siteId ? await readJson(options.kvs, 's:' + siteId) : null;
 
   // Sign-in hands the visitor back here with a short-lived token, since auth.
   // can't set a cookie for this host. The token becomes the site cookie.
@@ -133,11 +143,13 @@ async function handle(event, options) {
     // The cookie lifetime (seconds) is set by auth. and covered by the signature.
     const life = q.l && /^\d{1,5}$/.test(q.l.value) ? Number(q.l.value) : 0;
     const key = token ? await readKey(options.kvs, token.kid) : null;
-    const signed = token && key && token.site === siteId && token.exp > now
+    // A name that hasn't reached the edge yet has no site ID to compare with;
+    // a signed token then waits for it, which grants nothing on its own.
+    const signed = token && key && (siteId === null || token.site === siteId) && token.exp > now
       && life > 0 && life <= 86400 && to.charAt(0) === '/' && PATH.test(to)
       && sameHex(token.sig, sign(options.crypto, key, 'handoff', [token.kid, token.site, token.v, token.exp, life, to]));
     if (!signed) return notFound();
-    if (!record || token.v > record.v) return notReady();
+    if (!siteId || !record || token.v > record.v) return notReady();
     if (token.v !== record.v) return notFound();
     const fields = [token.kid, siteId, record.v, now + life];
     const cookies = {};
@@ -151,6 +163,13 @@ async function handle(event, options) {
   // Reserved for Passa; never served from storage (R14).
   if (path === '/_passa' || path.indexOf('/_passa/') === 0) return notFound();
 
+  // A named site has one address, its name (M2 R45): its ID and any held
+  // names redirect there, keeping the path.
+  const canonical = record ? record.n || siteId : label;
+  if (canonical !== label) {
+    return respond(302, 'Found', { location: (options.scheme || 'https') + '://' + canonical + suffix + path });
+  }
+
   // Public paths need no cookie (M2 R39). Rules match the path as served, so
   // /docs and /docs/ are both covered by /docs/.
   const served = indexPath(path);
@@ -161,9 +180,10 @@ async function handle(event, options) {
   const allowed = cookie && key && record && cookie.site === siteId && cookie.v === record.v && cookie.exp > now
     && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', [cookie.kid, cookie.site, cookie.v, cookie.exp]));
 
-  // A missing site looks exactly like a private one, so the redirect reveals nothing (R12).
+  // A missing site, or a name no site has, looks exactly like a private one, so
+  // the redirect reveals nothing (R12). auth. resolves names itself.
   if (!allowed) {
-    const signin = options.auth + '/site/signin?site=' + siteId + '&path=' + encodeURIComponent(path);
+    const signin = options.auth + '/site/signin?site=' + label + '&path=' + encodeURIComponent(path);
     return respond(302, 'Found', { location: signin });
   }
 

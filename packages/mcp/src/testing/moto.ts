@@ -20,6 +20,8 @@ export const testConfig: Config = {
   limits: { inlinePublish: 64 * 1024, site: 256 * 1024, file: 128 * 1024, files: 20 },
   rateLimits: { window: 3600, signinPerEmail: 3, signinPerIp: 100, authPerIp: 600, authFormsPerIp: 30, mcpPerSecond: 20, mcpBurst: 40 },
   deleteGraceDays: 7,
+  nameHoldDays: 7,
+  reservedNames: ['blog'],
   cdnAllowlist: ['cdn.jsdelivr.net'],
 };
 

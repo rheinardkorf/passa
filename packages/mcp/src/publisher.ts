@@ -12,6 +12,8 @@ import {
   isSiteId,
   isUploadId,
   isVersionId,
+  NameTaken,
+  nameProblem,
   newSiteId,
   newUploadId,
   newVersionId,
@@ -39,9 +41,9 @@ export type Deps = {
   edge: EdgeRecords;
   config: Config;
   now?: () => Date;
-  // Where a site is served. Defaults to https://<site-id>.<siteDomain>/; the local
-  // proxy serves sites over http on its own port.
-  siteUrl?: (siteId: string) => string;
+  // Where a site is served, by its ID or name. Defaults to
+  // https://<label>.<siteDomain>/; the local proxy serves sites over http on its own port.
+  siteUrl?: (label: string) => string;
   // Uploads are scanned by GuardDuty Malware Protection (in AWS, not locally),
   // and publish checks each file's result first.
   malwareScan?: boolean;
@@ -65,11 +67,12 @@ export type SiteSummary = {
   data_source?: string;
   data_as_of?: string;
   delete_at?: string;
+  name?: string;
   access: Access;
   rules?: Rule[];
 };
 
-// What a change of rules did, for the response and the event (R46).
+// What a change of rules did, for the response and the event (R48).
 export type AccessChange = { made_public: string[]; made_private: string[] };
 
 export type SiteFile = { path: string; size: number; content_type: string; sha256: string; content?: string; download_url?: string };
@@ -105,14 +108,17 @@ export class Publisher {
     return (this.#d.now ?? (() => new Date()))();
   }
 
-  #url(siteId: string) {
-    return this.#d.siteUrl ? this.#d.siteUrl(siteId) : `https://${siteId}.${siteDomain(this.#d.config)}/`;
+  // A site's one address: its name when it has one (M2 R45, R47).
+  #url(site: Pick<Site, 'id' | 'name'>) {
+    const label = site.name ?? site.id;
+    return this.#d.siteUrl ? this.#d.siteUrl(label) : `https://${label}.${siteDomain(this.#d.config)}/`;
   }
 
   #summary(site: Site): SiteSummary {
     return {
       site_id: site.id,
-      url: this.#url(site.id),
+      url: this.#url(site),
+      ...(site.name ? { name: site.name } : {}),
       title: site.title,
       status: site.status,
       current_version: site.current,
@@ -153,7 +159,7 @@ export class Publisher {
     const open = regions(site.rules ?? []).public;
     return {
       ...change,
-      public_urls: open.map((p) => this.#url(site.id) + p.slice(1)),
+      public_urls: open.map((p) => this.#url(site) + p.slice(1)),
       ...(change.made_private.length ? { note: 'Paths made private can stay public at some edge locations for up to a minute.' } : {}),
     };
   }
@@ -449,7 +455,8 @@ export class Publisher {
   // previous page.
   async findSites(caller: Caller, input: { query?: string; limit: number; cursor?: string }) {
     const query = input.query?.trim().toLowerCase();
-    const sites = (await this.#d.store.listSitesByOwner(caller.userId)).filter((s) => !query || s.title.toLowerCase().includes(query));
+    const sites = (await this.#d.store.listSitesByOwner(caller.userId))
+      .filter((s) => !query || s.title.toLowerCase().includes(query) || !!s.name?.includes(query));
     const start = input.cursor ? sites.findIndex((s) => s.id === input.cursor) + 1 : 0;
     if (input.cursor && start === 0) throw new ToolError(BAD_CURSOR);
     const page = sites.slice(start, start + input.limit);
@@ -513,8 +520,57 @@ export class Publisher {
   // leaves the records in place and the purge can simply run again.
   async purge(siteId: string): Promise<void> {
     await this.#d.edge.remove(siteId);
+    for (const { name } of await this.#d.store.namesOf(siteId)) await this.#d.edge.removeName(name);
     await this.#d.files.deleteSite(siteId);
     await this.#d.store.deleteSiteRecords(siteId);
+  }
+
+  // Gives a site a name, a new one, or none (M2 R44, R46). The old name is held
+  // for the owner, and keeps redirecting to the site, for nameHoldDays.
+  async setName(caller: Caller, input: { siteId: string; name: string | null }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    this.#assertChangeable(site);
+    const to = input.name ?? undefined;
+    const problem = to && nameProblem(to, this.#d.config.reservedNames);
+    if (problem) throw new ToolError(problem);
+    if (to === site.name) return { ...this.#summary(site), name_change: { from: site.name ?? null, to: to ?? null } };
+    const now = this.#now();
+    const holdUntil = new Date(now.getTime() + this.#d.config.nameHoldDays * 86_400_000).toISOString();
+    try {
+      await this.#d.store.setName({ ownerId: caller.userId, siteId: site.id, ...(site.name ? { from: site.name } : {}), ...(to ? { to } : {}), now: now.toISOString(), holdUntil });
+    } catch (err) {
+      if (err instanceof NameTaken) throw new ToolError('That name is taken.');
+      if (!(err instanceof NotFoundOrConflict)) throw err;
+      const current = await this.#d.store.getSite(site.id);
+      throw new ToolError(current?.ownerId === caller.userId && current.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
+    }
+    // The new name before the site record, so its redirect has somewhere to go.
+    if (to) await this.syncName(to);
+    const updated = (await this.#sync(site.id)) ?? site;
+    if (site.name) await this.syncName(site.name);
+    return {
+      ...this.#summary(updated),
+      name_change: { from: site.name ?? null, to: to ?? null },
+      ...(site.name ? { held: { name: site.name, until: holdUntil, note: 'The old name redirects here until then, and only you can claim it again.' } } : {}),
+    };
+  }
+
+  // Writes a name's edge record from DynamoDB as it is now: pointing at its
+  // site while it's current or held, and gone once its hold has ended.
+  async syncName(name: string): Promise<void> {
+    const record = await this.#liveName(name);
+    await (record ? this.#d.edge.putName(name, record.siteId) : this.#d.edge.removeName(name));
+  }
+
+  // After DynamoDB expires a held name: removes its edge record, unless the
+  // name has been claimed again since (whoever claimed it wrote the record).
+  async expireName(name: string): Promise<void> {
+    if (!(await this.#liveName(name))) await this.#d.edge.removeName(name);
+  }
+
+  async #liveName(name: string) {
+    const record = await this.#d.store.getName(name);
+    return record && (!record.heldUntil || record.heldUntil > this.#now().toISOString()) ? record : undefined;
   }
 
   async beginUpload(caller: Caller, input: { files: { path: string; size: number }[] }) {

@@ -90,13 +90,13 @@ describe('services stack', () => {
     services.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: Match.objectLike({ PASSA_MALWARE_SCAN: '1' }) } });
   });
 
-  it('purges only on TTL removals of PURGE items', () => {
+  it('runs only on TTL removals of PURGE and NAME items', () => {
     const mapping = Object.values(services.findResources('AWS::Lambda::EventSourceMapping'))[0];
-    const pattern = JSON.parse(mapping?.Properties.FilterCriteria.Filters[0].Pattern);
-    expect(pattern).toEqual({
+    const patterns = (mapping?.Properties.FilterCriteria.Filters as { Pattern: string }[]).map((f) => JSON.parse(f.Pattern));
+    expect(patterns).toEqual(['PURGE#', 'NAME#'].map((prefix) => ({
       eventName: ['REMOVE'],
       userIdentity: { principalId: ['dynamodb.amazonaws.com'] },
-      dynamodb: { OldImage: { pk: { S: [{ prefix: 'PURGE#' }] } } },
-    });
+      dynamodb: { OldImage: { pk: { S: [{ prefix }] } } },
+    })));
   });
 });

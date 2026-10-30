@@ -82,11 +82,15 @@ const schemas = {
     version_id: versionId.optional().describe('Defaults to the current version'),
   }),
   find_sites: z.strictObject({
-    query: z.string().max(200).optional().describe('Matched against titles; omit to list every site'),
+    query: z.string().max(200).optional().describe('Matched against titles and names; omit to list every site'),
     limit: limit('sites', 50),
     cursor,
   }),
   set_access: z.strictObject({ site_id: siteId, rules, confirm_public: confirmPublic }),
+  set_name: z.strictObject({
+    site_id: siteId,
+    name: z.string().max(40).nullable().describe('The new name, such as cv for cv.<site domain>; null removes the name'),
+  }),
   rollback: z.strictObject({ site_id: siteId, version_id: versionId.describe('A version listed by get_site') }),
   delete: z.strictObject({
     site_id: siteId,
@@ -98,7 +102,7 @@ const schemas = {
   finish_upload: z.strictObject({ upload_id: uploadId }),
 };
 
-// The event detail for a change of rules (R46): what became public or private.
+// The event detail for a change of rules (R48): what became public or private.
 function accessDetail(result: object): { detail?: string } {
   const r: Partial<AccessChange> = result;
   if (!r.made_public && !r.made_private) return {};
@@ -121,19 +125,22 @@ function size(bytes: number): string {
 }
 
 // Descriptions state this deployment's actual limits, so agents don't have to guess.
-function descriptions({ limits, lifetimes, deleteGraceDays }: Config) {
+function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays }: Config) {
   const inline = size(limits.inlinePublish);
   const minutes = `${Math.round(lifetimes.uploadUrl / 60)} minutes`;
   const sizes = `Limits: ${limits.files} files, ${size(limits.file)} per file, ${size(limits.site)} per site.`;
   return {
     publish: `Publish files as a new site. It's private unless you pass rules: only you can open it, after signing in. Send files inline up to ${inline} in total; for larger sites, or files you can read from disk (such as images), use begin_upload instead. ${sizes}`,
     update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. Change the title or data details with or without files. Pass base_version to be refused if the site changed since you read it. Earlier versions are kept for rollback. ${sizes}`,
+    set_name: `Give a site a name, which becomes its address: <name>.<site domain>. Its ID address and any old name redirect there, so links keep working. `
+      + `A name is 2–40 lowercase letters, digits and single hyphens. When a site's name changes or is removed, the old name is held for ${nameHoldDays} days: it keeps redirecting, and only you can claim it again. `
+      + 'Names are first come, first served, so check with the person before choosing one.',
     set_access: 'Set who can open which parts of a site, replacing its rules. Each rule is / or a folder ending in /, and a tier: public (anyone with the link, without signing in) or private (only you). '
       + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. '
       + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. '
       + 'Changes take effect within seconds, and everywhere within about a minute.',
     get_site: 'Get a site\'s details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions.',
-    find_sites: 'List your sites newest first, optionally matching a title. If next_cursor is returned, pass it as cursor for the next page.',
+    find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
     delete: `Delete a site. It stops being served at once, and is removed permanently after ${deleteGraceDays} days, or immediately with now=true.`,
     begin_upload: `Start an upload, for sites over ${inline} or files you can read from disk. Returns a URL per file, valid for ${minutes}: PUT each file's bytes to its URL (for example, curl -T path/to/file '<url>'), then call finish_upload. File contents never pass through the conversation. ${sizes}`,
@@ -219,6 +226,12 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
       },
     });
     return { result: r, siteId: r.site_id, ...accessDetail(r) };
+  });
+
+  tool('set_name', describe.set_name, { destructiveHint: true, idempotentHint: true, openWorldHint: true }, schemas.set_name, async (i) => {
+    const r = await publisher.setName(caller, { siteId: i.site_id, name: i.name });
+    const { from, to } = r.name_change;
+    return { result: r, siteId: r.site_id, detail: `name: ${from ?? 'none'} → ${to ?? 'none'}` };
   });
 
   tool('set_access', describe.set_access, { destructiveHint: true, idempotentHint: true, openWorldHint: true }, schemas.set_access, async (i) => {

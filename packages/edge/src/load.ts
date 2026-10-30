@@ -23,8 +23,9 @@ export type EdgeOptions = {
   kvs: { get(key: string): Promise<string> };
   crypto: { createHmac(algorithm: string, key: string): { update(data: string): { digest(encoding: 'hex'): string } } };
   now: number;
-  sites: string; // the site domain: hosts are <site-id>.<sites>
+  sites: string; // the site domain: hosts are <site-id or name>.<sites>
   auth: string; // the auth. origin, e.g. https://auth.example.com
+  scheme?: 'http' | 'https'; // for redirects between site hosts; https unless local
 };
 export type Handle = (event: { request: EdgeRequest }, options: EdgeOptions) => Promise<EdgeRequest | EdgeResponse>;
 

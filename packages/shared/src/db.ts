@@ -36,6 +36,8 @@ export type Site = {
   status: 'active' | 'deleting' | 'blocked';
   // Path rules (M2). None means the whole site is private.
   rules?: Rule[];
+  // Its address when set (M2 R44, R45); otherwise the site ID is.
+  name?: string;
   purgeAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -43,6 +45,10 @@ export type Site = {
 
 // The details update can change. Only these names reach setDetails' expression.
 export type SiteDetails = { title?: string; dataSource?: string | null; dataAsOf?: string | null };
+
+// Who a name belongs to. heldUntil is set once the site moves to another name
+// or none: until then only the owner can claim it again (M2 R46).
+export type SiteName = { name: string; siteId: string; ownerId: string; claimedAt: string; heldUntil?: string };
 
 export type FileEntry = { path: string; size: number; contentType: string; sha256: string };
 
@@ -89,11 +95,17 @@ export type Session = {
 // someone else, or is in the wrong state. Callers report it as "not found".
 export class NotFoundOrConflict extends Error {}
 
+// The name is someone else's, or held for its owner (M2 R46).
+export class NameTaken extends Error {}
+
 const userKey = (id: string) => ({ pk: `USER#${id}`, sk: 'PROFILE' });
 const siteKey = (id: string) => ({ pk: `SITE#${id}`, sk: 'META' });
 const versionKey = (siteId: string, id: string) => ({ pk: `SITE#${siteId}`, sk: `VER#${id}` });
 const uploadKey = (id: string) => ({ pk: `UPLOAD#${id}`, sk: 'META' });
 const purgeKey = (siteId: string) => ({ pk: `PURGE#${siteId}`, sk: 'META' });
+const nameKey = (name: string) => ({ pk: `NAME#${name}`, sk: 'META' });
+// One per name a site has claimed, so a purge can find its current and held names.
+const siteNameKey = (siteId: string, name: string) => ({ pk: `SITE#${siteId}`, sk: `NAME#${name}` });
 const tokenKey = (hash: string) => ({ pk: `TOKEN#${hash}`, sk: 'META' });
 const sessionKey = (hash: string) => ({ pk: `SESSION#${hash}`, sk: 'META' });
 const rateKey = (name: string, windowStart: number) => ({ pk: `RATE#${name}`, sk: `W#${windowStart}` });
@@ -306,6 +318,71 @@ export class Store {
     }
   }
 
+  async getName(name: string): Promise<SiteName | undefined> {
+    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: nameKey(name), ConsistentRead: true }));
+    return entity<SiteName>(Item);
+  }
+
+  // Moves a site from one name (or none) to another (or none), in one
+  // transaction: the site must be the owner's, active and still on `from`; the
+  // new name must be free, held for this owner, or held past its time; the old
+  // one is held until `holdUntil`, and removed by TTL after that.
+  async setName(input: { ownerId: string; siteId: string; from?: string; to?: string; now: string; holdUntil: string }): Promise<void> {
+    const { ownerId, siteId, from, to, now, holdUntil } = input;
+    const items: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']> = [{
+      Update: {
+        TableName: this.#table,
+        Key: siteKey(siteId),
+        UpdateExpression: to ? 'SET #name = :to, updatedAt = :now' : 'SET updatedAt = :now REMOVE #name',
+        ConditionExpression: `ownerId = :owner AND #status = :active AND ${from ? '#name = :from' : 'attribute_not_exists(#name)'}`,
+        ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
+        ExpressionAttributeValues: { ':now': now, ':owner': ownerId, ':active': 'active', ...(to ? { ':to': to } : {}), ...(from ? { ':from': from } : {}) },
+      },
+    }];
+    if (to) {
+      items.push({
+        Put: {
+          TableName: this.#table,
+          Item: { ...nameKey(to), name: to, siteId, ownerId, claimedAt: now } satisfies Record<string, unknown> & SiteName,
+          ConditionExpression: 'attribute_not_exists(pk) OR (ownerId = :owner AND attribute_exists(heldUntil)) OR heldUntil < :now',
+          ExpressionAttributeValues: { ':owner': ownerId, ':now': now },
+        },
+      }, { Put: { TableName: this.#table, Item: siteNameKey(siteId, to) } });
+    }
+    if (from) {
+      items.push({
+        Update: {
+          TableName: this.#table,
+          Key: nameKey(from),
+          UpdateExpression: 'SET heldUntil = :hold, #ttl = :ttl',
+          ConditionExpression: 'siteId = :site',
+          ExpressionAttributeNames: { '#ttl': 'ttl' },
+          ExpressionAttributeValues: { ':hold': holdUntil, ':ttl': epochSeconds(holdUntil), ':site': siteId },
+        },
+      });
+    }
+    try {
+      await this.#db.send(new TransactWriteCommand({ TransactItems: items }));
+    } catch (err) {
+      // The new name's condition is the second item.
+      const reasons = err instanceof TransactionCanceledException ? err.CancellationReasons ?? [] : [];
+      if (to && reasons[1]?.Code === 'ConditionalCheckFailed' && reasons[0]?.Code !== 'ConditionalCheckFailed') throw new NameTaken();
+      if (isConditionFailure(err)) throw new NotFoundOrConflict();
+      throw err;
+    }
+  }
+
+  // Every name a site has claimed that still points at it, current or held.
+  async namesOf(siteId: string): Promise<SiteName[]> {
+    const { Items } = await this.#db.send(new QueryCommand({
+      TableName: this.#table,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
+      ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': 'NAME#' },
+    }));
+    const names = await Promise.all((Items ?? []).map((item) => this.getName(String(item.sk).slice('NAME#'.length))));
+    return names.filter((n): n is SiteName => n?.siteId === siteId);
+  }
+
   // Replaces a site's path rules, if the site is the owner's, active, and
   // unchanged since it was read (seen: its updatedAt then).
   async setRules(ownerId: string, siteId: string, rules: Rule[], now: string, seen: string): Promise<void> {
@@ -405,6 +482,14 @@ export class Store {
 
   // Removes every record of a site: META, all versions and any PURGE marker.
   async deleteSiteRecords(siteId: string): Promise<void> {
+    // Names first, and only those still pointing at this site: a held name may
+    // have been claimed for another site since.
+    for (const { name } of await this.namesOf(siteId)) {
+      await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: nameKey(name), ConditionExpression: 'siteId = :site', ExpressionAttributeValues: { ':site': siteId } }))
+        .catch((err: unknown) => {
+          if (!isConditionFailure(err)) throw err;
+        });
+    }
     const keys: Record<string, string>[] = [purgeKey(siteId)];
     let ExclusiveStartKey: Record<string, unknown> | undefined;
     do {

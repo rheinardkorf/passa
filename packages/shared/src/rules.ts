@@ -12,8 +12,9 @@ export type EdgeRule = [string, 'p' | 'x'];
 export const MAX_RULES = 20;
 export const MAX_RULE_PATH = 200;
 // KeyValueStore values are limited to 1 KB, and the rest of the edge record
-// (current version, access version) needs about 60 bytes of it.
-export const MAX_EDGE_RULES_BYTES = 900;
+// (current version, access version, a name of up to 40 characters) needs
+// about 110 bytes of it.
+export const MAX_EDGE_RULES_BYTES = 850;
 
 // "/" or folders ending in "/", from the same characters as publishable paths.
 // No dotfile folders, since nothing under them is published.

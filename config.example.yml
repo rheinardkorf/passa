@@ -69,6 +69,14 @@ rateLimits:
 
 deleteGraceDays: 7
 
+# After a site is renamed, its old name redirects to the new one and only its
+# owner can claim it, for this many days.
+nameHoldDays: 7
+
+# Site names publishers can't use, on top of www, mail, auth, mcp, api, dev,
+# admin and status. Add labels you use for other things on the site domain.
+reservedNames: []
+
 # Scripts, styles and fonts on sites may load only from these hosts.
 cdnAllowlist:
   - cdn.jsdelivr.net

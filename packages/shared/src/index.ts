@@ -5,6 +5,7 @@ export * from './events.ts';
 export * from './ids.ts';
 export * from './kms.ts';
 export * from './kvs.ts';
+export * from './names.ts';
 export * from './oidc.ts';
 export * from './rules.ts';
 export * from './runtime.ts';

@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handoffUrl, MemoryEdgeStore, newSiteId, siteCookie } from '@passa/shared';
+import { handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, SITE_ID_PATTERN, siteCookie } from '@passa/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { functionCode, MAX_FUNCTION_BYTES } from './build.ts';
 import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler } from './load.ts';
@@ -12,7 +12,7 @@ const handle = loadHandler();
 const crypto = { createHmac: (a: string, k: string) => createHmac(a, k) };
 const NOW = Date.parse('2026-10-29T00:00:00Z');
 const now = NOW / 1000;
-const SITE = 'k3x9q2abcdef';
+const SITE = 'brave-otter-k3x9qm';
 const VERSION = '01JB0000000000000000000000';
 const key = { kid: 'k1', secret: 'a'.repeat(64) };
 let kvs: MemoryEdgeStore;
@@ -85,10 +85,10 @@ describe('without a valid cookie (R10, R12)', () => {
   });
 
   it('refuses cookies that are expired, for another site, from an older access version, or forged', async () => {
-    await kvs.put('m2n3p4q5r6s7', { cur: VERSION, v: 1, r: [] });
+    await kvs.put('quiet-river-m7wp2c', { cur: VERSION, v: 1, r: [] });
     const bad = [
       cookie({ expires: now - 1 }),
-      cookie({ siteId: 'm2n3p4q5r6s7' }),
+      cookie({ siteId: 'quiet-river-m7wp2c' }),
       cookie({ accessVersion: 0 }),
       cookie({ key: { kid: 'k1', secret: 'b'.repeat(64) } }),
       cookie({ key: { kid: 'k9', secret: key.secret } }),
@@ -99,7 +99,7 @@ describe('without a valid cookie (R10, R12)', () => {
   });
 
   it('treats a site with no edge record exactly like a private one', async () => {
-    const missing = 'zzzzzzzzzzzz';
+    const missing = 'calm-heron-zzzzzz';
     const r = await response(request('/', { host: `${missing}.example.com` }));
     expect(r.headers.location?.value).toBe(`https://auth.example.com/site/signin?site=${missing}&path=%2F`);
     // Even with a cookie that would be valid if the site existed.
@@ -147,6 +147,68 @@ describe('public paths (M2 R32, R33, R39)', () => {
   });
 });
 
+describe('named sites (M2 R44, R45)', () => {
+  const named = async (n?: string) => kvs.put(SITE, { cur: VERSION, v: 1, r: [], ...(n ? { n } : {}) });
+  const at = (host: string, uri = '/', extra: { cookie?: string } = {}) => request(uri, { ...extra, host: `${host}.example.com` });
+
+  beforeEach(async () => {
+    await kvs.putName('cv', SITE);
+    await named('cv');
+  });
+
+  it('serves a named site at its name, checking the same cookie', async () => {
+    expect(await rewrite(at('cv', '/docs/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/docs/index.html`);
+    expect((await response(at('cv', '/docs/'))).headers.location?.value).toBe(`https://auth.example.com/site/signin?site=cv&path=${encodeURIComponent('/docs/')}`);
+  });
+
+  it('redirects the ID address to the name, keeping the path', async () => {
+    const r = await response(at(SITE, '/docs/a.html', { cookie: cookie() }));
+    expect([r.statusCode, r.headers.location?.value, r.headers['cache-control']?.value]).toEqual([302, 'https://cv.example.com/docs/a.html', 'no-store']);
+  });
+
+  it('redirects a held name to the current one, or to the ID once the name is removed', async () => {
+    await kvs.putName('resume', SITE);
+    await named('resume');
+    expect((await response(at('cv', '/x.html'))).headers.location?.value).toBe('https://resume.example.com/x.html');
+    await named();
+    expect((await response(at('cv', '/x.html'))).headers.location?.value).toBe(`https://${SITE}.example.com/x.html`);
+    expect(await rewrite(at(SITE, '/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/index.html`);
+  });
+
+  it('makes an unknown name look exactly like a private site (R12)', async () => {
+    const unknown = await response(at('nothing-here', '/'));
+    const known = await response(at('cv', '/'));
+    expect(unknown.statusCode).toBe(302);
+    expect(unknown.headers.location?.value.replace('nothing-here', 'cv')).toBe(known.headers.location?.value);
+    // A name whose site has no record (deleted, blocked) too.
+    await kvs.remove(SITE);
+    expect((await response(at('cv', '/'))).headers.location?.value).toBe(known.headers.location?.value);
+  });
+
+  it('refuses a cookie for another site when a name has moved', async () => {
+    const other = 'quiet-river-m7wp2c';
+    await kvs.put(other, { cur: VERSION, v: 1, r: [], n: 'cv' });
+    await kvs.putName('cv', other);
+    expect((await response(at('cv', '/', { cookie: cookie() }))).statusCode).toBe(302);
+  });
+
+  it('hands sign-in back on the name host, and waits for a new name to reach the edge', async () => {
+    const event = (host: string) => {
+      const url = new URL(handoffUrl({ key, siteId: SITE, accessVersion: 1, origin: `https://${host}.example.com`, path: '/', cookieLifetime: 3600, now: NOW }));
+      const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
+      return { request: { ...request(url.pathname, { query }).request, headers: { host: { value: `${host}.example.com` } } } };
+    };
+    expect((await response(event('cv'))).cookies?.['__Host-passa']?.value).toBe(cookie({ expires: now + 3600 }));
+    expect((await response(event('fresh-name'))).statusCode).toBe(503);
+  });
+
+  it('serves public paths at the name without a cookie', async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/', 'p']], n: 'cv' });
+    expect(await rewrite(at('cv', '/'))).toBe(`/${SITE}/${VERSION}/index.html`);
+    expect((await response(at(SITE, '/'))).headers.location?.value).toBe('https://cv.example.com/');
+  });
+});
+
 describe('paths', () => {
   it('returns 404 for paths that no published file can have', async () => {
     const c = cookie();
@@ -159,6 +221,12 @@ describe('paths', () => {
     for (const uri of ['/_passa', '/_passa/', '/_passa/x.html']) expect((await response(request(uri, { cookie: cookie() }))).statusCode, uri).toBe(404);
   });
 
+  it('uses the same site ID and name patterns as the publisher', () => {
+    const source = readFileSync(new URL('./handler.js', import.meta.url), 'utf8');
+    expect(/const SITE_ID = \/(.+)\/;/.exec(source)?.[1]).toBe(SITE_ID_PATTERN.source);
+    expect(/const NAME = \/(.+)\/;/.exec(source)?.[1]).toBe(NAME_PATTERN.source);
+  });
+
   it('accepts every site ID the publisher can generate', async () => {
     for (let i = 0; i < 2000; i++) {
       const id = newSiteId();
@@ -167,8 +235,8 @@ describe('paths', () => {
     }
   });
 
-  it('returns 404 for hosts that are not site IDs on the site domain', async () => {
-    const hosts = ['example.com', 'auth.example.com', 'K3X9Q2ABCDEF0.example.com', 'k3x9q2abcde1.example.com', `${SITE}.example.org`, `${SITE}.example.com.evil.org`, `x.${SITE}.example.com`, `${SITE}example.com`];
+  it('returns 404 for hosts that are neither site IDs nor names on the site domain', async () => {
+    const hosts = ['example.com', 'my--cv.example.com', '-cv.example.com', 'a.example.com', `${'a'.repeat(41)}.example.com`, `${SITE}.example.org`, `${SITE}.example.com.evil.org`, `x.${SITE}.example.com`, `${SITE}example.com`];
     for (const host of hosts) expect((await response(request('/', { host }))).statusCode, host).toBe(404);
   });
 });
@@ -211,7 +279,7 @@ describe('sign-in handoff', () => {
   it('refuses tokens that are expired, for another site or an older access version, or tampered with', async () => {
     const cases = [
       handoff({ now: NOW - 61_000 }),
-      handoff({ siteId: 'm2n3p4q5r6s7' }),
+      handoff({ siteId: 'quiet-river-m7wp2c' }),
       handoff({ accessVersion: 0 }),
       handoff({ key: { kid: 'k1', secret: 'b'.repeat(64) } }),
     ];
@@ -224,7 +292,7 @@ describe('sign-in handoff', () => {
   });
 
   it('waits, instead of failing, while a new site or access version reaches the edge', async () => {
-    const fresh = 'q2r3s4t5u6v7';
+    const fresh = 'amber-comet-q2r3s4';
     const forFresh = () => {
       const event = handoff({ siteId: fresh, origin: `https://${fresh}.example.com` });
       event.request.headers.host = { value: `${fresh}.example.com` };

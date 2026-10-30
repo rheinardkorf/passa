@@ -202,6 +202,37 @@ describe('signing in', () => {
     expect(pageReply.status).toBe(200);
     expect(pageReply.body).toContain('<h1>Signed in</h1>');
   });
+  it('takes a visitor from a named site\'s ID address to its name, and signs them in there (M2 R45)', async () => {
+    const site = await publisher.publish(alice, { title: 'Named', content: { files: page('<h1>By name</h1>') } });
+    const named = await publisher.setName(alice, { siteId: site.site_id, name: 'by-name' });
+    expect(named.url).toBe(`http://by-name.localhost:${port}/`);
+    const browser = new Browser();
+
+    const fromId = await browser.open(`${site.url}docs/`);
+    expect([fromId.status, fromId.headers.location]).toEqual([302, `http://by-name.localhost:${port}/docs/`]);
+    const atName = await browser.open(String(fromId.headers.location));
+    expect(atName.headers.location).toBe(`http://localhost:${port}/site/signin?site=by-name&path=%2Fdocs%2F`);
+    const form = await browser.open(String(atName.headers.location));
+    expect(form.body).toContain('value="by-name"');
+
+    await browser.open(`http://localhost:${port}/signin`, { email: 'alice@example.com', site: 'by-name', path: '/' });
+    const link = /(http:\/\/localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.at(-1)?.text ?? '');
+    const continued = await browser.open(link?.[1] ?? '', { token: link?.[2] ?? '' });
+    const next = (/content="0;url=([^"]+)"/.exec(continued.body)?.[1] ?? '').replaceAll('&amp;', '&');
+    const handoff = await browser.open(new URL(next, continued.url).href);
+    // Handed back to the name, as the database says, not to the ID.
+    expect(new URL(String(handoff.headers.location)).host).toBe(`by-name.localhost:${port}`);
+    await browser.open(String(handoff.headers.location));
+    const pageReply = await browser.open(named.url);
+    expect([pageReply.status, pageReply.body.includes('<h1>By name</h1>')]).toEqual([200, true]);
+  });
+
+  it('treats an unknown name exactly like a private site', async () => {
+    const browser = new Browser();
+    const unknown = await browser.open(`http://no-such-name.localhost:${port}/`);
+    expect(unknown.headers.location).toBe(`http://localhost:${port}/site/signin?site=no-such-name&path=%2F`);
+    expect((await browser.open(String(unknown.headers.location))).body).toContain('Enter your email');
+  });
 });
 
 describe('viewing a private site', () => {
@@ -254,7 +285,7 @@ describe('viewing a private site', () => {
 
   it('only allows GET and HEAD', async () => {
     const r = await new Promise<number>((resolve) => {
-      httpRequest({ host: '127.0.0.1', port, path: '/', method: 'POST', headers: { host: `abcdefghijkm.localhost:${port}` } }, (res) => resolve(res.statusCode ?? 0)).end();
+      httpRequest({ host: '127.0.0.1', port, path: '/', method: 'POST', headers: { host: `calm-heron-bcdfgh.localhost:${port}` } }, (res) => resolve(res.statusCode ?? 0)).end();
     });
     expect(r).toBe(405);
   });
