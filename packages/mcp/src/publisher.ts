@@ -11,12 +11,14 @@ import {
   newSiteId,
   newUploadId,
   newVersionId,
+  NO_THREATS,
   NotFoundOrConflict,
   type Site,
   type SiteFiles,
   siteDomain,
   type Store,
   syncEdge,
+  THREATS,
   type Version,
 } from '@passa/shared';
 import { type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
@@ -33,6 +35,9 @@ export type Deps = {
   // Where a site is served. Defaults to https://<site-id>.<siteDomain>/; the local
   // proxy serves sites over http on its own port.
   siteUrl?: (siteId: string) => string;
+  // Uploads are scanned by GuardDuty Malware Protection (in AWS, not locally),
+  // and publish checks each file's result first.
+  malwareScan?: boolean;
 };
 
 // A refusal the agent should see as it is. Anything else is reported generically.
@@ -102,6 +107,11 @@ export class Publisher {
     }
   }
 
+  #assertChangeable(site: Site) {
+    if (site.status === 'blocked') throw new ToolError('This site is blocked because a file in it failed a malware scan. It can only be deleted.');
+    if (site.status !== 'active') throw new ToolError('This site is being deleted.');
+  }
+
   async #ownSite(caller: Caller, siteId: string): Promise<Site> {
     const site = isSiteId(siteId) ? await this.#d.store.getSite(siteId) : undefined;
     if (!site || site.ownerId !== caller.userId) throw new ToolError(NOT_FOUND);
@@ -156,6 +166,8 @@ export class Publisher {
     const upload = isUploadId(uploadId) ? await this.#d.store.getUpload(uploadId, this.#now().toISOString()) : undefined;
     if (!upload || upload.ownerId !== caller.userId || upload.status === 'used') throw new ToolError('No upload with that ID.');
     if (upload.status !== 'ready') throw new ToolError('Call finish_upload first.');
+    // Checked before the upload is claimed, so a file still being scanned can be retried.
+    if (this.#d.malwareScan) await this.#checkScans(caller, uploadId, upload.files.map((f) => f.path));
     try {
       await this.#d.store.markUploadUsed(caller.userId, uploadId);
     } catch (err) {
@@ -167,6 +179,20 @@ export class Publisher {
     const changed = files.filter((f) => f.content.byteLength !== f.size).map((f) => `${f.path}: changed size after finish_upload`);
     if (changed.length) throw new PublishRefused(changed);
     return { files: files.map(({ path, content }) => ({ path, content })), skipped: [] };
+  }
+
+  async #checkScans(caller: Caller, uploadId: string, paths: string[]) {
+    const results = await Promise.all(paths.map(async (path) => ({ path, status: await this.#d.files.uploadScanStatus(uploadId, path) })));
+    const threats = results.filter((r) => r.status === THREATS);
+    if (threats.length) {
+      // The upload can't be used again; its files are removed now rather than at expiry.
+      await this.#d.store.markUploadUsed(caller.userId, uploadId).catch(() => undefined);
+      await this.#d.files.deleteUpload(uploadId);
+      throw new PublishRefused(threats.map((r) => `${r.path}: malware found`));
+    }
+    if (results.some((r) => r.status === undefined)) throw new ToolError('Some files are still being scanned for malware. Try again in a few seconds.');
+    const unscanned = results.filter((r) => r.status !== NO_THREATS);
+    if (unscanned.length) throw new PublishRefused(unscanned.map((r) => `${r.path}: couldn't be scanned for malware (${r.status})`));
   }
 
   async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string }) {
@@ -193,7 +219,7 @@ export class Publisher {
   // With replaceAll, the files sent are the whole new version.
   async update(caller: Caller, input: { siteId: string; content?: Content; remove?: string[]; replaceAll?: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);
-    if (site.status !== 'active') throw new ToolError('This site is being deleted.');
+    this.#assertChangeable(site);
     const remove = input.remove ?? [];
     const base = input.replaceAll ? undefined : await this.#d.store.getVersion(site.id, site.current);
     if (base) {
@@ -274,7 +300,7 @@ export class Publisher {
 
   async rollback(caller: Caller, input: { siteId: string; versionId: string }) {
     const site = await this.#ownSite(caller, input.siteId);
-    if (site.status !== 'active') throw new ToolError('This site is being deleted.');
+    this.#assertChangeable(site);
     const now = this.#now().toISOString();
     try {
       if (!isVersionId(input.versionId)) throw new NotFoundOrConflict();

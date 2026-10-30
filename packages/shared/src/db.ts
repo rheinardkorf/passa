@@ -31,7 +31,8 @@ export type Site = {
   current: string;
   // Bumped whenever who may view the site changes, so older cookies stop working.
   accessVersion: number;
-  status: 'active' | 'deleting';
+  // blocked: a file failed a malware scan, so the site isn't served.
+  status: 'active' | 'deleting' | 'blocked';
   purgeAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -268,7 +269,27 @@ export class Store {
     }
   }
 
+  // Stops an active site being served after a malware finding. Returns false
+  // if the site doesn't exist or isn't active (already blocked or deleting).
+  async blockSite(siteId: string, now: string): Promise<boolean> {
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: siteKey(siteId),
+        UpdateExpression: 'SET #status = :blocked, updatedAt = :now',
+        ConditionExpression: '#status = :active',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':blocked': 'blocked', ':active': 'active', ':now': now },
+      }));
+      return true;
+    } catch (err) {
+      if (isConditionFailure(err)) return false;
+      throw err;
+    }
+  }
+
   // Starts the grace period. The PURGE item's TTL fires the hard delete.
+  // Blocked sites can be deleted too.
   async markDeleting(ownerId: string, siteId: string, purgeAt: string, now: string): Promise<void> {
     try {
       await this.#db.send(new TransactWriteCommand({
@@ -278,9 +299,9 @@ export class Store {
               TableName: this.#table,
               Key: siteKey(siteId),
               UpdateExpression: 'SET #status = :deleting, purgeAt = :purgeAt, updatedAt = :now',
-              ConditionExpression: 'ownerId = :owner AND #status = :active',
+              ConditionExpression: 'ownerId = :owner AND #status IN (:active, :blocked)',
               ExpressionAttributeNames: { '#status': 'status' },
-              ExpressionAttributeValues: { ':deleting': 'deleting', ':purgeAt': purgeAt, ':now': now, ':owner': ownerId, ':active': 'active' },
+              ExpressionAttributeValues: { ':deleting': 'deleting', ':purgeAt': purgeAt, ':now': now, ':owner': ownerId, ':active': 'active', ':blocked': 'blocked' },
             },
           },
           {

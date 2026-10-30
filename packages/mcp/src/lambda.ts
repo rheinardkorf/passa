@@ -21,6 +21,7 @@ async function build(): Promise<Handler> {
     files: new SiteFiles(new S3Client({}), env.buckets),
     edge: new KvsEdgeStore(new CloudFrontKeyValueStoreClient({}), env.edgeStore),
     config: env.config,
+    malwareScan: env.malwareScan,
     oidc: new OidcStore(db, env.tables.main),
     tokenKeys: [await loadTokenKey(new KMSClient({}), env.tokenKey)],
     issuer: `https://auth.${env.config.domain}`,

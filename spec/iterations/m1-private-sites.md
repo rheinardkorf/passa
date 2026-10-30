@@ -88,7 +88,7 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 ## Security and quality requirements
 
 - **Content security policy** on every site: inline scripts allowed, outbound requests and form posts blocked (`connect-src 'none'`, `form-action 'none'`), and scripts, styles and fonts only from a short CDN allowlist.
-- **Publish-time checks:** total and per-file size limits, dotfiles skipped, file types checked by content, credential and secret scanning, and malware scanning with GuardDuty Malware Protection for S3. A failed check refuses the publish.
+- **Publish-time checks:** total and per-file size limits, dotfiles skipped, file types checked by content, credential and secret scanning, and malware scanning with GuardDuty Malware Protection for S3. A failed check refuses the publish. Inline publishes are the exception for malware: they're scanned after they're written, and a finding blocks the site (see step 7).
 - **Cookies** are host-only, `HttpOnly`, `Secure` and `SameSite=Lax`.
 - **Errors** are generic: no stack traces, and nothing that reveals whether an email or site exists.
 - **Logs** never contain tokens. Emails in application logs are masked. The edge never logs personal data.
@@ -153,11 +153,24 @@ Details settled in step 6:
 - **Locally,** sign-in and the token endpoint are on plain `http://localhost:8080`, because MCP clients only allow plain HTTP for that exact name; MCP is on `mcp.localhost:8080`. `setup` creates the token key in Moto's KMS and the cookie keys in its Secrets Manager. Claude Code connects to the local MCP server for real.
 - **Browser tests** drive the installed Chrome through site sign-in and app consent (`playwright-core`, no browser download), since Origin headers, referrer policy, CSP and `__Host-` cookies only behave for real in a browser.
 
-The cookie signing key lives in KeyValueStore with a key ID so it can be rotated. CloudFront Functions can't read any secrets store, so this is the one secret held there, with write access limited to the roles that need it. Edge records hold no personal data.
+Details settled in step 7:
+
+- **Stacks,** per stage and named `passa-<stage>-<part>`, so a deployment can share its AWS accounts with other projects: `foundation` (hosted zones and the SES identity, deployed first because DNS and SES production access take time), `data` (tables, buckets, the token key, the auth secret and KeyValueStore), `global` in us-east-1 (certificates and WAF, which CloudFront only takes from there), `services` (`auth.`, `mcp.` and the background functions) and `sites` (the edge distribution). Production keeps its data if a stack is deleted, and its stacks have termination protection. A stage can override `domain`, `siteDomain` and `email` in config; dev usually runs on subdomains delegated from production's zones.
+- **`auth.`** is CloudFront with WAF in front of a function URL. CloudFront adds a secret origin header, and the function answers nothing without it. A viewer-request function copies the viewer's host into `x-passa-host`, overwriting anything sent; the IP comes from `CloudFront-Viewer-Address`. WAF blocks known bad IPs and inputs, and rate-limits each IP, with a lower limit on sign-in and client registration.
+- **`mcp.`** is an API Gateway HTTP API with throttling, on its custom domain only (the `execute-api` address is off). The IP comes from API Gateway's request context.
+- **Keys:** one Secrets Manager secret holds `oidc-provider`'s cookie keys, the site keys (`[{ kid, secret }]`, the first signs) and the origin header's value. On deploy, a custom resource completes the secret, generating only what's missing so existing keys survive, and copies the site keys to KeyValueStore for the edge. CloudFront Functions can't read any secrets store, so the site keys are the one secret held there; only that custom resource can put keys.
+- **The edge on CloudFront** runs the same `handler.js`, built with the KeyValueStore's ID. CloudFront's runtime rejects some syntax Node accepts (such as `await` inside call arguments), so lint bans it and each deploy is checked with CloudFront's test tool. A site's record reaches edge locations a few seconds after a publish, so a valid handoff for a site with no record yet shows a page that reloads every two seconds instead of failing; an invalid one is still a 404. Storage misses get the edge's plain 404, not S3's error XML.
+- **Purge:** the table stream, filtered to TTL removals of `PURGE` items, triggers the hard delete. A site that's no longer being deleted is left alone.
+- **Malware:** GuardDuty Malware Protection scans every new object in both buckets and tags it with the result. Publishing from an upload checks each file's tag before the upload is claimed: a threat or an unscannable file refuses the publish, and a file still being scanned asks the agent to retry. Inline publishes are written straight to the sites bucket, so a finding there sets the site to `blocked`: it's taken off the edge, can't be updated or rolled back, and can only be deleted. Every finding is recorded and alarmed.
+- **Email** goes through an SES configuration set that reports bounces and complaints. A permanent bounce or a complaint disables the user, except admins, so one complaint can't lock a deployment's owners out; SES's suppression list stops the mail either way. `auth.` may send through any identity, since SES's sandbox checks the recipient's too, but only from the configured sender.
+- **Alarms** on SES's bounce and complaint rates, malware findings and function errors are emailed to the admins.
+- **Admins** from config get their user records when `auth.` starts (R30).
+- **Also:** the authorization server allows the code flow only, and refused form posts and consents are recorded with their reason, never a token (R31).
+- **On Lambda,** the Express-to-Lambda adapter hands over request bodies already read, so the MCP endpoint parses those itself, under the same size limit.
 
 ### Data model (M1 entities)
 
-Table `passa`, single-table design, on-demand billing, point-in-time recovery, TTL on `ttl`.
+Table `passa-<stage>`, single-table design, on-demand billing, point-in-time recovery, TTL on `ttl`, and a stream of removed items for purges.
 
 | Entity | PK | SK | GSI1 (PK / SK) |
 | --- | --- | --- | --- |
@@ -171,7 +184,7 @@ Table `passa`, single-table design, on-demand billing, point-in-time recovery, T
 | Pending purge | `PURGE#<siteId>` | `META` | — (its TTL, at the end of the grace period, triggers the hard delete) |
 | OAuth records | `OIDC#<model>#<id>` | `META` | Tokens and codes: `OIDCGRANT#<grantId>` / `OIDC#<model>#<id>` (revoking a grant finds all its tokens). Sessions: `OIDCUID#<uid>` / `Session`. Grants: `OIDCACCOUNT#<userId>` / `OIDC#Grant#<id>` (the connected-apps page) |
 
-Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. Events go to a separate append-only `passa-events` table, keyed by day (`DAY#<date>`) and timestamp.
+Site IDs are fully random. Version IDs are ULIDs, only ever shown to the owner. A site's status is `active`, `deleting` or `blocked`. Events go to a separate append-only `passa-<stage>-events` table, keyed by day (`DAY#<date>`) and timestamp.
 
 Site files live in a sites bucket under `<site-id>/<version-id>/<path>`. Uploads are staged in a separate uploads bucket that expires objects on its own; `finish_upload` checks every declared file arrived at its declared size, and the files are checked again and copied into the sites bucket when `publish` or `update` uses the upload. Every version is a complete folder: an update copies unchanged files from the current version within S3, so agents only send what changed, and rollback stays a pointer change.
 
@@ -215,6 +228,8 @@ All config, so they can change without code changes:
 | `auth.` session | 7 days idle, 30 days maximum |
 | Magic link | 15 minutes |
 | Sign-in requests | 5 per email and 30 per IP, per hour |
+| WAF on `auth.` | 600 requests per IP per 5 minutes; 30 to sign-in and client registration |
+| `mcp.` throttling | 20 requests per second, bursts of 40 |
 | Inline publish size | 1 MB total |
 | Site size | 100 MB total, 25 MB per file |
 | Delete grace period | 7 days |
