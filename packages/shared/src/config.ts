@@ -66,8 +66,17 @@ export type Config = z.infer<typeof configSchema>;
 export const siteDomain = (config: Pick<Config, 'domain' | 'siteDomain'>): string => config.siteDomain ?? config.domain;
 
 // The email sender's address and domain, from "Name <user@domain>" or "user@domain".
-export const senderAddress = (from: string): string => /<([^>]+)>\s*$/.exec(from)?.[1] ?? from.trim();
-export const senderDomain = (from: string): string => /@([^>\s]+)>?$/.exec(from)?.[1] ?? from;
+// Plain string operations, so no input can make them slow.
+export function senderAddress(from: string): string {
+  const open = from.lastIndexOf('<');
+  const close = from.lastIndexOf('>');
+  return (open >= 0 && close > open ? from.slice(open + 1, close) : from).trim();
+}
+
+export function senderDomain(from: string): string {
+  const address = senderAddress(from);
+  return address.slice(address.lastIndexOf('@') + 1);
+}
 
 // The config one stage deploys with: its overrides applied, the rest as is.
 export function stageConfig(config: Config, stage: Stage): Config {
