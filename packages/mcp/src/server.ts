@@ -10,10 +10,14 @@ import { type Caller, type Content, type Deps, Publisher, ToolError } from './pu
 
 export type Log = (msg: string, data?: Record<string, unknown>) => void;
 
+const MAX_PAGE = 100;
+
 const path = z.string().min(1).max(MAX_PATH_LENGTH);
 const siteId = z.string().max(64).describe('The site ID returned by publish');
 const versionId = z.string().max(64);
 const uploadId = z.string().max(64).describe('From begin_upload, after finish_upload');
+const limit = (what: string, fallback: number) => z.number().int().min(1).max(MAX_PAGE).default(fallback).describe(`How many ${what} to return, up to ${MAX_PAGE}`);
+const cursor = z.string().max(64).optional().describe('next_cursor from the previous call, to get the next page');
 
 const inlineFile = z.strictObject({
   path,
@@ -50,13 +54,22 @@ const schemas = {
     .refine((v) => !(v.files && v.upload_id), exactlyOneMessage)
     .refine((v) => v.files || v.upload_id || v.remove || v.edits, { message: 'Give files, upload_id, remove or edits' })
     .refine((v) => !v.replace_all || ((v.files || v.upload_id) && !v.remove && !v.edits), { message: 'replace_all needs files or upload_id, and no remove or edits' }),
-  get_site: z.strictObject({ site_id: siteId, version_id: versionId.optional().describe('Defaults to the current version') }),
+  get_site: z.strictObject({
+    site_id: siteId,
+    version_id: versionId.optional().describe('Whose files to list. Defaults to the current version'),
+    limit: limit('versions', 20),
+    cursor,
+  }),
   get_files: z.strictObject({
     site_id: siteId,
     paths: z.array(path).min(1).max(100).describe('Paths of the files to get, as listed by get_site'),
     version_id: versionId.optional().describe('Defaults to the current version'),
   }),
-  find_sites: z.strictObject({ query: z.string().max(200).optional().describe('Matched against titles; omit to list every site') }),
+  find_sites: z.strictObject({
+    query: z.string().max(200).optional().describe('Matched against titles; omit to list every site'),
+    limit: limit('sites', 50),
+    cursor,
+  }),
   rollback: z.strictObject({ site_id: siteId, version_id: versionId.describe('A version listed by get_site') }),
   delete: z.strictObject({
     site_id: siteId,
@@ -90,7 +103,8 @@ function descriptions({ limits, lifetimes, deleteGraceDays }: Config) {
   return {
     publish: `Publish files as a new private site. Returns its URL, which only you can open after signing in. Send files inline up to ${inline} in total; for larger sites, or files you can read from disk (such as images), use begin_upload instead. ${sizes}`,
     update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. Pass base_version to be refused if the site changed since you read it. Earlier versions are kept for rollback. ${sizes}`,
-    get_site: 'Get a site\'s details, its versions, and the files of one version with their sizes and SHA-256 hashes, but not their contents. Use get_files to read files.',
+    get_site: 'Get a site\'s details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions.',
+    find_sites: 'List your sites newest first, optionally matching a title. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
     delete: `Delete a site. It stops being served at once, and is removed permanently after ${deleteGraceDays} days, or immediately with now=true.`,
     begin_upload: `Start an upload, for sites over ${inline} or files you can read from disk. Returns a URL per file, valid for ${minutes}: PUT each file's bytes to its URL (for example, curl -T path/to/file '<url>'), then call finish_upload. File contents never pass through the conversation. ${sizes}`,
@@ -170,15 +184,24 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
   });
 
   tool('get_site', describe.get_site, { readOnlyHint: true }, schemas.get_site, async (i) => ({
-    result: await publisher.getSite(caller, { siteId: i.site_id, ...(i.version_id ? { versionId: i.version_id } : {}) }),
+    result: await publisher.getSite(caller, {
+      siteId: i.site_id,
+      limit: i.limit,
+      ...(i.version_id ? { versionId: i.version_id } : {}),
+      ...(i.cursor ? { cursor: i.cursor } : {}),
+    }),
   }));
 
   tool('get_files', describe.get_files, { readOnlyHint: true }, schemas.get_files, async (i) => ({
     result: await publisher.getFiles(caller, { siteId: i.site_id, paths: i.paths, ...(i.version_id ? { versionId: i.version_id } : {}) }),
   }));
 
-  tool('find_sites', 'List your sites, optionally matching a title.', { readOnlyHint: true }, schemas.find_sites, async (i) => ({
-    result: await publisher.findSites(caller, i.query ? { query: i.query } : {}),
+  tool('find_sites', describe.find_sites, { readOnlyHint: true }, schemas.find_sites, async (i) => ({
+    result: await publisher.findSites(caller, {
+      limit: i.limit,
+      ...(i.query ? { query: i.query } : {}),
+      ...(i.cursor ? { cursor: i.cursor } : {}),
+    }),
   }));
 
   tool('rollback', 'Make an earlier version of a site current again. Takes effect immediately.', { idempotentHint: true }, schemas.rollback, async (i) => {

@@ -145,6 +145,45 @@ describe('reading a site (R4)', () => {
   });
 });
 
+describe('paging', () => {
+  it('pages through a site\'s versions, newest first', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Many versions', files: page('v1') })).json();
+    const ids = [site.current_version];
+    for (const n of [2, 3, 4, 5]) ids.unshift((await call('update', { site_id: site.site_id, files: page(`v${n}`) })).json().current_version);
+
+    const first = (await call('get_site', { site_id: site.site_id, limit: 2 })).json();
+    expect((first.versions as { version_id: string }[]).map((v) => v.version_id)).toEqual(ids.slice(0, 2));
+    expect(first.next_cursor).toBe(ids[1]);
+    const second = (await call('get_site', { site_id: site.site_id, limit: 2, cursor: first.next_cursor })).json();
+    expect((second.versions as { version_id: string }[]).map((v) => v.version_id)).toEqual(ids.slice(2, 4));
+    const last = (await call('get_site', { site_id: site.site_id, limit: 2, cursor: second.next_cursor })).json();
+    expect((last.versions as { version_id: string }[]).map((v) => v.version_id)).toEqual(ids.slice(4));
+    expect(last.next_cursor).toBeUndefined();
+
+    // The files listed are still the current version's, whichever page.
+    expect(last.version).toBe(ids[0]);
+    expect((await call('get_site', { site_id: site.site_id, limit: 5 })).json().next_cursor).toBeUndefined();
+    expect((await call('get_site', { site_id: site.site_id, cursor: 'nope' })).text).toMatch(/^That cursor doesn't match/);
+    expect((await call('get_site', { site_id: site.site_id, limit: 101 })).isError).toBe(true);
+  });
+
+  it('pages through the caller\'s sites, newest first, after filtering by title', async () => {
+    await addUser(env, { id: 'erin' });
+    const call = await as('erin');
+    const titles = ['Report 1', 'Other', 'Report 2', 'Report 3'];
+    for (const title of titles) await call('publish', { title, files: page(title) });
+
+    const first = (await call('find_sites', { query: 'report', limit: 2 })).json();
+    expect((first.sites as { title: string }[]).map((s) => s.title)).toEqual(['Report 3', 'Report 2']);
+    const second = (await call('find_sites', { query: 'report', limit: 2, cursor: first.next_cursor })).json();
+    expect((second.sites as { title: string }[]).map((s) => s.title)).toEqual(['Report 1']);
+    expect(second.next_cursor).toBeUndefined();
+    expect(((await call('find_sites', {})).json().sites as unknown[])).toHaveLength(4);
+    expect((await call('find_sites', { cursor: 'nope' })).text).toMatch(/^That cursor doesn't match/);
+  });
+});
+
 describe('updating part of a site (R3)', () => {
   const files = contents;
 

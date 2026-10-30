@@ -44,6 +44,7 @@ export type Deps = {
 export class ToolError extends Error {}
 
 const NOT_FOUND = 'No site with that ID.';
+const BAD_CURSOR = 'That cursor doesn\'t match this list. Call again without it to start from the beginning.';
 const PARALLEL = 16;
 
 export type SiteSummary = {
@@ -312,15 +313,20 @@ export class Publisher {
     return files;
   }
 
-  // Details, versions and every file's details and hash, but no contents.
-  async getSite(caller: Caller, input: { siteId: string; versionId?: string }) {
+  // Details, one page of versions, and every file's details and hash in one
+  // version, but no contents.
+  async getSite(caller: Caller, input: { siteId: string; versionId?: string; limit: number; cursor?: string }) {
     const site = await this.#ownSite(caller, input.siteId);
-    const versions = await this.#d.store.listVersions(site.id);
-    const version = this.#pickVersion(site, versions, input.versionId);
+    if (input.cursor && !isVersionId(input.cursor)) throw new ToolError(BAD_CURSOR);
+    const [version, page] = await Promise.all([
+      this.#version(site, input.versionId),
+      this.#d.store.listVersionsPage(site.id, { limit: input.limit, ...(input.cursor ? { after: input.cursor } : {}) }),
+    ]);
     return {
       ...this.#summary(site),
       version: version.id,
-      versions: versions.map((v) => ({ version_id: v.id, created_at: v.createdAt, files: v.files.length, size: v.size, current: v.id === site.current })),
+      versions: page.versions.map((v) => ({ version_id: v.id, created_at: v.createdAt, files: v.files.length, size: v.size, current: v.id === site.current })),
+      ...(page.next ? { next_cursor: page.next } : {}),
       files: version.files.map((f) => this.#fileDetails(f)),
     };
   }
@@ -330,7 +336,7 @@ export class Publisher {
   // short-lived download link.
   async getFiles(caller: Caller, input: { siteId: string; versionId?: string; paths: string[] }) {
     const site = await this.#ownSite(caller, input.siteId);
-    const version = this.#pickVersion(site, await this.#d.store.listVersions(site.id), input.versionId);
+    const version = await this.#version(site, input.versionId);
     const { config } = this.#d;
     const wanted = new Set(input.paths);
     const missing = [...wanted].filter((p) => !version.files.some((f) => f.path === p));
@@ -353,8 +359,8 @@ export class Publisher {
     };
   }
 
-  #pickVersion(site: Site, versions: Version[], versionId = site.current): Version {
-    const version = versions.find((v) => v.id === versionId);
+  async #version(site: Site, versionId = site.current): Promise<Version> {
+    const version = isVersionId(versionId) ? await this.#d.store.getVersion(site.id, versionId) : undefined;
     if (!version) throw new ToolError('No version with that ID.');
     return version;
   }
@@ -363,10 +369,16 @@ export class Publisher {
     return { path: f.path, size: f.size, content_type: f.contentType, sha256: f.sha256 };
   }
 
-  async findSites(caller: Caller, input: { query?: string }) {
+  // Newest first, one page at a time. The cursor is the last site of the
+  // previous page.
+  async findSites(caller: Caller, input: { query?: string; limit: number; cursor?: string }) {
     const query = input.query?.trim().toLowerCase();
-    const sites = await this.#d.store.listSitesByOwner(caller.userId);
-    return { sites: sites.filter((s) => !query || s.title.toLowerCase().includes(query)).map((s) => this.#summary(s)) };
+    const sites = (await this.#d.store.listSitesByOwner(caller.userId)).filter((s) => !query || s.title.toLowerCase().includes(query));
+    const start = input.cursor ? sites.findIndex((s) => s.id === input.cursor) + 1 : 0;
+    if (input.cursor && start === 0) throw new ToolError(BAD_CURSOR);
+    const page = sites.slice(start, start + input.limit);
+    const more = start + input.limit < sites.length;
+    return { sites: page.map((s) => this.#summary(s)), ...(more ? { next_cursor: page[page.length - 1]?.id } : {}) };
   }
 
   async rollback(caller: Caller, input: { siteId: string; versionId: string }) {
