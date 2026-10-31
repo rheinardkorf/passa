@@ -11,7 +11,7 @@
 
 A publisher can make a site, or parts of it, public: anyone with the link can open those paths without signing in. Access is set with path rules, where the longest matching prefix decides. Everything not covered by a public rule stays private, as in M1. Optionally, a site can also have a name, such as `cv.<siteDomain>`, which becomes its address. Site IDs change to a readable format, such as `brave-otter-k3x9qm`, that no name can match.
 
-No email is involved, so M2 doesn't depend on SES production access. Sharing with named people comes in M3, which does.
+No email is involved, so M2 doesn't depend on SES production access. Sharing with named people comes in M4.
 
 ## Demo
 
@@ -31,9 +31,9 @@ Make a site public and open it in a private window without signing in. Make one 
 
 **Out:**
 
-- `shared`, `members` and paid tiers, grants and `list_access` (M3 and later).
+- `shared`, `members` and paid tiers, grants and `list_access` (M4 and later).
 - Letting search engines index a site (later; decision 2).
-- An admin takedown tool for other publishers' sites (with the admin CLI, M3).
+- An admin takedown tool for other publishers' sites (with the admin CLI, M4).
 - Custom domains per site (later).
 
 ## Requirements
