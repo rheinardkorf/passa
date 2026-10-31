@@ -2,6 +2,11 @@
 // <site-id>/<version-id>/<path>, so it can be cached forever and switching the
 // current version never needs an invalidation. Uploads go to a separate bucket
 // that expires objects on its own.
+//
+// GuardDuty scans only the uploads bucket. New content for a version is
+// written there first, under inline/<site-id>/<version-id>/<path>, then copied
+// to the sites bucket, so every new file is scanned once and the copies of
+// unchanged files an update makes are never scanned again.
 import {
   CopyObjectCommand,
   DeleteObjectsCommand,
@@ -23,6 +28,10 @@ export const SCAN_STATUS_TAG = 'GuardDutyMalwareScanStatus';
 export const NO_THREATS = 'NO_THREATS_FOUND';
 export const THREATS = 'THREATS_FOUND';
 
+// Where new version files are staged for scanning, in the uploads bucket.
+// Upload IDs can't contain "/", so this never collides with an upload.
+export const STAGED_PREFIX = 'inline/';
+
 function bytes(body: { transformToByteArray(): Promise<Uint8Array> } | undefined): Promise<Uint8Array> {
   if (!body) throw new Error('S3 returned no body');
   return body.transformToByteArray();
@@ -37,13 +46,23 @@ export class SiteFiles {
     this.#buckets = buckets;
   }
 
+  // Stages the file for scanning, then copies it into place. The staged copy
+  // stays until the uploads bucket expires it, so the scan can finish.
   async putVersionFile(siteId: string, versionId: string, path: string, body: Uint8Array, contentType: string): Promise<void> {
+    const staged = `${STAGED_PREFIX}${siteId}/${versionId}/${path}`;
     await this.#s3.send(new PutObjectCommand({
-      Bucket: this.#buckets.sites,
-      Key: `${siteId}/${versionId}/${path}`,
+      Bucket: this.#buckets.uploads,
+      Key: staged,
       Body: body,
       ContentType: contentType,
       CacheControl: IMMUTABLE,
+    }));
+    // The scan result tag isn't carried over: the sites bucket isn't scanned.
+    await this.#s3.send(new CopyObjectCommand({
+      Bucket: this.#buckets.sites,
+      Key: `${siteId}/${versionId}/${path}`,
+      CopySource: encodeURI(`${this.#buckets.uploads}/${staged}`),
+      TaggingDirective: 'REPLACE',
     }));
   }
 

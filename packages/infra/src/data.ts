@@ -80,9 +80,11 @@ export class DataStack extends Stack {
     // Uploads are only staged here until publish copies them; S3 expires the rest.
     this.uploads = new Bucket(this, 'Uploads', { ...bucket, lifecycleRules: [{ expiration: Duration.days(1), abortIncompleteMultipartUploadAfter: Duration.days(1) }] });
 
-    // GuardDuty Malware Protection scans every new object in both buckets and
-    // tags it with the result. Publish checks the tag on uploads; a finding in
-    // the sites bucket blocks the site (see the services stack).
+    // GuardDuty Malware Protection scans every new object in the uploads bucket
+    // and tags it with the result. New version files are staged there too
+    // (shared/storage.ts), so the sites bucket only receives scanned files and
+    // the copies of unchanged files an update makes. Publish checks the tag on
+    // uploads; a finding in a staged file blocks the site (see the services stack).
     const scanRole = new Role(this, 'MalwareScanRole', { assumedBy: new ServicePrincipal('malware-protection-plan.guardduty.amazonaws.com') });
     const managedRule = this.formatArn({ service: 'events', resource: 'rule', resourceName: 'DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*' });
     scanRole.addToPolicy(new PolicyStatement({
@@ -91,20 +93,18 @@ export class DataStack extends Stack {
       conditions: { StringLike: { 'events:ManagedBy': 'malware-protection-plan.guardduty.amazonaws.com' } },
     }));
     scanRole.addToPolicy(new PolicyStatement({ actions: ['events:DescribeRule', 'events:ListTargetsByRule'], resources: [managedRule] }));
-    [this.sites, this.uploads].forEach((scanned, i) => {
-      scanRole.addToPolicy(new PolicyStatement({ actions: ['s3:PutBucketNotification', 's3:GetBucketNotification', 's3:ListBucket'], resources: [scanned.bucketArn] }));
-      scanRole.addToPolicy(new PolicyStatement({
-        actions: ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectTagging', 's3:GetObjectVersionTagging', 's3:PutObjectTagging', 's3:PutObjectVersionTagging'],
-        resources: [scanned.arnForObjects('*')],
-      }));
-      scanRole.addToPolicy(new PolicyStatement({ actions: ['s3:PutObject'], resources: [scanned.arnForObjects('malware-protection-resource-validation-object')] }));
-      const plan = new CfnMalwareProtectionPlan(this, i === 0 ? 'SitesScan' : 'UploadsScan', {
-        role: scanRole.roleArn,
-        protectedResource: { s3Bucket: { bucketName: scanned.bucketName } },
-        actions: { tagging: { status: 'ENABLED' } },
-      });
-      plan.node.addDependency(scanRole);
+    scanRole.addToPolicy(new PolicyStatement({ actions: ['s3:PutBucketNotification', 's3:GetBucketNotification', 's3:ListBucket'], resources: [this.uploads.bucketArn] }));
+    scanRole.addToPolicy(new PolicyStatement({
+      actions: ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectTagging', 's3:GetObjectVersionTagging', 's3:PutObjectTagging', 's3:PutObjectVersionTagging'],
+      resources: [this.uploads.arnForObjects('*')],
+    }));
+    scanRole.addToPolicy(new PolicyStatement({ actions: ['s3:PutObject'], resources: [this.uploads.arnForObjects('malware-protection-resource-validation-object')] }));
+    const plan = new CfnMalwareProtectionPlan(this, 'UploadsScan', {
+      role: scanRole.roleArn,
+      protectedResource: { s3Bucket: { bucketName: this.uploads.bucketName } },
+      actions: { tagging: { status: 'ENABLED' } },
     });
+    plan.node.addDependency(scanRole);
 
     // Access tokens are signed in KMS; the private key never leaves it.
     this.tokenKey = new Key(this, 'TokenKey', { keySpec: KeySpec.ECC_NIST_P256, keyUsage: KeyUsage.SIGN_VERIFY, description: `${prefix} access tokens`, removalPolicy });

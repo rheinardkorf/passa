@@ -1,11 +1,12 @@
 // GuardDuty Malware Protection scan results with threats, from EventBridge.
-// Uploads are checked again when publish uses them, so a finding there is only
-// recorded. Inline publishes write straight to the sites bucket, so a finding
-// there blocks the site: it stops being served and can only be deleted.
+// GuardDuty scans the uploads bucket only. Uploads are checked again when
+// publish uses them, so a finding there is only recorded. New version files
+// are staged there under inline/ and copied into place straight away, so a
+// finding in one blocks the site: it stops being served and can only be deleted.
 import { CloudFrontKeyValueStoreClient } from '@aws-sdk/client-cloudfront-keyvaluestore';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { type Buckets, type EdgeRecords, Events, isSiteId, KvsEdgeStore, runtimeEnv, Store, THREATS } from '@passa/shared';
+import { type Buckets, type EdgeRecords, Events, isSiteId, KvsEdgeStore, runtimeEnv, STAGED_PREFIX, Store, THREATS } from '@passa/shared';
 import type { EventBridgeEvent } from 'aws-lambda';
 
 export type ScanResult = {
@@ -18,14 +19,14 @@ export type ScanDeps = { store: Store; events: Events; edge: EdgeRecords; bucket
 export async function handleScanResult(deps: ScanDeps, result: ScanResult): Promise<void> {
   const bucket = result.s3ObjectDetails?.bucketName;
   const key = result.s3ObjectDetails?.objectKey ?? '';
-  if (result.scanResultDetails?.scanResultStatus !== THREATS) return;
-  if (bucket === deps.buckets.uploads) {
+  if (result.scanResultDetails?.scanResultStatus !== THREATS || bucket !== deps.buckets.uploads) return;
+  if (!key.startsWith(STAGED_PREFIX)) {
     await deps.events.record({ action: 'upload.malware', result: 'refused', detail: key.slice(0, 300) });
     return;
   }
-  if (bucket !== deps.buckets.sites) return;
-  // Site files are <site-id>/<version-id>/<path>.
-  const siteId = key.split('/')[0] ?? '';
+  // Staged files are inline/<site-id>/<version-id>/<path>.
+  const file = key.slice(STAGED_PREFIX.length);
+  const siteId = file.split('/')[0] ?? '';
   if (!isSiteId(siteId)) return;
   const site = await deps.store.getSite(siteId);
   const blocked = await deps.store.blockSite(siteId, (deps.now ?? (() => new Date()))().toISOString());
@@ -35,7 +36,7 @@ export async function handleScanResult(deps: ScanDeps, result: ScanResult): Prom
     result: 'ok',
     siteId,
     ...(site ? { userId: site.ownerId } : {}),
-    detail: `${blocked ? 'blocked' : `was ${site?.status ?? 'missing'}`}: malware in ${key.slice(0, 300)}`,
+    detail: `${blocked ? 'blocked' : `was ${site?.status ?? 'missing'}`}: malware in ${file.slice(0, 300)}`,
   });
 }
 
