@@ -22,6 +22,7 @@ export const testConfig: Config = {
   deleteGraceDays: 7,
   nameHoldDays: 7,
   reservedNames: ['blog'],
+  retention: { versionDays: 30, monthEndMonths: 24, timeZone: 'UTC', eventYears: 7 },
   cdnAllowlist: ['cdn.jsdelivr.net'],
 };
 
@@ -52,7 +53,7 @@ export async function testEnv(config: Config = testConfig): Promise<TestEnv> {
     config,
     store: new Store(db, tables.main),
     files: new SiteFiles(s3, buckets),
-    events: new Events(db, tables.events),
+    events: new Events(db, tables.events, config.retention.eventYears),
     edge: new TableEdgeStore(db, tables.edge),
   };
 }

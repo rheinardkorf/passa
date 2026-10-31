@@ -121,6 +121,10 @@ export class SiteFiles {
     return this.#deletePrefix(this.#buckets.uploads, `${uploadId}/`);
   }
 
+  deleteVersion(siteId: string, versionId: string): Promise<void> {
+    return this.#deletePrefix(this.#buckets.sites, `${siteId}/${versionId}/`);
+  }
+
   deleteSite(siteId: string): Promise<void> {
     return this.#deletePrefix(this.#buckets.sites, `${siteId}/`);
   }

@@ -48,7 +48,7 @@ export async function handler(event: EventBridgeEvent<string, ScanResult>): Prom
     const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
     deps = {
       store: new Store(db, env.tables.main),
-      events: new Events(db, env.tables.events),
+      events: new Events(db, env.tables.events, env.config.retention.eventYears),
       edge: new KvsEdgeStore(new CloudFrontKeyValueStoreClient({}), env.edgeStore),
       buckets: env.buckets,
     };

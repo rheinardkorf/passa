@@ -69,6 +69,17 @@ rateLimits:
 
 deleteGraceDays: 7
 
+# How long things are kept. Every site keeps all its versions for versionDays,
+# then the last version of each month for monthEndMonths (months counted in
+# timeZone, an IANA name such as Australia/Sydney); its current version is
+# always kept. Older versions are removed once a day. Events (publishing and
+# security events) are kept for eventYears.
+retention:
+  versionDays: 30
+  monthEndMonths: 24
+  timeZone: UTC
+  eventYears: 7
+
 # After a site is renamed, its old name redirects to the new one and only its
 # owner can claim it, for this many days.
 nameHoldDays: 7

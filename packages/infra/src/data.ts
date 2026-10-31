@@ -64,7 +64,8 @@ export class DataStack extends Stack {
       timeToLiveAttribute: 'ttl',
       dynamoStream: StreamViewType.OLD_IMAGE,
     });
-    this.events = new TableV2(this, 'Events', { ...table, ...tableProps(eventsTable(`${prefix}-events`)), tableName: `${prefix}-events` });
+    // Events expire after config.retention.eventYears (each carries its own TTL).
+    this.events = new TableV2(this, 'Events', { ...table, ...tableProps(eventsTable(`${prefix}-events`)), tableName: `${prefix}-events`, timeToLiveAttribute: 'ttl' });
 
     const bucket = { blockPublicAccess: BlockPublicAccess.BLOCK_ALL, encryption: BucketEncryption.S3_MANAGED, enforceSSL: true, objectOwnership: ObjectOwnership.BUCKET_OWNER_ENFORCED, removalPolicy, autoDeleteObjects: !props.keep };
     this.sites = new Bucket(this, 'Sites', bucket);

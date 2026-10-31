@@ -27,6 +27,14 @@ describe('config', () => {
     expect([senderAddress('no-reply@example.com'), senderDomain('no-reply@example.com')]).toEqual(['no-reply@example.com', 'example.com']);
   });
 
+  it('keeps versions for 30 days, month-ends for 24 months and events for 7 years unless set, in a real time zone', () => {
+    const rest: Record<string, unknown> = { ...example };
+    delete rest.retention;
+    expect(parseConfig(rest).retention).toEqual({ versionDays: 30, monthEndMonths: 24, timeZone: 'UTC', eventYears: 7 });
+    expect(parseConfig({ ...example, retention: { ...example.retention, timeZone: 'Australia/Sydney' } }).retention.timeZone).toBe('Australia/Sydney');
+    expect(() => parseConfig({ ...example, retention: { ...example.retention, timeZone: 'Mars/Olympus' } })).toThrow();
+  });
+
   it('refuses site domains that are not plain domain names', () => {
     for (const bad of ['Example-Sites.com', 'localhost', 'example.com/x', '*.example.com', 'example.com:443']) {
       expect(() => parseConfig({ ...example, siteDomain: bad }), bad).toThrow();
