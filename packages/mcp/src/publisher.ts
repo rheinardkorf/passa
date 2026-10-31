@@ -55,6 +55,9 @@ export class ToolError extends Error {}
 const NOT_FOUND = 'No site with that ID.';
 const BAD_CURSOR = 'That cursor doesn\'t match this list. Call again without it to start from the beginning.';
 const PARALLEL = 16;
+// Copies within S3 move no data through the function, so more run at once,
+// staying under the SDK's default of 50 sockets.
+const COPY_PARALLEL = 48;
 
 export type SiteSummary = {
   site_id: string;
@@ -93,8 +96,8 @@ function occurrences(text: string, find: string): number {
   return count;
 }
 
-async function inBatches<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
-  for (let i = 0; i < items.length; i += PARALLEL) await Promise.all(items.slice(i, i + PARALLEL).map(fn));
+async function inBatches<T>(items: T[], fn: (item: T) => Promise<void>, size = PARALLEL): Promise<void> {
+  for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(fn));
 }
 
 export class Publisher {
@@ -210,7 +213,7 @@ export class Publisher {
       createdBy: caller.userId,
     };
     await inBatches(checked, (f: CheckedFile) => this.#d.files.putVersionFile(siteId, version.id, f.path, f.content, f.contentType));
-    if (base) await inBatches(kept, (f) => this.#d.files.copyVersionFile(siteId, base.id, version.id, f.path));
+    if (base) await inBatches(kept, (f) => this.#d.files.copyVersionFile(siteId, base.id, version.id, f.path), COPY_PARALLEL);
     if (content && 'uploadId' in content) await this.#d.files.deleteUpload(content.uploadId);
     return { version, skipped, kept: kept.length };
   }

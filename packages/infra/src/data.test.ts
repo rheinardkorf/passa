@@ -36,9 +36,11 @@ describe('data stack', () => {
     template.hasResourceProperties('AWS::S3::Bucket', { LifecycleConfiguration: { Rules: [Match.objectLike({ ExpirationInDays: 1 })] } });
   });
 
-  it('scans both buckets for malware and tags each object with the result', () => {
+  it('scans the uploads bucket only, where new site files are staged, and tags each object with the result', () => {
     const template = synth('prod');
-    template.resourceCountIs('AWS::GuardDuty::MalwareProtectionPlan', 2);
+    template.resourceCountIs('AWS::GuardDuty::MalwareProtectionPlan', 1);
+    const [uploads] = Object.keys(template.findResources('AWS::S3::Bucket', { Properties: { LifecycleConfiguration: Match.anyValue() } }));
+    template.hasResourceProperties('AWS::GuardDuty::MalwareProtectionPlan', { ProtectedResource: { S3Bucket: { BucketName: { Ref: uploads } } } });
     template.allResourcesProperties('AWS::GuardDuty::MalwareProtectionPlan', { Actions: { Tagging: { Status: 'ENABLED' } } });
   });
 

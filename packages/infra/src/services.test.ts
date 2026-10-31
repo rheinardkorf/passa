@@ -78,7 +78,7 @@ describe('services stack', () => {
     }
   });
 
-  it('acts on malware findings in either bucket, alarms on them, and turns on the publish check', () => {
+  it('acts on malware findings in the uploads bucket, alarms on them, and turns on the publish check', () => {
     services.hasResourceProperties('AWS::Events::Rule', {
       EventPattern: Match.objectLike({
         source: ['aws.guardduty'],
