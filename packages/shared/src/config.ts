@@ -7,6 +7,14 @@ import { z } from 'zod';
 const seconds = z.number().int().positive();
 const bytes = z.number().int().positive();
 const domainName = z.string().regex(/^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/);
+const timeZone = z.string().refine((zone) => {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}, 'an IANA time zone, such as UTC or Australia/Sydney');
 const email = z.strictObject({ from: z.string().min(1) });
 
 export const STAGES = ['dev', 'prod'] as const;
@@ -60,6 +68,15 @@ export const configSchema = z.strictObject({
   nameHoldDays: z.number().int().nonnegative().default(7),
   // Names publishers can't use, besides the built-in ones (www, auth, ...).
   reservedNames: z.array(z.string().min(1)).default([]),
+  // How long things are kept. A site keeps every version for versionDays, then
+  // the last version of each month (in timeZone) for monthEndMonths; its
+  // current version is always kept. Events are kept for eventYears.
+  retention: z.strictObject({
+    versionDays: z.number().int().positive(),
+    monthEndMonths: z.number().int().nonnegative(),
+    timeZone,
+    eventYears: z.number().int().positive(),
+  }).default({ versionDays: 30, monthEndMonths: 24, timeZone: 'UTC', eventYears: 7 }),
   cdnAllowlist: z.array(z.string().min(1)),
 });
 

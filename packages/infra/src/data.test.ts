@@ -44,6 +44,10 @@ describe('data stack', () => {
     template.allResourcesProperties('AWS::GuardDuty::MalwareProtectionPlan', { Actions: { Tagging: { Status: 'ENABLED' } } });
   });
 
+  it('expires events with a TTL', () => {
+    synth('prod').hasResourceProperties('AWS::DynamoDB::GlobalTable', { TableName: 'passa-prod-events', TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true } });
+  });
+
   it('signs access tokens with a P-256 key in KMS', () => {
     synth('prod').hasResourceProperties('AWS::KMS::Key', { KeySpec: 'ECC_NIST_P256', KeyUsage: 'SIGN_VERIFY' });
   });

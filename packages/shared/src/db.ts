@@ -431,6 +431,31 @@ export class Store {
     }
   }
 
+  // Removes an old version's record (retention). Refused while it's the site's
+  // current version, so a rollback to it can't race the removal: whichever
+  // lands second fails.
+  async deleteVersion(siteId: string, versionId: string): Promise<void> {
+    try {
+      await this.#db.send(new TransactWriteCommand({
+        TransactItems: [
+          {
+            ConditionCheck: {
+              TableName: this.#table,
+              Key: siteKey(siteId),
+              ConditionExpression: 'attribute_exists(pk) AND #current <> :v',
+              ExpressionAttributeNames: { '#current': 'current' },
+              ExpressionAttributeValues: { ':v': versionId },
+            },
+          },
+          { Delete: { TableName: this.#table, Key: versionKey(siteId, versionId) } },
+        ],
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new NotFoundOrConflict();
+      throw err;
+    }
+  }
+
   // Stops an active site being served after a malware finding. Returns false
   // if the site doesn't exist or isn't active (already blocked or deleting).
   async blockSite(siteId: string, now: string): Promise<boolean> {

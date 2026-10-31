@@ -49,7 +49,7 @@ function wiring() {
   const secrets = new SecretsManagerClient(aws);
   const store = new Store(db, tables.main);
   const edge = new TableEdgeStore(db, tables.edge);
-  const events = new Events(db, tables.events);
+  const events = new Events(db, tables.events, config.retention.eventYears);
   const origin = (siteId: string) => `http://${siteId}.localhost:${PORT}`;
   const deps = { store, edge, config, events, files: new SiteFiles(s3, buckets), siteUrl: (id: string) => `${origin(id)}/` };
   return { config, client, db, s3, ses, kms, secrets, store, edge, events, deps, origin };

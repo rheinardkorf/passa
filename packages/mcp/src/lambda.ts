@@ -17,7 +17,7 @@ async function build(): Promise<Handler> {
   const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
   const app = createMcpApp({
     store: new Store(db, env.tables.main),
-    events: new Events(db, env.tables.events),
+    events: new Events(db, env.tables.events, env.config.retention.eventYears),
     files: new SiteFiles(new S3Client({}), env.buckets),
     edge: new KvsEdgeStore(new CloudFrontKeyValueStoreClient({}), env.edgeStore),
     config: env.config,

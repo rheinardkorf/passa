@@ -46,7 +46,7 @@ export async function handler(event: SNSEvent): Promise<void> {
   if (!deps) {
     const env = runtimeEnv();
     const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
-    deps = { store: new Store(db, env.tables.main), events: new Events(db, env.tables.events) };
+    deps = { store: new Store(db, env.tables.main), events: new Events(db, env.tables.events, env.config.retention.eventYears) };
   }
   for (const record of event.Records) await handleSesEvent(deps, JSON.parse(record.Sns.Message) as SesEvent);
 }

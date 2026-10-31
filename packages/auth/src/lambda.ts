@@ -40,7 +40,7 @@ async function build(): Promise<Handler> {
 
   const app = createAuthApp({
     store,
-    events: new Events(db, env.tables.events),
+    events: new Events(db, env.tables.events, env.config.retention.eventYears),
     config: env.config,
     mailer: new SesMailer(new SESv2Client({}), env.config.email.from, env.configurationSet),
     siteKey: async () => siteKey,

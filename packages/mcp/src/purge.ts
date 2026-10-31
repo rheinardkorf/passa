@@ -42,7 +42,7 @@ export async function handler(event: DynamoDBStreamEvent): Promise<void> {
     const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
     deps = {
       store: new Store(db, env.tables.main),
-      events: new Events(db, env.tables.events),
+      events: new Events(db, env.tables.events, env.config.retention.eventYears),
       files: new SiteFiles(new S3Client({}), env.buckets),
       edge: new KvsEdgeStore(new CloudFrontKeyValueStoreClient({}), env.edgeStore),
       config: env.config,

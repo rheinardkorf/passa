@@ -204,6 +204,7 @@ Site files live in a sites bucket under `<site-id>/<version-id>/<path>`. Uploads
 ## Data
 
 - **Personal data:** email addresses (users, sign-in tokens, events) and IP addresses (events).
+- **Retention** (added 2026-10-31, in config): a site keeps every version for 30 days, then the last version of each month for 24 months, and always its current version. A daily job removes the rest, record first and then files, and refuses to remove a version that's current, so it can't race a rollback. Months are counted in a configured time zone. Events expire after 7 years through a DynamoDB TTL.
 - **Region:** every service that stores or processes data runs in the deployment's main region, set in config. Only edge infrastructure that stores no data is global.
 - **Third parties:** none in M1 beyond AWS. MCP clients such as claude.ai connect from their providers' servers; the data they send is the site content the publisher chose to publish.
 
@@ -233,6 +234,8 @@ All config, so they can change without code changes:
 | Inline publish size | 1 MB total |
 | Site size | 100 MB total, 25 MB per file |
 | Delete grace period | 7 days |
+| Version retention | Every version 30 days, month-end versions 24 months, current always |
+| Event retention | 7 years |
 | CDN allowlist | `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`, `unpkg.com`, `fonts.googleapis.com`, `fonts.gstatic.com` |
 
 ## Delivery

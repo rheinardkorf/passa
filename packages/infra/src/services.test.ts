@@ -99,4 +99,16 @@ describe('services stack', () => {
       dynamodb: { OldImage: { pk: { S: [{ prefix }] } } },
     })));
   });
+
+  it('removes old versions once a day, with no access to the edge or to write files', () => {
+    const [id] = Object.keys(services.findResources('AWS::Lambda::Function', { Properties: { Description: 'Passa prod version retention' } }));
+    services.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'cron(0 17 * * ? *)',
+      Targets: [Match.objectLike({ Arn: { 'Fn::GetAtt': [id, 'Arn'] } })],
+    });
+    const policy = JSON.stringify(Object.entries(services.findResources('AWS::IAM::Policy')).find(([key]) => key.startsWith('RetentionFunction')));
+    expect(policy).toContain('s3:DeleteObject');
+    expect(policy).not.toContain('s3:PutObject');
+    expect(policy).not.toContain('cloudfront-keyvaluestore');
+  });
 });

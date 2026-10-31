@@ -23,7 +23,7 @@ import { FunctionUrlOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
-import { Rule } from 'aws-cdk-lib/aws-events';
+import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { FilterCriteria, FilterRule, FunctionUrlAuthType, StartingPosition } from 'aws-cdk-lib/aws-lambda';
@@ -194,6 +194,25 @@ export class ServicesStack extends Stack {
         dynamodb: { OldImage: { pk: { S: FilterRule.beginsWith('NAME#') } } },
       })],
     }));
+
+    // Old versions, removed once a day (config.retention), at a quiet hour for
+    // the Asia-Pacific region the deployment usually serves.
+    const retention = nodeFunction(this, 'RetentionFunction', {
+      entry: 'packages/mcp/src/retention.ts',
+      environment,
+      description: `Passa ${props.stage} version retention`,
+      timeout: Duration.minutes(15),
+      removalPolicy: data.removalPolicy,
+    });
+    data.table.grantReadWriteData(retention);
+    data.events.grantWriteData(retention);
+    data.sites.grantRead(retention);
+    data.sites.grantDelete(retention);
+    new Rule(this, 'RetentionSchedule', {
+      description: 'Removes old site versions',
+      schedule: Schedule.cron({ minute: '0', hour: '17' }),
+      targets: [new LambdaFunction(retention, { retryAttempts: 2 })],
+    });
 
     // Bounces and complaints: SES → SNS → a function that stops emailing the address.
     const mailEvents = new Topic(this, 'MailEvents', { enforceSSL: true });
