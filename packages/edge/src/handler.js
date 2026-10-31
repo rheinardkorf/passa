@@ -24,6 +24,7 @@ function respond(status, description, headers, extra) {
   headers['cache-control'] = 'no-store';
   headers['referrer-policy'] = 'no-referrer';
   headers['x-content-type-options'] = 'nosniff';
+  headers['x-robots-tag'] = 'noindex';
   Object.keys(headers).forEach((name) => { response.headers[name] = { value: headers[name] }; });
   if (extra && extra.cookies) response.cookies = extra.cookies;
   if (extra && extra.body) response.body = { encoding: 'text', data: extra.body };

@@ -16,10 +16,10 @@ export default tseslint.config(
     // The edge handler runs in CloudFront's JavaScript runtime 2.0: ES5.1 plus
     // a few later features. The parser accepts newer syntax regardless of
     // ecmaVersion, so the syntax that runtime lacks is banned explicitly.
-    files: ['packages/edge/src/handler.js'],
+    files: ['packages/edge/src/handler.js', 'packages/edge/src/response.js'],
     languageOptions: { ecmaVersion: 2017, sourceType: 'script', globals: {} },
     rules: {
-      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^handle$', caughtErrors: 'none' }],
+      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^(handle|robots)$', caughtErrors: 'none' }],
       'no-restricted-syntax': [
         'error',
         { selector: 'ClassDeclaration, ClassExpression', message: 'Classes are not supported at the edge.' },

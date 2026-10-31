@@ -1,7 +1,7 @@
 // Sites: <site-id>.<siteDomain> served from the sites bucket by CloudFront,
 // with the edge handler as a viewer-request CloudFront Function that reads
 // KeyValueStore, and the same response headers the local proxy sets.
-import { functionCode } from '@passa/edge/build';
+import { functionCode, responseFunctionCode } from '@passa/edge/build';
 import { type Config, siteDomain, siteHeaders } from '@passa/shared';
 import { Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
@@ -86,6 +86,13 @@ export class SitesStack extends Stack {
       keyValueStore: data.edgeStore,
     });
 
+    // Decides x-robots-tag by host (M2 R42): the headers policy is the same for every site.
+    const robots = new CloudFrontFunction(this, 'Robots', {
+      comment: `Passa ${props.stage} sites indexing`,
+      runtime: FunctionRuntime.JS_2_0,
+      code: FunctionCode.fromInline(responseFunctionCode(config)),
+    });
+
     this.distribution = new Distribution(this, 'Distribution', {
       comment: `Passa ${props.stage} sites`,
       domainNames: [`*.${sites}`],
@@ -99,7 +106,10 @@ export class SitesStack extends Stack {
         // The handler rewrites each request to its version's path, which is the cache key.
         cachePolicy: CachePolicy.CACHING_OPTIMIZED,
         responseHeadersPolicy: new ResponseHeadersPolicy(this, 'Headers', responseHeadersPolicy(siteHeaders(config))),
-        functionAssociations: [{ eventType: FunctionEventType.VIEWER_REQUEST, function: edge }],
+        functionAssociations: [
+          { eventType: FunctionEventType.VIEWER_REQUEST, function: edge },
+          { eventType: FunctionEventType.VIEWER_RESPONSE, function: robots },
+        ],
       },
       errorResponses: [403, 404].map((httpStatus) => ({ httpStatus, responseHttpStatus: 404, responsePagePath: `/${NOT_FOUND_KEY}`, ttl: Duration.minutes(1) })),
     });

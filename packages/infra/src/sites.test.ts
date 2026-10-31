@@ -16,7 +16,7 @@ describe('sites stack', () => {
         Aliases: ['*.example-sites.com'],
         DefaultCacheBehavior: Match.objectLike({
           AllowedMethods: ['GET', 'HEAD'],
-          FunctionAssociations: [Match.objectLike({ EventType: 'viewer-request' })],
+          FunctionAssociations: [Match.objectLike({ EventType: 'viewer-request' }), Match.objectLike({ EventType: 'viewer-response' })],
         }),
         Origins: [Match.objectLike({ OriginAccessControlId: Match.anyValue() })],
       }),
@@ -24,7 +24,7 @@ describe('sites stack', () => {
   });
 
   it('builds the function from handler.js with the store and both domains', () => {
-    const fn = Object.values(sites.findResources('AWS::CloudFront::Function'))[0];
+    const fn = Object.values(sites.findResources('AWS::CloudFront::Function')).find((f) => JSON.stringify(f).includes('cf.kvs'));
     // Fn::Join of the code around the store's ID.
     const code = (fn?.Properties.FunctionCode['Fn::Join'][1] as unknown[]).filter((part) => typeof part === 'string').join('<id>');
     expect(code).toContain("cf.kvs('<id>')");
@@ -39,9 +39,15 @@ describe('sites stack', () => {
     sites.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
         SecurityHeadersConfig: Match.objectLike({ ContentSecurityPolicy: { ContentSecurityPolicy: headers['content-security-policy'], Override: true } }),
-        CustomHeadersConfig: { Items: Match.arrayWith([{ Header: 'cache-control', Value: 'private, no-cache', Override: true }, { Header: 'x-robots-tag', Value: 'noindex', Override: true }]) },
+        CustomHeadersConfig: { Items: Match.arrayWith([{ Header: 'cache-control', Value: 'private, no-cache', Override: true }]) },
       }),
     });
+  });
+
+  it('decides x-robots-tag by host in a viewer-response function, not in the headers policy', () => {
+    const policy = JSON.stringify(sites.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
+    expect(policy).not.toContain('x-robots-tag');
+    sites.hasResourceProperties('AWS::CloudFront::Function', { FunctionCode: Match.stringLikeRegexp('function robots\\(event, options\\)') });
   });
 
   it('refuses site headers it cannot express exactly', () => {

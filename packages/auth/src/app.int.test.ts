@@ -376,6 +376,7 @@ describe('forms and responses', () => {
     expect(r.headers.get('cache-control')).toBe('no-store');
     // Browsers only send a real Origin on form posts when this allows it.
     expect(r.headers.get('referrer-policy')).toBe('same-origin');
+    expect(r.headers.get('x-robots-tag')).toBe('noindex');
     expect(r.headers.get('x-powered-by')).toBeNull();
     expect(r.headers.getSetCookie()[0]).toMatch(/^__Host-passa-csrf=[A-Za-z0-9_-]{43}; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/);
   });

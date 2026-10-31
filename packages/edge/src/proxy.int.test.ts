@@ -299,6 +299,19 @@ describe('viewing a public site (M2)', () => {
     await syncEdge(env.edge, { ...site, rules, status });
   }
 
+  it('lets search engines index a named site\'s public pages, but not an unnamed site\'s (M2 R42)', async () => {
+    const site = await publisher.publish(alice, { title: 'Indexed', content: { files: page('<h1>Find me</h1>') } });
+    await publisher.setAccess(alice, { siteId: site.site_id, rules: [{ path: '/', tier: 'public' }], confirmPublic: true });
+    const byId = await get(site.site_id, '/');
+    expect([byId.status, byId.headers['x-robots-tag']]).toEqual([200, 'noindex']);
+    await publisher.setName(alice, { siteId: site.site_id, name: 'find-me' });
+    const byName = await get('find-me', '/');
+    expect([byName.status, byName.headers['x-robots-tag']]).toEqual([200, undefined]);
+    // The ID address only redirects now, and says not to index the redirect.
+    const redirect = await get(site.site_id, '/');
+    expect([redirect.status, redirect.headers['x-robots-tag']]).toEqual([302, 'noindex']);
+  });
+
   it('serves public paths to anyone, keeps private folders private, and 404s missing public paths', async () => {
     const site = await publisher.publish(alice, {
       title: 'Mixed',

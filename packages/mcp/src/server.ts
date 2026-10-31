@@ -135,11 +135,13 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
     update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. Change the title or data details with or without files. Pass base_version to be refused if the site changed since you read it. Earlier versions are kept for rollback: ${kept} ${sizes}`,
     set_name: `Give a site a name, which becomes its address: <name>.<site domain>. Its ID address and any old name redirect there, so links keep working. `
       + `A name is 2–40 lowercase letters, digits and single hyphens. When a site's name changes or is removed, the old name is held for ${nameHoldDays} days: it keeps redirecting, and only you can claim it again. `
-      + 'Names are first come, first served, so check with the person before choosing one.',
+      + 'Names are first come, first served, so check with the person before choosing one. '
+      + 'A named site\'s public pages can appear in search engines; to keep a page out, add <meta name="robots" content="noindex"> to it.',
     set_access: 'Set who can open which parts of a site, replacing its rules. Each rule is / or a folder ending in /, and a tier: public (anyone with the link, without signing in) or private (only you). '
       + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. '
       + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. '
-      + 'Changes take effect within seconds, and everywhere within about a minute.',
+      + 'Changes take effect within seconds, and everywhere within about a minute. '
+      + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
     get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
     find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,

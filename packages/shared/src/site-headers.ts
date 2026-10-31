@@ -36,8 +36,7 @@ export function siteHeaders(config: Pick<Config, 'cdnAllowlist'>): Record<string
     'cross-origin-opener-policy': 'same-origin',
     'cross-origin-resource-policy': 'same-origin',
     'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
-    // Search engines don't index sites, public or not (M2 R42), until that's
-    // turned on per site.
-    'x-robots-tag': 'noindex',
+    // No x-robots-tag here: it depends on the host (M2 R42), so the edge's
+    // viewer-response function (edge/src/response.js) sets it.
   };
 }
