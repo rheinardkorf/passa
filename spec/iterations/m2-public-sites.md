@@ -25,7 +25,7 @@ Make a site public and open it in a private window without signing in. Make one 
 - A tool to set a site's rules, and the rules returned by the existing tools.
 - Setting access when publishing, so "publish this publicly" is one call.
 - The edge serving public paths without a cookie.
-- `noindex` on every site by default.
+- `noindex` on every site by default (amended 2026-10-31: named public sites can be indexed, R42).
 - Named sites (decision 1), with one canonical address per site.
 - The new site ID format. Sites published in M1 aren't migrated.
 
@@ -53,7 +53,7 @@ Make a site public and open it in a private window without signing in. Make one 
 - **R39** A request for a public path is served without a cookie or sign-in. A request for a private path works exactly as in M1.
 - **R40** Changing rules takes effect within seconds, and everywhere within about a minute (KeyValueStore propagation), with no cache invalidation: files stay cached under their version path, and the edge decides access on every request. When a change makes something private, `set_access` says it can stay public for up to a minute.
 - **R41** A blocked site (M1's malware finding) serves nothing, whatever its rules.
-- **R42** Every site sends `X-Robots-Tag: noindex`, so search engines don't index pages unless that's later turned on for a site.
+- **R42** Search engines may index a named site's public pages, and nothing else: responses on an ID host, and every response the edge makes itself (redirects, sign-in), send `X-Robots-Tag: noindex`, and so do `auth.` and `mcp.`. A name host only serves a named site, and crawlers have no site cookie, so all they can get there is public pages. A publisher keeps a page out with a robots meta tag. (Amended 2026-10-31: M2 first sent `noindex` everywhere.)
 
 ### Named sites
 
@@ -125,7 +125,7 @@ A name's hold ends at `heldUntil`, whether or not DynamoDB has deleted the item 
 ## Decisions
 
 1. **Named sites are in M2.** They're what makes public links short (`cv.example.com`), they need no DNS or certificate work (the wildcard covers them), and they're independent of rules, so they can be delivered last or dropped without affecting the rest.
-2. **Indexing:** `noindex` everywhere in M2 (R42), with per-site opt-in later. Opting in per site needs a viewer-response function, since the response headers policy is the same for every site.
+2. **Indexing:** named public sites can be indexed; unnamed sites and private paths can't (R42). Naming a site and making it public is taken as wanting it found; the tool descriptions say so, so agents can check. The response headers policy is the same for every site, so a viewer-response function decides the header by host. (Amended 2026-10-31: M2 first sent `noindex` everywhere, with opt-in later.)
 3. **Confirming public access:** an explicit `confirm_public` argument plus tool annotations (R37). Agents can still pass it without asking, so the tool descriptions say to check with the person first; clients that show tool calls for approval add a second check.
 
 4. **One address per named site.** Serving a site at both its ID and its name would mean `auth.` handing back to whichever host the visitor came from, which it would have to take from the request and check (an open redirect otherwise), and a cookie per host. One canonical address avoids both, and the ID becomes the permanent link.
@@ -146,7 +146,7 @@ A name's hold ends at `heldUntil`, whether or not DynamoDB has deleted the item 
 
 1. Rules in the data model and the edge record; the edge serving public paths (local proxy and tests first, then CloudFront's test tool).
 2. `set_access`, rules on `publish` and `update`, rules in `get_site` and `find_sites`, and events.
-3. `noindex` in the site headers.
+3. `noindex` in the site headers (amended 2026-10-31: decided by host, R42).
 4. Named sites: the new site ID format, names in the data model and edge records, the edge's redirects, sign-in handing back to the current address, holding and expiring old names, and `set_name`.
 5. Deploy to dev, test, deploy to production.
 

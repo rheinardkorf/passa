@@ -55,7 +55,7 @@ export function createMcpApp(deps: McpHttpDeps): express.Express {
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
-    res.set({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+    res.set({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex' });
     next();
   });
 

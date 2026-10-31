@@ -6,7 +6,7 @@ import { createHmac } from 'node:crypto';
 import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from 'node:http';
 import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { type EdgeReader, siteHeaders } from '@passa/shared';
-import { type EdgeRequest, type Header, isResponse, loadHandler } from './load.ts';
+import { type EdgeRequest, type Header, isResponse, loadHandler, loadRobots } from './load.ts';
 
 export type ProxyOptions = {
   edge: EdgeReader;
@@ -40,6 +40,7 @@ function toEvent(req: IncomingMessage): { request: EdgeRequest } {
 
 export function startProxy(options: ProxyOptions, port: number): Promise<Server> {
   const handle = loadHandler();
+  const robots = loadRobots();
   const crypto = { createHmac: (algorithm: string, key: string) => createHmac(algorithm, key) };
   const headers = siteHeaders({ cdnAllowlist: options.cdnAllowlist });
 
@@ -75,6 +76,10 @@ export function startProxy(options: ProxyOptions, port: number): Promise<Server>
       res.setHeader('content-type', object.ContentType ?? 'application/octet-stream');
       if (etag) res.setHeader('etag', etag);
       for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+      // As the viewer-response function does on CloudFront.
+      const host = req.headers.host ? { host: { value: req.headers.host.replace(/:\d+$/, '') } } : {};
+      const robotsTag = robots({ request: { headers: host }, response: { statusCode: 200, headers: {} } }, { sites: sites.replace(/:\d+$/, '') }).headers['x-robots-tag'];
+      if (robotsTag) res.setHeader('x-robots-tag', robotsTag.value);
       if (etag && req.headers['if-none-match'] === etag) {
         res.writeHead(304).end();
         return;

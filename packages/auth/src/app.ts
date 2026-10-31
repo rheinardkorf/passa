@@ -95,6 +95,8 @@ export function createAuthApp(deps: AuthDeps): express.Express {
       'referrer-policy': 'same-origin',
       'cross-origin-opener-policy': 'same-origin',
       'cross-origin-resource-policy': 'same-origin',
+      // Sign-in pages have no place in search results.
+      'x-robots-tag': 'noindex',
     });
     const cookies = readCookies(req.headers.cookie);
     res.locals.cookies = cookies;

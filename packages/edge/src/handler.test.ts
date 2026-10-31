@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, SITE_ID_PATTERN, siteCookie } from '@passa/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { functionCode, MAX_FUNCTION_BYTES } from './build.ts';
-import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler } from './load.ts';
+import { functionCode, MAX_FUNCTION_BYTES, responseFunctionCode } from './build.ts';
+import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler, loadRobots } from './load.ts';
 
 const handle = loadHandler();
 const crypto = { createHmac: (a: string, k: string) => createHmac(a, k) };
@@ -317,6 +317,28 @@ describe('sign-in handoff', () => {
   });
 });
 
+describe('indexing (response.js, M2 R42)', () => {
+  const robots = loadRobots();
+  const tag = (host: string) => robots({ request: { headers: { host: { value: host } } }, response: { statusCode: 200, headers: {} } }, { sites: 'example.com' }).headers['x-robots-tag']?.value;
+
+  it('lets search engines index pages on a name host only', () => {
+    expect(tag('cv.example.com')).toBeUndefined();
+    expect(tag(`${SITE}.example.com`)).toBe('noindex');
+    expect(tag('example.com')).toBe('noindex');
+    expect(tag('cv.example.org')).toBe('noindex');
+  });
+
+  it('uses the same site ID pattern as the publisher', () => {
+    const source = readFileSync(new URL('./response.js', import.meta.url), 'utf8');
+    expect(/const SITE_ID = \/(.+)\/;/.exec(source)?.[1]).toBe(SITE_ID_PATTERN.source);
+  });
+
+  it('marks every response the handler makes itself as noindex', async () => {
+    const r = await response(request('/'));
+    expect(r.headers['x-robots-tag']?.value).toBe('noindex');
+  });
+});
+
 describe('the CloudFront build', () => {
   it('fits the size limit and defines the runtime entry point', () => {
     const code = functionCode('a1b2c3d4-0000-4000-8000-000000000000', { domain: 'example.com', siteDomain: 'example-sites.com' });
@@ -327,6 +349,16 @@ describe('the CloudFront build', () => {
     expect(functionCode('a1b2c3d4-0000-4000-8000-000000000000', { domain: 'example.com' })).toContain(`sites: "example.com", auth: "https://auth.example.com"`);
     // Parses as a module, the way CloudFront loads it.
     const file = join(mkdtempSync(join(tmpdir(), 'passa-edge-')), 'function.mjs');
+    writeFileSync(file, code);
+    expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow();
+  });
+
+  it('builds the response function with the site domain', () => {
+    const code = responseFunctionCode({ domain: 'example.com', siteDomain: 'example-sites.com' });
+    expect(Buffer.byteLength(code)).toBeLessThan(MAX_FUNCTION_BYTES);
+    expect(code).toContain('function handler(event)');
+    expect(code).toContain('sites: "example-sites.com"');
+    const file = join(mkdtempSync(join(tmpdir(), 'passa-edge-')), 'response.mjs');
     writeFileSync(file, code);
     expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow();
   });
