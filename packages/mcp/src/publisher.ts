@@ -28,6 +28,7 @@ import {
   type Store,
   syncEdge,
   THREATS,
+  type UploadSync,
   type Version,
 } from '@passa/shared';
 import { type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
@@ -192,7 +193,7 @@ export class Publisher {
     const { content, edited = [], base, remove = [] } = changes;
     const sent = !content
       ? { files: [], skipped: [] }
-      : 'files' in content ? this.#checkInline(content.files) : await this.#takeUpload(caller, content.uploadId);
+      : 'files' in content ? this.#checkInline(content.files) : await this.#takeUpload(caller, content.uploadId, siteId);
     const editedPaths = new Set(edited.map((f) => f.path.toLowerCase()));
     const overlap = sent.files.filter((f) => editedPaths.has(f.path.toLowerCase())).map((f) => `${f.path}: both sent and edited`);
     if (overlap.length) throw new PublishRefused(overlap);
@@ -234,9 +235,17 @@ export class Publisher {
     return { files: files.filter((f) => keep.has(f.path)), skipped };
   }
 
-  async #takeUpload(caller: Caller, uploadId: string) {
+  async #getUpload(caller: Caller, uploadId: string) {
     const upload = isUploadId(uploadId) ? await this.#d.store.getUpload(uploadId, this.#now().toISOString()) : undefined;
     if (!upload || upload.ownerId !== caller.userId || upload.status === 'used') throw new ToolError('No upload with that ID.');
+    return upload;
+  }
+
+  // A sync upload only holds the folder's new and changed files, so it can only
+  // be used on the site it was compared with.
+  async #takeUpload(caller: Caller, uploadId: string, siteId: string) {
+    const upload = await this.#getUpload(caller, uploadId);
+    if (upload.sync && upload.sync.siteId !== siteId) throw new ToolError(`This upload syncs site ${upload.sync.siteId}: use it with update and sync: true.`);
     if (upload.status !== 'ready') throw new ToolError('Call finish_upload first.');
     // Checked before the upload is claimed, so a file still being scanned can be retried.
     if (this.#d.malwareScan) await this.#checkScans(caller, uploadId, upload.files.map((f) => f.path));
@@ -306,12 +315,16 @@ export class Publisher {
     rules?: Rule[];
     confirmPublic?: boolean;
     details?: SiteDetails;
+    // With an upload from begin_upload with this site: make the site exactly
+    // that folder, removing the files that aren't in it.
+    sync?: boolean;
   }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
     if (input.baseVersion && input.baseVersion !== site.current) {
       throw new ToolError(`The site has changed since version ${input.baseVersion}: its current version is ${site.current}. Get the site again and retry.`);
     }
+    if (input.sync) input = { ...input, remove: await this.#syncRemovals(caller, site, input.content) };
     if (!input.content && !input.remove?.length && !input.edits?.length) {
       await this.#setDetails(caller, site, input.details ?? {});
       return { ...this.#summary((await this.#d.store.getSite(site.id)) ?? site), changed: 0, removed: 0 };
@@ -359,6 +372,19 @@ export class Publisher {
       skipped,
       ...(change ? this.#accessResult(updated, change) : {}),
     };
+  }
+
+  // What a sync removes: the files the folder didn't have, as begin_upload
+  // found them. Refused if the site has moved on since, since the comparison
+  // was against the version current then.
+  async #syncRemovals(caller: Caller, site: Site, content: Content | undefined): Promise<string[]> {
+    if (!content || !('uploadId' in content)) throw new ToolError('sync needs an upload_id from begin_upload with this site_id.');
+    const { sync } = await this.#getUpload(caller, content.uploadId);
+    if (sync?.siteId !== site.id) throw new ToolError('This upload wasn\'t started for this site. Call begin_upload with site_id to sync a folder.');
+    if (sync.baseVersion !== site.current) {
+      throw new ToolError(`The site has changed since begin_upload: its current version is ${site.current}. Call begin_upload again.`);
+    }
+    return sync.remove;
   }
 
   async #setDetails(caller: Caller, site: Site, details: SiteDetails) {
@@ -576,28 +602,53 @@ export class Publisher {
     return record && (!record.heldUntil || record.heldUntil > this.#now().toISOString()) ? record : undefined;
   }
 
-  async beginUpload(caller: Caller, input: { files: { path: string; size: number }[] }) {
+  // With a site, the files are a folder to sync: files whose path, size and
+  // hash match the current version get no upload URL, and the version's files
+  // the folder doesn't have are listed for removal. A folder that matches
+  // exactly needs no upload at all.
+  async beginUpload(caller: Caller, input: { files: { path: string; size: number; sha256?: string }[]; siteId?: string }) {
     const { config } = this.#d;
-    const { keep, skipped } = checkManifest(input.files, config.limits, config.limits.site);
-    const files = input.files.filter((f) => keep.has(f.path));
+    const { keep, skipped } = checkManifest(input.files.map(({ path, size }) => ({ path, size })), config.limits, config.limits.site);
+    let files = input.files.filter((f) => keep.has(f.path));
+    let sync: UploadSync | undefined;
+    let unchanged = 0;
+    if (input.siteId) {
+      const site = await this.#ownSite(caller, input.siteId);
+      this.#assertChangeable(site);
+      const base = await this.#version(site);
+      const current = new Map(base.files.map((f) => [f.path, f]));
+      const same = (f: { path: string; size: number; sha256?: string }) => current.get(f.path)?.sha256 === f.sha256 && current.get(f.path)?.size === f.size;
+      const inFolder = new Set(files.map((f) => f.path));
+      const remove = base.files.filter((f) => !inFolder.has(f.path)).map((f) => f.path);
+      unchanged = files.filter((f) => f.sha256 && same(f)).length;
+      files = files.filter((f) => !f.sha256 || !same(f));
+      if (!files.length && !remove.length) return { site_id: site.id, up_to_date: true, version: base.id, skipped };
+      sync = { siteId: site.id, baseVersion: base.id, remove };
+    }
     const now = this.#now();
     const uploadId = newUploadId();
     const expiresAt = new Date(now.getTime() + config.lifetimes.uploadUrl * 1000).toISOString();
-    await this.#d.store.putUpload({ id: uploadId, ownerId: caller.userId, files, status: 'pending', createdAt: now.toISOString(), expiresAt });
-    const uploads = await Promise.all(files.map(async (f) => ({
+    const listed = files.map(({ path, size }) => ({ path, size }));
+    await this.#d.store.putUpload({ id: uploadId, ownerId: caller.userId, files: listed, status: 'pending', createdAt: now.toISOString(), expiresAt, ...(sync ? { sync } : {}) });
+    const uploads = await Promise.all(listed.map(async (f) => ({
       path: f.path,
       method: 'PUT' as const,
       url: await this.#d.files.presignUpload(uploadId, f.path, f.size, config.lifetimes.uploadUrl),
       headers: { 'Content-Length': String(f.size) },
     })));
-    return { upload_id: uploadId, expires_at: expiresAt, uploads, skipped };
+    return {
+      upload_id: uploadId,
+      expires_at: expiresAt,
+      uploads,
+      skipped,
+      ...(sync ? { sync: { base_version: sync.baseVersion, unchanged, remove: sync.remove } } : {}),
+    };
   }
 
   // Confirms every listed file arrived at its declared size, so publish and
   // update can fail early and clearly.
   async finishUpload(caller: Caller, input: { uploadId: string }) {
-    const upload = isUploadId(input.uploadId) ? await this.#d.store.getUpload(input.uploadId, this.#now().toISOString()) : undefined;
-    if (!upload || upload.ownerId !== caller.userId || upload.status === 'used') throw new ToolError('No upload with that ID.');
+    const upload = await this.#getUpload(caller, input.uploadId);
     const problems: string[] = [];
     await inBatches(upload.files, async ({ path, size }) => {
       const actual = await this.#d.files.uploadedSize(upload.id, path);

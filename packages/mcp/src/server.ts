@@ -16,6 +16,7 @@ const path = z.string().min(1).max(MAX_PATH_LENGTH);
 const siteId = z.string().max(64).describe('The site ID returned by publish');
 const versionId = z.string().max(64);
 const uploadId = z.string().max(64).describe('From begin_upload, after finish_upload');
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/).describe('The file\'s SHA-256, in lowercase hex');
 const limit = (what: string, fallback: number) => z.number().int().min(1).max(MAX_PAGE).default(fallback).describe(`How many ${what} to return, up to ${MAX_PAGE}`);
 const cursor = z.string().max(64).optional().describe('next_cursor from the previous call, to get the next page');
 
@@ -63,8 +64,10 @@ const schemas = {
     title: z.string().trim().min(1).max(200).optional().describe('A new title'),
     data_source: z.string().max(500).nullable().optional().describe('Where the data on the page came from; null removes it'),
     data_as_of: z.iso.datetime({ offset: true }).nullable().optional().describe('When that data was current; null removes it'),
+    sync: z.boolean().default(false).describe('With an upload_id from begin_upload with site_id: make the site exactly that folder, removing files that aren\'t in it'),
   })
     .refine((v) => !(v.files && v.upload_id), exactlyOneMessage)
+    .refine((v) => !v.sync || (v.upload_id && !v.files && !v.remove && !v.edits && !v.replace_all), { message: 'sync needs upload_id, and no files, remove, edits or replace_all' })
     .refine((v) => v.files || v.upload_id || v.remove || v.edits || v.title || v.data_source !== undefined || v.data_as_of !== undefined, {
       message: 'Give files, upload_id, remove, edits, or details to change',
     })
@@ -97,7 +100,12 @@ const schemas = {
     now: z.boolean().default(false).describe('Delete immediately and permanently instead of after the grace period'),
   }),
   begin_upload: z.strictObject({
-    files: z.array(z.strictObject({ path, size: z.number().int().nonnegative() })).min(1).max(1000),
+    files: z.array(z.strictObject({
+      path,
+      size: z.number().int().nonnegative(),
+      sha256: sha256.optional().describe('The file\'s SHA-256, in lowercase hex. With site_id, a file whose path, size and hash match the current version isn\'t uploaded again'),
+    })).min(1).max(1000).describe('Every file to publish; with site_id, every file in the folder'),
+    site_id: siteId.optional().describe('To sync a folder to this site: only new and changed files get upload URLs, and files the folder doesn\'t have are listed for removal. Then call update with the upload_id and sync: true'),
   }),
   finish_upload: z.strictObject({ upload_id: uploadId }),
 };
@@ -132,7 +140,9 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
   const kept = `Every version is kept for ${retention.versionDays} days${retention.monthEndMonths ? `, then only the last version of each month, for ${retention.monthEndMonths} months` : ''}; the current version is always kept.`;
   return {
     publish: `Publish files as a new site. It's private unless you pass rules: only you can open it, after signing in. Send files inline up to ${inline} in total; for larger sites, or files you can read from disk (such as images), use begin_upload instead. ${sizes}`,
-    update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. Change the title or data details with or without files. Pass base_version to be refused if the site changed since you read it. Earlier versions are kept for rollback: ${kept} ${sizes}`,
+    update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. `
+      + 'Every update makes a new version, so make related changes in one call. Working on a local folder? Make all the changes there first, then sync once: begin_upload with site_id and each file\'s sha256, upload what it asks for, finish_upload, then update with the upload_id and sync: true. '
+      + `Change the title or data details with or without files. Pass base_version to be refused if the site changed since you read it. Earlier versions are kept for rollback: ${kept} ${sizes}`,
     set_name: `Give a site a name, which becomes its address: <name>.<site domain>. Its ID address and any old name redirect there, so links keep working. `
       + `A name is 2–40 lowercase letters, digits and single hyphens. When a site's name changes or is removed, the old name is held for ${nameHoldDays} days: it keeps redirecting, and only you can claim it again. `
       + 'Names are first come, first served, so check with the person before choosing one. '
@@ -147,7 +157,7 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
     rollback: `Make an earlier version of a site current again. Takes effect immediately. Only versions get_site lists can be restored: ${kept}`,
     delete: `Delete a site. It stops being served at once, and is removed permanently after ${deleteGraceDays} days, or immediately with now=true.`,
-    begin_upload: `Start an upload, for sites over ${inline} or files you can read from disk. Returns a URL per file, valid for ${minutes}: PUT each file's bytes to its URL (for example, curl -T path/to/file '<url>'), then call finish_upload. File contents never pass through the conversation. ${sizes}`,
+    begin_upload: `Start an upload, for sites over ${inline} or files you can read from disk. Returns a URL per file, valid for ${minutes}: PUT each file's bytes to its URL (for example, curl -T path/to/file '<url>'), then call finish_upload. File contents never pass through the conversation. To sync a local folder to an existing site, pass site_id and each file's sha256: only new and changed files get URLs, and update with sync: true applies the folder as a whole. ${sizes}`,
   };
 }
 
@@ -223,6 +233,7 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
       ...(i.rules ? { rules: i.rules } : {}),
       confirmPublic: i.confirm_public,
       replaceAll: i.replace_all,
+      sync: i.sync,
       details: {
         ...(i.title ? { title: i.title } : {}),
         ...(i.data_source !== undefined ? { dataSource: i.data_source } : {}),
@@ -275,7 +286,11 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
   });
 
   tool('begin_upload', describe.begin_upload, {}, schemas.begin_upload, async (i) => ({
-    result: await publisher.beginUpload(caller, i),
+    result: await publisher.beginUpload(caller, {
+      files: i.files.map((f) => ({ path: f.path, size: f.size, ...(f.sha256 ? { sha256: f.sha256 } : {}) })),
+      ...(i.site_id ? { siteId: i.site_id } : {}),
+    }),
+    ...(i.site_id ? { siteId: i.site_id } : {}),
   }));
 
   tool('finish_upload', 'Confirm an upload is complete. Then pass its upload_id to publish or update.', { idempotentHint: true }, schemas.finish_upload, async (i) => ({
