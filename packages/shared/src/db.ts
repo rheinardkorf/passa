@@ -63,13 +63,19 @@ export type Version = {
 
 export type UploadFile = { path: string; size: number };
 
+// A sync (begin_upload with a site): the site and the version the folder was
+// compared with, and the paths in that version that aren't in the folder.
+export type UploadSync = { siteId: string; baseVersion: string; remove: string[] };
+
 export type Upload = {
   id: string;
   ownerId: string;
+  // Only the files to upload: for a sync, the new and changed ones.
   files: UploadFile[];
   status: 'pending' | 'ready' | 'used';
   createdAt: string;
   expiresAt: string;
+  sync?: UploadSync;
 };
 
 // A magic link, stored under the hash of its token (R16). siteId and path, or
