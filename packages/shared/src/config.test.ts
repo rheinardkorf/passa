@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfigFile, parseConfig, senderAddress, senderDomain, siteDomain, stageConfig } from './config.ts';
+import { loadConfigFile, parseConfig } from './config-file.ts';
+import { senderAddress, senderDomain, siteDomain, stageConfig } from './config.ts';
 
 const example = loadConfigFile(new URL('../../../config.example.yml', import.meta.url).pathname);
 

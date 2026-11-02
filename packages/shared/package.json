@@ -5,7 +5,9 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./config-file": "./src/config-file.ts",
+    "./kvs": "./src/kvs.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudfront-keyvaluestore": "3.1152.0",

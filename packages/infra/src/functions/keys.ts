@@ -5,7 +5,8 @@
 import { CloudFrontKeyValueStoreClient } from '@aws-sdk/client-cloudfront-keyvaluestore';
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { completeAuthSecrets } from '@passa/auth/secrets';
-import { KvsEdgeStore, signingKeyKey } from '@passa/shared';
+import { signingKeyKey } from '@passa/shared';
+import { KvsEdgeStore } from '@passa/shared/kvs';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 
 const secrets = new SecretsManagerClient({});

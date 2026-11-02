@@ -1,5 +1,5 @@
 // Test helpers for the stacks.
-import { loadConfigFile } from '@passa/shared';
+import { loadConfigFile } from '@passa/shared/config-file';
 import { App } from 'aws-cdk-lib';
 
 export const exampleConfig = () => loadConfigFile(new URL('../../../config.example.yml', import.meta.url).pathname);

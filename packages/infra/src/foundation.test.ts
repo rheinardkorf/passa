@@ -1,4 +1,4 @@
-import { parseConfig } from '@passa/shared';
+import { parseConfig } from '@passa/shared/config-file';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 import { addStage } from './stacks.ts';

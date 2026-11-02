@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfigFile } from './config.ts';
+import { loadConfigFile } from './config-file.ts';
 import { ENV, runtimeEnv, viewerAddress } from './runtime.ts';
 
 const config = loadConfigFile(new URL('../../../config.example.yml', import.meta.url).pathname);

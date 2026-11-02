@@ -6,7 +6,8 @@ import { KMSClient } from '@aws-sdk/client-kms';
 import { S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { configure as serverlessExpress, getCurrentInvoke } from '@codegenie/serverless-express';
-import { Events, KvsEdgeStore, loadTokenKey, OidcStore, runtimeEnv, SiteFiles, Store } from '@passa/shared';
+import { Events, loadTokenKey, OidcStore, runtimeEnv, SiteFiles, Store } from '@passa/shared';
+import { KvsEdgeStore } from '@passa/shared/kvs';
 import type { APIGatewayProxyEventV2, Context, Handler } from 'aws-lambda';
 import { createMcpApp } from './http.ts';
 

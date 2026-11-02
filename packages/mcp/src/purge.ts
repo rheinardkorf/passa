@@ -7,7 +7,8 @@ import { CloudFrontKeyValueStoreClient } from '@aws-sdk/client-cloudfront-keyval
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { Events, KvsEdgeStore, runtimeEnv, SiteFiles, Store } from '@passa/shared';
+import { Events, runtimeEnv, SiteFiles, Store } from '@passa/shared';
+import { KvsEdgeStore } from '@passa/shared/kvs';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { type Deps, Publisher } from './publisher.ts';
 
