@@ -13,15 +13,17 @@ Publish Markdown and get a good-looking site. Passa renders every `.md` file int
 
 The Markdown stays flat and readable in any editor. Page data lives in front matter; anything richer than prose is a fenced widget with plain data inside (cards, stats, charts, galleries, timelines, diagrams), which themes can restyle or extend. A deck is a page with a deck layout, one slide per section.
 
+Every public page gets a social card, the image link previews show, drawn at publish time from an HTML and CSS template in the theme, so a shared link looks like the site without anyone making images by hand.
+
 Rendering happens at publish time, so a version is still a complete set of static files: the edge doesn't change, rollback covers the rendered pages, and scanning sees the final HTML. The Markdown is kept with each version as source, which the edge never serves.
 
 Passa should be as useful without an agent as with one. The renderer is its own package, and a `passa` command uses it to build and preview a Markdown folder locally, with no account: what it shows is exactly what Passa publishes.
 
-This spec follows a four-round spike: the renderer on a real 36-post blog, three agents each writing a theme from the written contract (and revising it as the contract changed), decks, and visibility tests across tiers.
+This spec follows two spikes: four rounds of the renderer (a real 36-post blog, three agents each writing a theme from the written contract and revising it as the contract changed, decks, visibility tests across tiers), and three rounds of social cards (SVG templates against HTML templates, four card styles, and an agent designing a new theme and its card from a one-page guide).
 
 ## Demo
 
-From Claude on a phone, say "publish this as a page": one `.md` file becomes a styled page. From Claude Code, publish a folder of notes with wikilinks and tags: it gets a home page, tag pages, backlinks and a feed. Ask for a darker, more editorial theme: the agent writes `_layouts/` and CSS from `theme_guide`, and the whole site changes in one update. Fix a typo with an edit to the `.md` file, and the page re-renders. Make one folder private: it leaves every public listing in the same change. Turn a page of notes into slides with `layout: deck`.
+From Claude on a phone, say "publish this as a page": one `.md` file becomes a styled page. From Claude Code, publish a folder of notes with wikilinks and tags: it gets a home page, tag pages, backlinks and a feed. Ask for a darker, more editorial theme: the agent writes `_layouts/` and CSS from `theme_guide`, and the whole site changes in one update. Fix a typo with an edit to the `.md` file, and the page re-renders. Make one folder private: it leaves every public listing in the same change. Turn a page of notes into slides with `layout: deck`. Share a post's link: the preview shows a card in the site's style.
 
 Without an agent: run `passa serve` on the same folder, offline, and see the same site; run `passa check` and get the problems a publish would report.
 
@@ -35,6 +37,7 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 - A fixed set of Markdown extensions (R72) and built-in widgets (R76), and widgets a theme defines (R77).
 - Site-wide pages: a home page when the site has none, tag pages, backlinks, related pages, previous and next, and an RSS feed, all filtered by visibility.
 - Decks: a page's content split into sections at each thematic break.
+- Social cards: Open Graph tags, and a 1200×630 PNG per public page from the theme's card template.
 - Sources kept with each version and never served, and a read-only copy of the site's access rules kept with them.
 - Edits, folder sync, `get_files` and `get_site` working with sources; a `theme_guide` tool.
 - The renderer as its own package, and local `passa` commands: `render`, `serve`, `check`, `init`, `theme guide`.
@@ -55,7 +58,7 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 - **R67** Every `.md` file in a version is a source, rendered to a page when the version is published: `index.md` becomes the `index.html` of its folder, and `notes/plan.md` becomes `notes/plan/index.html`, served at `/notes/plan/`. Other files are served as they are, so a site can mix Markdown, HTML and assets.
 - **R68** A source that would render to a path another file already has (such as `plan.md` beside `plan/index.html`) refuses the publish, naming both.
 - **R69** Front matter (YAML between `---` lines) can set `title`, `description`, `date`, `tags`, `layout`, `kind`, `cover`, `accent`, `hero` (`title`, `text`, `image`), `author`, `draft`, `hidden` (or `unlisted`) and `access`, and any other fields, which layouts can use. A page without a `title` takes it from its first heading, then its file name. `draft: true` keeps the source but renders no page; `hidden: true` renders the page but leaves it out of every list and the feed. Image paths in front matter resolve from the source's folder.
-- **R70** Rendering is part of publishing: the rendered pages are written with the version, pass the same checks as any file, and are staged and scanned like other new content. A page whose rendered HTML is the same as in the previous version is copied, not written again.
+- **R70** Rendering is part of publishing: the rendered pages are written with the version, pass the same checks as any file, and are staged and scanned like other new content. A page whose rendered HTML is the same as in the previous version is copied, not written again. A source and the page rendered from it count as one file toward the site's file limit, so a Markdown site can have as many pages as an HTML one.
 - **R71** Every version is rendered whole, from all its sources. Anything that changes rendered output makes a new version: an update, `set_access` (R85) and `set_name` (R84) on a site with sources.
 
 ### Markdown
@@ -98,6 +101,14 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 - **R92** `passa render <folder>` builds a folder of HTML; `passa serve <folder>` previews it on localhost, rebuilding on change; `passa check <folder>` reports the problems a publish would (R68, R73, R79, R89, R90) and exits non-zero if there are any; `passa init [folder]` starts a site (`index.md`, `_site.yml`); `passa theme guide` prints the theme guide. None of them signs in or uses the network.
 - **R93** Outside Passa, access is decided by the folder's `_passa/access.yml` if it has one (as Passa would). Without one, a page builds only if its front matter says `access: public`; any other page is left out entirely, from lists, tags and the feed, and links to it render as missing. Only `public` means anything outside Passa. Only files that built pages reference are copied into the output. `--include-private` builds every page, for local preview, and warns that the output isn't protected.
 
+### Social cards
+
+- **R94** Every page gets its absolute address (`absoluteUrl`) and an absolute `socialImage`: front matter `socialImage`, else the page's card (R95), else `cover`, else `hero.image`. The default theme writes Open Graph and Twitter tags from them; the theme guide tells themes to.
+- **R95** A theme's `_layouts/card.html` is a Mustache template with the page's values, written for Satori's subset of HTML and CSS. Passa renders it for every public page into a 1200×630 PNG served beside the page (crawlers can't sign in, so private pages get none). The default theme has a card. A card that fails to render is listed in the publish result, and the page falls back to `cover` or no image.
+- **R96** Cards use only the theme's fonts (`.woff`, `.ttf` or `.otf` in the theme, with a default in the default theme) and the site's own images: every image a card names is embedded from the version's files before rendering, and nothing is fetched or read from anywhere else.
+- **R97** A card is drawn again only when its inputs change (the page's values it uses, the template and its fonts and images); otherwise the previous version's card is copied (R70).
+- **R98** `theme_guide` includes the card guide: the values, Satori's CSS rules and limits, fonts, and what makes a good card.
+
 ## Security and quality requirements
 
 - **No publisher code at render time.** Markdown is parsed by a fixed pipeline, and layouts and widget templates are logic-less Mustache, which can't run code or read files: a template can only place values Passa gives it. The only function a template can call is Passa's `markdown` lambda. Widget data is parsed as plain YAML (no custom tags).
@@ -105,6 +116,7 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 - **Sources can't leak** (R86): a public site's Markdown, front matter, drafts and theme sources are under `_passa/`, which the edge never serves.
 - **Front matter can't make a page public** (R89), and can stop one going public by surprise.
 - **Local builds are safe by default** (R93): nothing is public outside Passa unless the rules file or the page says so, and a private page's assets aren't copied.
+- **Cards can't read or fetch anything** (R96): image references become `data:` URLs from the version's own files before rendering, and the rasteriser is resvg's WebAssembly build, which can't read the file system (the native build reads paths named in an SVG). Cards are drawn only for public pages, from the values the page already shows publicly.
 - **Same checks on rendered pages** as on any file: secret scanning, malware scanning, the CSP.
 - **Bounded work:** rendering is limited by the existing file count and size limits, with a time limit on the whole render. A site that can't be rendered in time is refused, not half-published.
 - **Escaping:** template values are HTML-escaped except rendered content and widget HTML, so front matter can't inject markup into a layout. Chart labels and values are escaped into the SVG.
@@ -144,11 +156,15 @@ Measured in the spike (Node, Apple silicon): about 0.56 ms a page, linear, with 
 
 | Library | Why |
 | --- | --- |
-| **markdown-it** with **markdown-it-footnote** | Mature, fast, CommonMark. Heading anchors, task lists, callouts, wikilinks and widgets are small rules of Passa's own (the usual anchor plugin's license isn't on Passa's allowlist, and the task-list plugin is unmaintained) |
+| **markdown-it** with **markdown-it-footnote** | Mature, fast, CommonMark. Heading anchors, task lists, callouts, wikilinks and widgets are small rules of Passa's own: each is a few lines, which beats two more dependencies (the usual task-list plugin is unmaintained) |
 | **Mustache** (`mustache`) | Logic-less, tiny, no code execution, widely known by agents |
 | **highlight.js**, about 30 common languages | Light enough for Lambda |
 | **yaml** | Already used for config |
 | **Mermaid**, pinned, from `cdn.jsdelivr.net` | Loaded by the page, only when it has a diagram; renders under the site CSP as it is |
+| **Satori** (MPL-2.0) | Lays out a card's HTML and CSS (flexbox, wrapping) into SVG without a browser. Agents write HTML and CSS far more easily than SVG layout, and it needs no background image |
+| **resvg**, WebAssembly build (MPL-2.0) | Turns the SVG into a PNG. Accurate and fast, no native binary, never reads the disk |
+
+MPL-2.0 is on the licence allowlist for unmodified dependencies: its copyleft covers only the library's own files.
 
 ## Decisions
 
@@ -168,19 +184,25 @@ Measured in the spike (Node, Apple silicon): about 0.56 ms a page, linear, with 
 14. **Useful without agents.** The renderer is its own package with no AWS in it (R91), so a local preview is exactly what Passa publishes, and a plain Markdown folder can be built with no account (R92).
 15. **Access travels with the source, read-only** (R88). A folder taken out of Passa knows what's public, but changing access stays with `set_access`, so publishing a file can never make anything public.
 16. **Outside Passa, public is opt-in** (R93). With no rules file, only pages marked `access: public` build. Inside Passa, front matter never grants access, but a page marked private can't go public without confirmation (R89).
+17. **HTML cards, drawn at publish.** The card spike compared SVG templates (faster, but every element needs a fixed position) with HTML and CSS laid out by Satori (flows like a page, and agents know it). Rheinard chose HTML for its flexibility; an agent then designed an on-brand card from the guide in two attempts. Cards are part of M3 because Markdown should arrive as a complete package.
 
 ## To check early
 
-1. **Cold start and render time in Lambda:** the render bundle (about 130 KB gzipped in the spike) in the MCP function on ARM, and a 2,000-page render inside the time limit.
-2. **`theme_guide` size:** the guide plus the default theme fit comfortably in one tool result.
+Both done before the build (a throwaway function in dev, Node 24 on ARM):
+1. **Cold start and render time in Lambda:** the render bundle adds 150–200 ms to a cold start. At 1769 MB, the real blog renders in 0.4 s cold and 2,000 pages in about 3 s, inside the limit (see Starting values).
+2. **`theme_guide` size:** the guide, default layouts and widget templates are about 22,000 characters (about 6,000 tokens), comfortably one tool result.
 
-Checked in the spike: Mermaid renders under the site CSP with no `connect-src`; rendering is linear at about 0.56 ms a page; the real blog renders with all its links; agents write working themes and decks from the guide; the visibility tests pass across public, private, shared and paid tiers.
+Still to check, before the card step:
+3. **Cards in Lambda:** Satori and resvg (WebAssembly) per card at 1769 MB, and the bundle size. Locally a card takes 25–110 ms depending on its CSS (gradients and patterns cost most); with R97's caching only new and changed pages pay, but a first publish of a large public site may need cards drawn just after the publish.
+
+Checked in the spikes: Mermaid renders under the site CSP with no `connect-src`; rendering is linear at about 0.56 ms a page; the real blog renders with all its links; agents write working themes and decks from the guide; the visibility tests pass across public, private, shared and paid tiers.
 
 ## Starting values
 
 | Setting | Value |
 | --- | --- |
 | Render time limit | 10 seconds per version |
+| MCP function memory | 1769 MB (one full vCPU): measured in Lambda, a 2,000-page render takes about 3 s, against 5–7 s at 1024 MB; 3008 MB is no faster, since rendering runs on one thread |
 | Highlighted languages | about 30 common ones |
 | Feed | the 50 newest public dated pages |
 | `recent` | 5 pages (`site.recentCount` changes it) |
@@ -188,6 +210,7 @@ Checked in the spike: Mermaid renders under the site CSP with no `connect-src`; 
 | Essay or note | 350 prose words (code and widgets don't count) |
 | Date locale | `en-GB`, or `site.locale` |
 | Mermaid | 12.2.0 from `cdn.jsdelivr.net` |
+| Social cards | 1200×630 PNG, public pages only |
 
 ## Delivery
 
@@ -197,10 +220,11 @@ Checked in the spike: Mermaid renders under the site CSP with no `connect-src`; 
 4. Publishing with sources: roles in the file list, storage under `_passa/src/`, `access.yml`, rendered pages checked and staged, unchanged pages copied, R68 and R89 refusals.
 5. Tools: `get_site` and `get_files` with sources, edits on sources, folder sync against sources, `theme_guide`, problems in results, descriptions.
 6. Re-rendering on `set_access` and `set_name`.
-7. Deploy to dev, test, deploy to production.
+7. Social cards: early check 3, Satori and resvg in the render package, the default card, caching (R97), the card guide in `theme_guide`, and cards in `passa render` and `serve`.
+8. Deploy to dev, test, deploy to production.
 
 ## Done when
 
 - The demo works in production, from Claude on a phone and from Claude Code, and `passa serve` shows the same site offline.
-- Tested on dev, including: a site mixing Markdown and HTML, a conflicting path, a draft, a hidden page, a missing wikilink, invalid widget data, a missing layout, a theme with its own widget, a deck, a public page whose backlinks include a private page (it must not show), a private-only tag (no public tag page), making a folder private (it leaves public listings in the same change), a page marked `access: private` under a public rule (refused until confirmed), a rename updating the feed, and a theme written by an agent from `theme_guide`.
+- Tested on dev, including: a site mixing Markdown and HTML, a conflicting path, a draft, a hidden page, a missing wikilink, invalid widget data, a missing layout, a theme with its own widget, a deck, a public page whose backlinks include a private page (it must not show), a private-only tag (no public tag page), making a folder private (it leaves public listings in the same change), a page marked `access: private` under a public rule (refused until confirmed), a rename updating the feed and the cards' links, a shared link's preview showing the card, a card naming a remote image (refused), an unchanged page reusing its card, and a theme with its own card written by an agent from `theme_guide`.
 - Locally: `passa render` on a plain folder builds only pages marked `access: public`, and copies only the files they use.
