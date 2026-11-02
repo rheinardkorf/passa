@@ -36,7 +36,11 @@ type Summary = { site_id: string; name?: string; title: string; url: string; acc
 // A folder with a link, or a site ID or name on the chosen server.
 export async function resolveTarget(arg: string | undefined, options: { server?: string } & CallOptions = {}): Promise<Target> {
   const folder = resolve(arg ?? '.');
-  const link = existsSync(folder) && statSync(folder).isDirectory() ? readLink(folder) : undefined;
+  const isFolder = existsSync(folder) && statSync(folder).isDirectory();
+  const link = isFolder ? readLink(folder) : undefined;
+  if (isFolder && !link && (!arg || arg.includes('/') || arg === '.')) {
+    throw new Error(`${folder} isn't linked to a site (no ${LINK_FILE}). Publish it first (passa publish), or pull a site into it.`);
+  }
   if (link) return { server: options.server ? chooseServer(options.server, readCredentials(options.dir)) : link.server, siteId: link.site, folder, link };
   if (!arg) throw new Error(`This folder isn't linked to a site (no ${LINK_FILE}). Give a site ID or name, or publish it first.`);
   const server = chooseServer(options.server, readCredentials(options.dir));

@@ -56,6 +56,23 @@ async function upload(server: string, files: FileToSend[], siteId: string | unde
 
 export type Published = Record<string, unknown> & { site_id: string; url: string; current_version: string };
 
+const SCAN_WAIT_MS = 3000;
+const SCAN_TRIES = 40; // about two minutes
+
+// Uploads are scanned for malware before they can be used, which takes a few
+// seconds. The server checks before it claims the upload, so the same call
+// can simply be made again.
+async function afterScans<T>(call: () => Promise<T>, options: { waitMs?: number } = {}): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await call();
+    } catch (err) {
+      if (!(err instanceof ToolRefused) || !err.message.includes('still being scanned') || i >= SCAN_TRIES) throw err;
+      await new Promise((r) => setTimeout(r, options.waitMs ?? SCAN_WAIT_MS));
+    }
+  }
+}
+
 // R106: a new private site from a folder, which is then linked to it.
 export async function publishFolder(server: string, folder: string, title: string, options: CallOptions & { ask: Ask; confirmPublic?: boolean }): Promise<Published> {
   const dir = resolve(folder);
@@ -63,7 +80,7 @@ export async function publishFolder(server: string, folder: string, title: strin
   const { files } = await folderToSend(dir, undefined); // new sites are private, so no cards
   const go = async (confirmPublic: boolean) => {
     const begun = await upload(server, files, undefined, options);
-    return callTool<Published>(server, 'publish', { title, upload_id: begun.upload_id, ...(confirmPublic ? { confirm_public: true } : {}) }, options);
+    return afterScans(() => callTool<Published>(server, 'publish', { title, upload_id: begun.upload_id, ...(confirmPublic ? { confirm_public: true } : {}) }, options));
   };
   const result = await withConfirm(go, options);
   writeLink(dir, { server, site: result.site_id, version: result.current_version });
@@ -89,11 +106,11 @@ export async function syncFolder(target: Target, options: CallOptions & { ask: A
       }
     });
     if (begun.up_to_date) return { site_id: target.siteId, url: site.url, current_version: site.current_version, up_to_date: true };
-    return callTool<Synced>(target.server, 'update', {
+    return afterScans(() => callTool<Synced>(target.server, 'update', {
       site_id: target.siteId, upload_id: begun.upload_id, sync: true,
       ...(options.base && target.link?.version ? { base_version: target.link.version } : {}),
       ...(confirmPublic ? { confirm_public: true } : {}),
-    }, options);
+    }, options));
   };
   const result = await withConfirm(go, options);
   writeLink(folder, { server: target.server, site: target.siteId, version: result.current_version });
