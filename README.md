@@ -6,6 +6,20 @@ Say "publish this" to any MCP-capable agent and get back a link like `https://k3
 
 **Status:** early development. The first iteration, private sites, works end to end on AWS and is being finished; it's described in [`spec/iterations/`](spec/iterations/). Expect breaking changes.
 
+## Markdown sites, locally
+
+The `passa` command builds and previews a folder of Markdown with the same renderer Passa publishes with, offline and with no account (M3, in progress):
+
+```
+pnpm passa init my-site      # start a site
+pnpm passa serve my-site     # preview at http://127.0.0.1:4321/, rebuilding on change
+pnpm passa check my-site     # the problems a publish would report
+pnpm passa render my-site    # build into ./dist
+pnpm passa theme guide       # the theme contract, for writing themes
+```
+
+Nothing outside Passa protects private pages, so only public pages are built: those marked `access: public` in their front matter, or, in a folder published with Passa, the ones its access rules make public. `--include-private` builds everything for local preview.
+
 ## Development
 
 Needs Node 24, pnpm and Docker.

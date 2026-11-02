@@ -243,6 +243,18 @@ importers:
         specifier: 9.12.1
         version: 9.12.1
 
+  packages/cli:
+    dependencies:
+      '@passa/render':
+        specifier: workspace:*
+        version: link:../render
+      '@passa/shared':
+        specifier: workspace:*
+        version: link:../shared
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
+
   packages/edge:
     dependencies:
       '@aws-sdk/client-dynamodb':

@@ -2,3 +2,4 @@ export { render, MERMAID, REFUSING, type Problem, type ProblemKind, type RenderI
 export { DEFAULT_LAYOUTS } from './theme.ts';
 export { DEFAULT_WIDGETS } from './widgets.ts';
 export { THEME_GUIDE, THEME_CONTRACT_VERSION } from './guide.ts';
+export { slugify } from './text.ts';
