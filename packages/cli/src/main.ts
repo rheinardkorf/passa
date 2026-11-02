@@ -5,8 +5,8 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSy
 import { createServer } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
+import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
-import { contentSecurityPolicy } from '@passa/shared/site-headers';
 import { buildSite, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
 
@@ -27,7 +27,7 @@ Without _passa/access.yml (which Passa writes on publish), only pages whose fron
 matter says access: public are built.`;
 
 // The CSP Passa serves sites with, and its default CDN allowlist.
-const CSP = contentSecurityPolicy(['cdn.jsdelivr.net', 'cdnjs.cloudflare.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com']);
+const CSP = contentSecurityPolicy(DEFAULT_CDN_ALLOWLIST);
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json', '.xml': 'application/xml', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',

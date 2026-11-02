@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/csp" },
     { "path": "packages/shared" },
     { "path": "packages/render" },
     { "path": "packages/cli" },
