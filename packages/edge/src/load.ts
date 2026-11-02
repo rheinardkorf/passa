@@ -30,8 +30,11 @@ export type EdgeOptions = {
 export type Handle = (event: { request: EdgeRequest }, options: EdgeOptions) => Promise<EdgeRequest | EdgeResponse>;
 
 // The viewer-response event: the viewer's request and the response to it.
-export type ResponseEvent = { request: { headers: Record<string, Header> }; response: { statusCode: number; headers: Record<string, Header> } };
-export type Robots = (event: ResponseEvent, options: { sites: string }) => ResponseEvent['response'];
+export type ResponseEvent = {
+  request: { headers: Record<string, Header> };
+  response: { statusCode: number; headers: Record<string, Header> };
+};
+export type ViewerResponse = (event: ResponseEvent, options: { sites: string }) => ResponseEvent['response'];
 
 export const handlerSource = () => readFileSync(new URL('./handler.js', import.meta.url), 'utf8');
 export const responseSource = () => readFileSync(new URL('./response.js', import.meta.url), 'utf8');
@@ -43,6 +46,6 @@ function load<T>(source: string, name: string, filename: string): T {
 }
 
 export const loadHandler = (): Handle => load<Handle>(handlerSource(), 'handle', 'handler.js');
-export const loadRobots = (): Robots => load<Robots>(responseSource(), 'robots', 'response.js');
+export const loadViewerResponse = (): ViewerResponse => load<ViewerResponse>(responseSource(), 'viewerResponse', 'response.js');
 
 export const isResponse = (result: EdgeRequest | EdgeResponse): result is EdgeResponse => 'statusCode' in result;

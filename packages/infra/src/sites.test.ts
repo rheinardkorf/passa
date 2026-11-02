@@ -40,7 +40,11 @@ describe('sites stack', () => {
     sites.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
         SecurityHeadersConfig: Match.objectLike({ ContentSecurityPolicy: { ContentSecurityPolicy: headers['content-security-policy'], Override: true } }),
-        CustomHeadersConfig: { Items: Match.arrayWith([{ Header: 'cache-control', Value: 'private, no-cache', Override: true }]) },
+        CustomHeadersConfig: { Items: Match.arrayWith([
+          { Header: 'cache-control', Value: 'private, no-cache', Override: true },
+          // Relaxed for public files by the viewer-response function, so not overridden.
+          { Header: 'cross-origin-resource-policy', Value: 'same-origin', Override: false },
+        ]) },
       }),
     });
   });
@@ -48,7 +52,7 @@ describe('sites stack', () => {
   it('decides x-robots-tag by host in a viewer-response function, not in the headers policy', () => {
     const policy = JSON.stringify(sites.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
     expect(policy).not.toContain('x-robots-tag');
-    sites.hasResourceProperties('AWS::CloudFront::Function', { FunctionCode: Match.stringLikeRegexp('function robots\\(event, options\\)') });
+    sites.hasResourceProperties('AWS::CloudFront::Function', { FunctionCode: Match.stringLikeRegexp('function viewerResponse\\(event, options\\)') });
   });
 
   it('refuses site headers it cannot express exactly', () => {

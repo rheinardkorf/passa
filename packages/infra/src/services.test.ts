@@ -47,7 +47,7 @@ describe('services stack', () => {
     services.hasResourceProperties('AWS::ApiGatewayV2::DomainName', { DomainName: 'mcp.example.com' });
   });
 
-  it('lets only auth. sign tokens and send email, and only mcp. write site files and edge records', () => {
+  it('lets only auth. sign tokens and send email, only mcp. write site files and edge records, and the cards function write cards', () => {
     const policies = Object.entries(services.findResources('AWS::IAM::Policy')).map(([id, p]) => ({ id, text: JSON.stringify(p) }));
     const holders = (action: string) => policies.filter((p) => p.text.includes(action)).map((p) => p.id.replace(/ServiceRole.*/, ''));
     expect(holders('kms:Sign')).toEqual(['AuthFunction']);
@@ -55,7 +55,10 @@ describe('services stack', () => {
     expect(holders('cloudfront-keyvaluestore:PutKey')).toEqual(['McpFunction']);
     // Purge and malware findings can only take sites down.
     expect(holders('cloudfront-keyvaluestore:DeleteKey')).toEqual(['McpFunction', 'PurgeFunction', 'ScansFunction']);
-    expect(holders('s3:PutObject')).toEqual(['McpFunction']);
+    expect(holders('s3:PutObject')).toEqual(['CardsFunction', 'McpFunction']);
+    const cards = policies.find((p) => p.id.startsWith('CardsFunction'))?.text ?? '';
+    expect(cards).toContain('/*/cards/*');
+    expect(cards).not.toContain('s3:DeleteObject');
   });
 
   it('lets auth. send only as Passa’s sender', () => {

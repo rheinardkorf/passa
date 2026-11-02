@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { MAX_PATH_LENGTH, PublishRefused } from './checks.ts';
+import { THEME_GUIDE } from '@passa/render';
 import { type Config, MAX_RULE_PATH } from '@passa/shared';
 import { type AccessChange, type Caller, type Content, type Deps, Publisher, ToolError } from './publisher.ts';
 
@@ -94,7 +95,11 @@ const schemas = {
     site_id: siteId,
     name: z.string().max(40).nullable().describe('The new name, such as cv for cv.<site domain>; null removes the name'),
   }),
-  rollback: z.strictObject({ site_id: siteId, version_id: versionId.describe('A version listed by get_site') }),
+  rollback: z.strictObject({
+    site_id: siteId,
+    version_id: versionId.describe('A version listed by get_site'),
+    confirm_public: confirmPublic.describe('On a Markdown site: must be true if the version has a page marked access: private that the current rules make public. Ask the person first'),
+  }),
   delete: z.strictObject({
     site_id: siteId,
     now: z.boolean().default(false).describe('Delete immediately and permanently instead of after the grace period'),
@@ -108,6 +113,7 @@ const schemas = {
     site_id: siteId.optional().describe('To sync a folder to this site: only new and changed files get upload URLs, and files the folder doesn\'t have are listed for removal. Then call update with the upload_id and sync: true'),
   }),
   finish_upload: z.strictObject({ upload_id: uploadId }),
+  theme_guide: z.strictObject({}),
 };
 
 // The event detail for a change of rules (R48): what became public or private.
@@ -118,7 +124,8 @@ function accessDetail(result: object): { detail?: string } {
   return { detail: `made public: ${list(r.made_public)}; made private: ${list(r.made_private)}`.slice(0, 500) };
 }
 
-const json = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
+// Text (such as the theme guide) is returned as it is; anything else as JSON.
+const json = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] });
 const refusal = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
 function decode(files: z.infer<typeof inlineFile>[]) {
@@ -137,10 +144,14 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
   const inline = size(limits.inlinePublish);
   const minutes = `${Math.round(lifetimes.uploadUrl / 60)} minutes`;
   const sizes = `Limits: ${limits.files} files, ${size(limits.file)} per file, ${size(limits.site)} per site.`;
+  const markdown = 'Markdown files (.md) are rendered to pages when published: index.md becomes /, notes/plan.md becomes /notes/plan/, with a default theme, lists of pages, tag pages and, for public dated pages, a feed. '
+    + 'Front matter sets the title, date, tags, layout and more; wikilinks like [[Plan]] link pages by title; fenced blocks such as ```chart or ```cards render as widgets. '
+    + 'A site can mix Markdown with HTML and other files. Front matter access never makes a page public: only rules do. Call theme_guide before writing a theme (_layouts/), widgets or front matter beyond the basics. '
+    + 'Public pages get social cards, drawn by Passa; cards already drawn by passa render (the _card-<hash>.png files beside its pages) can be sent with the site, and Passa keeps those its pages name instead of drawing them.';
   const kept = `Every version is kept for ${retention.versionDays} days${retention.monthEndMonths ? `, then only the last version of each month, for ${retention.monthEndMonths} months` : ''}; the current version is always kept.`;
   return {
-    publish: `Publish files as a new site. It's private unless you pass rules: only you can open it, after signing in. Send files inline up to ${inline} in total; for larger sites, or files you can read from disk (such as images), use begin_upload instead. ${sizes}`,
-    update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. `
+    publish: `Publish files as a new site. It's private unless you pass rules: only you can open it, after signing in. Send files inline up to ${inline} in total; for larger sites, or files you can read from disk (such as images), use begin_upload instead. ${markdown} The result lists any problems the render found, such as links to missing pages. ${sizes} A Markdown file and the page made from it count as one file.`,
+    update: `Change a site; everything not changed stays, and the URL stays the same. Send only the files that changed, list any to remove, or use edits for small changes to text files. On a Markdown site, change the .md sources: rendered pages are made again from them, and can't be edited directly. `
       + 'Every update makes a new version, so make related changes in one call. Working on a local folder? Make all the changes there first, then sync once: begin_upload with site_id and each file\'s sha256, upload what it asks for, finish_upload, then update with the upload_id and sync: true. '
       + `Change the title or data details with or without files. Pass base_version to be refused if the site changed since you read it. Earlier versions are kept for rollback: ${kept} ${sizes}`,
     set_name: `Give a site a name, which becomes its address: <name>.<site domain>. Its ID address and any old name redirect there, so links keep working. `
@@ -151,11 +162,12 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. '
       + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. '
       + 'Changes take effect within seconds, and everywhere within about a minute. '
+      + 'On a Markdown site, the pages are rendered again with the new rules in the same change, so lists, tags and the feed never name a page the rules make private. '
       + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
-    get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
+    get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. On a Markdown site, sources have role source, and pages made from them have role rendered and rendered_from; _passa/access.yml is a read-only copy of the rules, for folders taken out of Passa. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
     find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
-    rollback: `Make an earlier version of a site current again. Takes effect immediately. Only versions get_site lists can be restored: ${kept}`,
+    rollback: `Make an earlier version of a site current again. Takes effect immediately. On a Markdown site, the version's sources are rendered again with the site's current rules and name, as a new version. Only versions get_site lists can be restored: ${kept}`,
     delete: `Delete a site. It stops being served at once, and is removed permanently after ${deleteGraceDays} days, or immediately with now=true.`,
     begin_upload: `Start an upload, for sites over ${inline} or files you can read from disk. Returns a URL per file, valid for ${minutes}: PUT each file's bytes to its URL (for example, curl -T path/to/file '<url>'), then call finish_upload. File contents never pass through the conversation. To sync a local folder to an existing site, pass site_id and each file's sha256: only new and changed files get URLs, and update with sync: true applies the folder as a whole. ${sizes}`,
   };
@@ -276,7 +288,7 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
   }));
 
   tool('rollback', describe.rollback, { idempotentHint: true }, schemas.rollback, async (i) => {
-    const r = await publisher.rollback(caller, { siteId: i.site_id, versionId: i.version_id });
+    const r = await publisher.rollback(caller, { siteId: i.site_id, versionId: i.version_id, confirmPublic: i.confirm_public });
     return { result: r, siteId: r.site_id };
   });
 
@@ -296,6 +308,9 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
   tool('finish_upload', 'Confirm an upload is complete. Then pass its upload_id to publish or update.', { idempotentHint: true }, schemas.finish_upload, async (i) => ({
     result: await publisher.finishUpload(caller, { uploadId: i.upload_id }),
   }));
+
+  tool('theme_guide', 'How Markdown sites render, and how to theme them: front matter, the Markdown extensions, the built-in widgets and their HTML, the values layouts receive (the theme contract), the rules a theme must follow, and the default theme\'s layouts and CSS to start from. Read it before writing _layouts/ or widgets.',
+    { readOnlyHint: true }, schemas.theme_guide, () => Promise.resolve({ result: THEME_GUIDE }));
 
   return server;
 }

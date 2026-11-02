@@ -131,13 +131,33 @@ export class ServicesStack extends Stack {
     new ARecord(this, 'AuthA', { zone, recordName: 'auth', target: authTarget });
     new AaaaRecord(this, 'AuthAaaa', { zone, recordName: 'auth', target: authTarget });
 
+    // Draws the social cards a publish had no time for (M3), invoked by mcp.
+    const cards = nodeFunction(this, 'CardsFunction', {
+      entry: 'packages/mcp/src/cards.ts',
+      environment,
+      description: `Passa ${props.stage} social cards.`,
+      memorySize: 1769,
+      timeout: Duration.minutes(5),
+      cards: true,
+      removalPolicy: data.removalPolicy,
+    });
+    data.table.grantReadData(cards);
+    // It reads versions, and writes cards only: never a version's files.
+    data.sites.grantRead(cards);
+    data.sites.grantPut(cards, '*/cards/*');
+
     // mcp.<domain>
     const mcp = nodeFunction(this, 'McpFunction', {
       entry: 'packages/mcp/src/lambda.ts',
       environment,
       description: `Passa ${props.stage} mcp.`,
+      // One full vCPU: publishing renders Markdown sites, on one thread (M3).
+      memorySize: 1769,
+      cards: true,
       removalPolicy: data.removalPolicy,
     });
+    mcp.addEnvironment(ENV.cardsFunction, cards.functionName);
+    cards.grantInvoke(mcp);
     data.table.grantReadWriteData(mcp);
     data.events.grantWriteData(mcp);
     data.sites.grantReadWrite(mcp);
@@ -277,7 +297,7 @@ export class ServicesStack extends Stack {
     });
     alarm('malware-found', new Metric({ namespace: 'AWS/Events', metricName: 'MatchedEvents', dimensionsMap: { RuleName: findings.ruleName }, statistic: 'Sum', period: Duration.minutes(5) }), 1, 'GuardDuty found malware in a published or uploaded file');
 
-    for (const [name, fn, threshold] of [['auth', auth, 5], ['mcp', mcp, 5], ['purge', purge, 1], ['bounces', bounces, 1], ['scans', scans, 1]] as const) {
+    for (const [name, fn, threshold] of [['auth', auth, 5], ['mcp', mcp, 5], ['purge', purge, 1], ['bounces', bounces, 1], ['scans', scans, 1], ['cards', cards, 1]] as const) {
       alarm(`${name}-errors`, fn.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }), threshold, `Passa ${name} function errors`);
     }
 

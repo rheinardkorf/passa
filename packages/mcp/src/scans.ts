@@ -25,7 +25,8 @@ export async function handleScanResult(deps: ScanDeps, result: ScanResult): Prom
     await deps.events.record({ action: 'upload.malware', result: 'refused', detail: key.slice(0, 300) });
     return;
   }
-  // Staged files are inline/<site-id>/<version-id>/<path>.
+  // Staged files are inline/<site-id>/<version-id>/<path>, or
+  // inline/<site-id>/cards/<hash>.png for cards sent with a site.
   const file = key.slice(STAGED_PREFIX.length);
   const siteId = file.split('/')[0] ?? '';
   if (!isSiteId(siteId)) return;

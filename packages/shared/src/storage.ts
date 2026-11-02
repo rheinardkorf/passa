@@ -1,6 +1,9 @@
 // Site files in S3. Each version lives under its own immutable prefix,
 // <site-id>/<version-id>/<path>, so it can be cached forever and switching the
-// current version never needs an invalidation. Uploads go to a separate bucket
+// current version never needs an invalidation. Social cards live outside
+// versions, at <site-id>/cards/<hash>.png: a card is named by the hash of
+// everything that draws it, so it's never replaced, and every version shares it
+// (M3 R97). Uploads go to a separate bucket
 // that expires objects on its own.
 //
 // GuardDuty scans only the uploads bucket. New content for a version is
@@ -66,12 +69,12 @@ export class SiteFiles {
     }));
   }
 
-  // Carries an unchanged file into a new version. S3 copies the content type
-  // and cache headers with it.
-  async copyVersionFile(siteId: string, fromVersionId: string, toVersionId: string, path: string): Promise<void> {
+  // Carries an unchanged file into a new version, at a new path if given. S3
+  // copies the content type and cache headers with it.
+  async copyVersionFile(siteId: string, fromVersionId: string, toVersionId: string, path: string, toPath = path): Promise<void> {
     await this.#s3.send(new CopyObjectCommand({
       Bucket: this.#buckets.sites,
-      Key: `${siteId}/${toVersionId}/${path}`,
+      Key: `${siteId}/${toVersionId}/${toPath}`,
       CopySource: encodeURI(`${this.#buckets.sites}/${siteId}/${fromVersionId}/${path}`),
     }));
   }
@@ -115,6 +118,32 @@ export class SiteFiles {
   async uploadScanStatus(uploadId: string, path: string): Promise<string | undefined> {
     const { TagSet = [] } = await this.#s3.send(new GetObjectTaggingCommand({ Bucket: this.#buckets.uploads, Key: `${uploadId}/${path}` }));
     return TagSet.find((tag) => tag.Key === SCAN_STATUS_TAG)?.Value;
+  }
+
+  // The hashes of the cards a site has.
+  async listCards(siteId: string): Promise<Set<string>> {
+    const hashes = new Set<string>();
+    const prefix = `${siteId}/cards/`;
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.#s3.send(new ListObjectsV2Command({ Bucket: this.#buckets.sites, Prefix: prefix, ContinuationToken }));
+      for (const { Key = '' } of page.Contents ?? []) hashes.add(Key.slice(prefix.length).replace(/\.png$/, ''));
+      ContinuationToken = page.NextContinuationToken;
+    } while (ContinuationToken);
+    return hashes;
+  }
+
+  // Cards Passa draws come from files that were scanned, so aren't staged; a
+  // card sent with a site is staged and scanned like any new file.
+  async putCard(siteId: string, hash: string, png: Uint8Array, options: { staged?: boolean } = {}): Promise<void> {
+    const key = `${siteId}/cards/${hash}.png`;
+    if (!options.staged) {
+      await this.#s3.send(new PutObjectCommand({ Bucket: this.#buckets.sites, Key: key, Body: png, ContentType: 'image/png', CacheControl: IMMUTABLE }));
+      return;
+    }
+    const staged = `${STAGED_PREFIX}${key}`;
+    await this.#s3.send(new PutObjectCommand({ Bucket: this.#buckets.uploads, Key: staged, Body: png, ContentType: 'image/png', CacheControl: IMMUTABLE }));
+    await this.#s3.send(new CopyObjectCommand({ Bucket: this.#buckets.sites, Key: key, CopySource: encodeURI(`${this.#buckets.uploads}/${staged}`), TaggingDirective: 'REPLACE' }));
   }
 
   deleteUpload(uploadId: string): Promise<void> {

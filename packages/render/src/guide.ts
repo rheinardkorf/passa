@@ -1,5 +1,7 @@
 // The theme contract, version 1 (R80, R81): what `theme_guide` returns and
 // `passa theme guide` prints. Agents write themes from this alone.
+import { DEFAULT_CARD } from './theme.ts';
+
 export const THEME_CONTRACT_VERSION = 1;
 
 export const THEME_GUIDE = `# Passa theme guide
@@ -20,6 +22,8 @@ _layouts/deck.html            optional: slides (layout: deck); Passa has a plain
 _layouts/<name>.html          optional: chosen by a page's front matter, layout: <name>
 _layouts/partials/*.html      pieces shared between layouts: {{> header}} includes partials/header.html
 _layouts/widgets/<name>.html  optional: how a widget renders (replaces a built-in, or adds a new one)
+_layouts/card.html            optional: the social card for link previews (see Social cards); Passa has a built-in one
+_layouts/fonts/*.woff         the card's fonts, named Family__weight__style.woff (also .ttf, .otf)
 theme.css (or any path)       CSS, fonts, images and scripts, served at their own paths
 \`\`\`
 
@@ -39,7 +43,7 @@ Mustache has no "or" and no "first N": use the values Passa provides (\`hasPager
 
 **The page** (also available as \`page.<name>\`)
 - \`title\`, \`url\`, \`content\` (rendered HTML; not under \`page\`)
-- \`absoluteUrl\`: the page's full address, and \`socialImage\`: an absolute image URL for link previews (front matter \`socialImage\`, else \`cover\`, else \`hero.image\`; null if none). Use them for Open Graph tags in \`<head>\`: \`og:title\`, \`og:url\`, \`og:description\`, \`og:image\` (with \`twitter:card\` \`summary_large_image\` when there's an image)
+- \`absoluteUrl\`: the page's full address, and \`socialImage\`: an absolute image URL for link previews (front matter \`socialImage\`, else, on a public page, its social card, else \`cover\`, else \`hero.image\`; null if none). Use them for Open Graph tags in \`<head>\`: \`og:title\`, \`og:url\`, \`og:description\`, \`og:image\` (with \`twitter:card\` \`summary_large_image\` when there's an image)
 - \`showTitle\`: true when the body doesn't start with its own \`# Heading\`. When it's false, that heading is already in \`content\`: don't print \`title\` too
 - \`isHome\` (the page at \`/\`), \`isPage\` (from a Markdown file), \`isIndex\` (the generated home page), \`isTag\` (a tag page; \`tag\` is its name)
 - \`date\` (ISO), \`dateText\` (YYYY-MM-DD), \`dateLong\` ("31 October 2026"), \`dateShort\` ("31 Oct 2026"), \`year\`, formatted in \`site.locale\`
@@ -136,4 +140,41 @@ A fenced block whose name is a widget renders through a template instead of show
 - Include \`<meta name="viewport" content="width=device-width, initial-scale=1">\`. Pages must work at phone width (390px) with no sideways scrolling.
 - Support light and dark (\`prefers-color-scheme\`), unless the design is deliberately one or the other.
 - Pages without a cover, date, tags or headings must still look finished.
+
+## Social cards
+
+When a public page is shared (Slack, Bluesky, LinkedIn, iMessage), the preview shows its social card: a 1200×630 image. Passa draws one for every public page without its own \`socialImage\`, from the theme's \`_layouts/card.html\` or the built-in card, and gives the page its URL as \`socialImage\`. Private pages get none: crawlers can't sign in. A card is drawn again only when something it shows changes.
+
+\`passa render\` draws the same cards locally, as \`_card-<hash>.png\` beside each page. Send them with the site and Passa keeps the ones its pages name, so it needn't draw them. The names match when the local build matches what Passa renders: the same files, the site's title in \`_site.yml\`, and \`--site-url\` set to the site's address if the card shows a URL.
+
+### The template
+
+\`_layouts/card.html\` is a Mustache template with the same values as the page's layout (\`title\`, \`description\`, \`excerpt\`, \`kind\`, \`dateLong\`, \`year\`, \`readingTime\`, \`tags\`, \`cover\`, \`hero\`, \`site.*\`, \`page.*\` and any front matter). It's one HTML element, 1200×630, written for **Satori**, which lays out HTML and CSS without a browser, with rules a browser doesn't have:
+
+- **The root element** must be \`width:100%; height:100%; box-sizing:border-box\`. Otherwise padding adds to the size and content runs off the card, with no error.
+- **Every element with more than one child needs \`display:flex\`** (Satori's only layout model: no grid, floats or inline-block). Differently styled text goes in separate \`<span>\`s in a flex row.
+- **Inline styles only:** \`style="…"\` on each element. No \`<style>\`, classes or external CSS.
+- **Supported:** flexbox (\`flex-direction\`, \`justify-content\`, \`align-items\`, \`gap\`, \`flex-grow\`, \`flex-wrap\`), \`padding\`, \`margin\`, \`width\`/\`height\` (px or %), \`position: absolute\` with \`top\`/\`left\`/\`right\`/\`bottom\`, \`border\` and \`border-radius\`, \`background-color\`, \`background-image\` with \`linear-gradient\`/\`radial-gradient\` (and \`background-size\`/\`background-repeat\` for patterns), \`box-shadow\`, \`opacity\`, \`transform\`, \`clip-path\`, \`color\`, \`font-family\`, \`font-size\`, \`font-weight\`, \`font-style\`, \`line-height\`, \`letter-spacing\`, \`text-transform\`, \`text-align\`, \`text-decoration\`, \`white-space\`, \`word-break\`, \`rgba()\`.
+- **Not supported:** grid, \`calc()\`, CSS variables, \`@media\`, animations, \`filter\`, pseudo-elements.
+- **Long titles:** text wraps on its own; centre it with flexbox. CSS can't shrink text to fit, so pick one size that fits three lines and cut runaway titles with \`line-clamp: 3\` (that element needs \`display:block\`, the one exception to flex).
+- **Images:** only the site's own files, by path, with \`width\` and \`height\`: \`<img src="/images/logo.png" width="120" height="120">\`. Passa embeds them; a card naming any other image refuses the publish.
+- **Gradients and patterns** take two to four times as long to draw as flat colour. Fine for a few pages; on a large site, prefer flat colour.
+
+### Fonts
+
+Cards can't use web or system fonts: the theme ships its own, in \`_layouts/fonts/\`, named \`Family__weight__style.woff\` (for example \`_layouts/fonts/Space Grotesk__700__normal.woff\`), and \`font-family\` uses the family name. \`.woff\`, \`.ttf\` or \`.otf\`, not \`.woff2\`. A theme card with no fonts refuses the publish, since its text wouldn't render. Open-licence fonts are in npm's \`@fontsource\` packages (\`files/<font>-latin-<weight>-<style>.woff\`).
+
+### Good cards
+
+- The title is the hero: large, high contrast, legible at a quarter of the size in a feed.
+- The site's name or mark is on every card, so a share is recognisable.
+- It looks like the site: the same palette, type and character.
+- Cards for pages without a date, tags or description still look finished.
+- Keep detail away from the outer 40px, which some apps crop.
+
+The built-in card, as a starting point:
+
+\`\`\`html
+${DEFAULT_CARD}
+\`\`\`
 `;

@@ -341,6 +341,16 @@ describe('tool descriptions', () => {
     expect(tools.begin_upload).toContain('valid for 15 minutes');
     expect(tools.begin_upload).toContain('curl -T');
     expect(tools.get_files).toContain('up to 64 KB in total');
+    expect(tools.publish).toContain('Markdown files (.md) are rendered to pages');
+    expect(tools.publish).toContain('theme_guide');
+  });
+
+  it('serves the theme guide as text (M3 R81)', async () => {
+    const call = await as('alice');
+    const r = await call('theme_guide', {});
+    expect(r.isError).toBe(false);
+    expect(r.text).toMatch(/^# Passa theme guide/);
+    expect(r.text).toContain('_layouts/default.html');
   });
 });
 

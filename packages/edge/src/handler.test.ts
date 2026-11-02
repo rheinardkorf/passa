@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, SITE_ID_PATTERN, siteCookie } from '@passa/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { functionCode, MAX_FUNCTION_BYTES, responseFunctionCode } from './build.ts';
-import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler, loadRobots } from './load.ts';
+import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler, loadViewerResponse } from './load.ts';
 
 const handle = loadHandler();
 const crypto = { createHmac: (a: string, k: string) => createHmac(a, k) };
@@ -125,6 +125,28 @@ describe('public paths (M2 R32, R33, R39)', () => {
     for (const uri of ['/', '/notes.html', '/notesx/']) expect(await rewrite(request(uri)), uri).toContain(`/${SITE}/${VERSION}/`);
     // The owner still gets in with a cookie.
     expect(await rewrite(request('/notes/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/notes/index.html`);
+  });
+
+  it('marks each file served as public or private for the response function, whatever the viewer sent', async () => {
+    await rules([['/notes/', 'x'], ['/', 'p']]);
+    const tier = async (uri: string, c?: string) => {
+      const event = request(uri, c ? { cookie: c } : {});
+      event.request.headers['x-passa-tier'] = { value: 'public' };
+      return ((await run(event)) as EdgeRequest).headers['x-passa-tier']?.value;
+    };
+    expect(await tier('/social.png')).toBe('public');
+    expect(await tier('/notes/', cookie())).toBe('private');
+  });
+
+  it('serves a page\'s social card from the site\'s cards, under the page\'s own rule (M3 R95)', async () => {
+    await rules([['/notes/', 'x'], ['/', 'p']]);
+    const hash = '0123456789abcdef0123';
+    expect(await rewrite(request(`/post/_card-${hash}.png`))).toBe(`/${SITE}/cards/${hash}.png`);
+    expect(await rewrite(request(`/_card-${hash}.png`))).toBe(`/${SITE}/cards/${hash}.png`);
+    expect((await response(request(`/notes/plan/_card-${hash}.png`))).statusCode).toBe(302);
+    expect(await rewrite(request(`/notes/plan/_card-${hash}.png`, { cookie: cookie() }))).toBe(`/${SITE}/cards/${hash}.png`);
+    // Anything else named like a card is an ordinary path in the version.
+    expect(await rewrite(request('/post/_card-short.png'))).toBe(`/${SITE}/${VERSION}/post/_card-short.png`);
   });
 
   it('makes only a public folder public in a private site', async () => {
@@ -318,7 +340,7 @@ describe('sign-in handoff', () => {
 });
 
 describe('indexing (response.js, M2 R42)', () => {
-  const robots = loadRobots();
+  const robots = loadViewerResponse();
   const tag = (host: string) => robots({ request: { headers: { host: { value: host } } }, response: { statusCode: 200, headers: {} } }, { sites: 'example.com' }).headers['x-robots-tag']?.value;
 
   it('lets search engines index pages on a name host only', () => {
@@ -326,6 +348,17 @@ describe('indexing (response.js, M2 R42)', () => {
     expect(tag(`${SITE}.example.com`)).toBe('noindex');
     expect(tag('example.com')).toBe('noindex');
     expect(tag('cv.example.org')).toBe('noindex');
+  });
+
+  it('lets other sites embed public files only', () => {
+    const corp = (tier?: string) => robots({
+      request: { headers: { host: { value: 'cv.example.com' }, ...(tier ? { 'x-passa-tier': { value: tier } } : {}) } },
+      response: { statusCode: 200, headers: {} },
+    }, { sites: 'example.com' }).headers['cross-origin-resource-policy']?.value;
+    expect(corp('public')).toBe('cross-origin');
+    // The headers policy's same-origin stays.
+    expect(corp('private')).toBeUndefined();
+    expect(corp()).toBeUndefined();
   });
 
   it('uses the same site ID pattern as the publisher', () => {

@@ -1,9 +1,11 @@
 // Renders a site's Markdown sources to pages (M3). Pure: sources in, pages
 // out, no I/O, so Passa's publish step and the passa command share it.
+import { createHash } from 'node:crypto';
 import Mustache from 'mustache';
+import { CARD_FONT } from './cards.ts';
 import { parse as parseYaml } from 'yaml';
 import { inlineLambda, markdownFor, pageState, type PageState } from './markdown.ts';
-import { DEFAULT_LAYOUTS } from './theme.ts';
+import { DEFAULT_CARD, DEFAULT_LAYOUTS } from './theme.ts';
 import { baseOf, dirOf, escapeHtml, outputOf, resolveFrom, slugify } from './text.ts';
 
 // Template values are escaped for HTML text and quoted attributes; / is left as is.
@@ -23,7 +25,15 @@ export type RenderInput = {
   siteTitle?: string;
   // Plain files in the version, to find pages that would replace one (R68).
   files?: string[];
+  // Social cards for public pages (R94–R97), given each plain file's content
+  // hash, so a card's name changes whenever its fonts or images do.
+  cards?: { fileHash: (path: string) => string | undefined };
 };
+
+// A public page's social card: its HTML for drawCard, the site paths of the
+// images it embeds, and where it's served (beside the page, named by the hash
+// of everything that draws it). Cards with the same hash are the same image.
+export type Card = { path: string; hash: string; html: string; images: string[] };
 
 export type ProblemKind =
   | 'conflict' // R68: a page would replace a plain file
@@ -34,17 +44,35 @@ export type ProblemKind =
   | 'widget' // R76: invalid widget data
   | 'front-matter'
   | 'site-settings'
-  | 'template';
+  | 'template'
+  | 'card'; // R95, R96: a card names an image that isn't the site's own, or has no fonts
 
 export type Problem = { kind: ProblemKind; source: string | null; message: string };
 
 // Problems that refuse a publish in Passa; access-private-made-public refuses
 // only until the change is confirmed with confirm_public.
-export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public']);
+export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public', 'card']);
 
-export type RenderedPage = { path: string; html: string; from: string | null; tier: string };
+// The files a site renders from (R86): Markdown, layouts and the site's settings.
+export const isSource = (path: string) =>
+  (path.endsWith('.md') && !path.startsWith('_layouts/')) || (path.startsWith('_layouts/') && path.endsWith('.html')) || path === '_site.yml';
 
-export type RenderResult = { pages: RenderedPage[]; feed?: string; problems: Problem[] };
+// The read-only copy of a site's rules that each version with sources carries
+// (R88), so a folder taken out of Passa knows what's public.
+export const RULES_FILE = '_passa/access.yml';
+export const rulesFile = (rules: Rule[]) => '# Written by Passa on every publish: the site\'s access rules. Editing this changes nothing; use set_access.\n'
+  + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, tier: ${JSON.stringify(r.tier)} }\n`).join('') : '[]\n');
+
+export type RenderedPage ={ path: string; html: string; from: string | null; tier: string };
+
+// cards and cardFonts only with input.cards; cardFonts are the theme's font
+// paths, or empty for the default card's built-in fonts.
+export type RenderResult = { pages: RenderedPage[]; feed?: string; problems: Problem[]; cards?: Card[]; cardFonts?: string[] };
+
+// Changes when the default card or how cards are drawn changes, so every card is drawn again.
+const CARD_FORMAT = 'passa-card-1';
+// The served name of a card: _card-<hash>.png in its page's folder.
+export const CARD_FILE = /^_card-([0-9a-f]{20})\.png$/;
 
 // The tier for a served path: the longest matching rule, else private (as shared/rules.ts).
 const tierFor = (rules: Rule[], servedPath: string) =>
@@ -136,6 +164,18 @@ export function render(input: RenderInput): RenderResult {
     else if (name.startsWith('widgets/')) widgets.set(name.slice('widgets/'.length), s.content);
     else layouts.set(name, s.content);
   }
+  // The card is a template, not a layout a page can use.
+  const themeCard = layouts.get('card');
+  layouts.delete('card');
+  const cardTemplate = themeCard ?? DEFAULT_CARD;
+  const cardFonts = themeCard ? files.filter((f) => CARD_FONT.test(f)).sort() : [];
+  const cardHashes = input.cards;
+  let cardKey = CARD_FORMAT;
+  if (cardHashes) {
+    if (themeCard && !cardFonts.length) problem('card', '_layouts/card.html', '_layouts/card.html needs fonts: add .woff or .ttf files as _layouts/fonts/Family__weight__style.woff');
+    cardKey += cardFonts.map((f) => `\n${f}=${cardHashes.fileHash(f) ?? ''}`).join('') + (themeCard ? '' : `\n${DEFAULT_CARD}`);
+  }
+  const cards: Card[] = [];
 
   // Site settings: _site.yml (title, description, author, nav, locale, and anything else).
   let siteData: FrontMatter = {};
@@ -175,7 +215,13 @@ export function render(input: RenderInput): RenderResult {
 
   // Pages that would replace a plain file (R68).
   const taken = new Set(files.map((f) => f.toLowerCase()));
-  for (const p of pages) if (taken.has(p.file.toLowerCase())) problem('conflict', p.source, `${p.source} renders to ${p.file}, which is already a file in the site`);
+  const rendersTo = new Map<string, string>();
+  for (const p of pages) {
+    const file = p.file.toLowerCase();
+    if (taken.has(file)) problem('conflict', p.source, `${p.source} renders to ${p.file}, which is already a file in the site`);
+    else if (rendersTo.has(file)) problem('conflict', p.source, `${p.source} and ${rendersTo.get(file)} both render to ${p.file}`);
+    else rendersTo.set(file, p.source ?? '');
+  }
 
   // Front matter access never grants access (R89), but disagreements are reported.
   for (const p of pages) {
@@ -249,7 +295,9 @@ export function render(input: RenderInput): RenderResult {
   const tagPages = new Map<string, boolean>();
   const hasTagPage = (t: string) => {
     let has = tagPages.get(t);
-    if (has === undefined) tagPages.set(t, (has = forTier(tierFor(rules, `${tagUrl(t)}index.html`)).byTag.has(t)));
+    // A plain file at the tag page's path wins: the tag then has no page.
+    const file = `${tagUrl(t)}index.html`;
+    if (has === undefined) tagPages.set(t, (has = !taken.has(file.slice(1).toLowerCase()) && forTier(tierFor(rules, file)).byTag.has(t)));
     return has;
   };
   const tagLink = (t: string) => (hasTagPage(t) ? { name: t, url: tagUrl(t), hasPage: true } : { name: t, url: null, hasPage: false });
@@ -293,11 +341,39 @@ export function render(input: RenderInput): RenderResult {
     source: null, dir: '', file, url, data: {}, body: '', tier, date: undefined, unlisted: true, words: 0, tags: [],
     state: pageState(null, ''), generated, ...(tag === undefined ? {} : { tag }), title, content: '', kind: '', cover: undefined, excerpt: '', backlinks: [],
   });
-  if (!pages.some((p) => p.file === 'index.html')) pages.push(generatedPage('index.html', '/', site.title, tierFor(rules, '/index.html'), 'index'));
+  if (!pages.some((p) => p.file === 'index.html') && !taken.has('index.html')) pages.push(generatedPage('index.html', '/', site.title, tierFor(rules, '/index.html'), 'index'));
   for (const t of [...new Set(sorted.flatMap((p) => p.tags))].sort((a, b) => a.localeCompare(b))) {
     const url = tagUrl(t);
     if (hasTagPage(t)) pages.push(generatedPage(`${url.slice(1)}index.html`, url, t, tierFor(rules, `${url}index.html`), 'tag', t));
   }
+
+  // A card's images must be the site's own files, named by path; its hash covers
+  // its HTML, those images, and the fonts (R96, R97).
+  const cardFor = (url: string, source: string, html: string): Card | undefined => {
+    if (!cardHashes) return undefined;
+    const images: string[] = [];
+    let bad = false;
+    const resolved = html.replace(/(<img\b[^>]*\ssrc=")([^"]*)(")/g, (whole, before: string, src: string, after: string) => {
+      if (src.startsWith('data:')) return whole;
+      if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) {
+        problem('card', source, `the card for ${source} names ${src}: cards can only use the site's own images`);
+        bad = true;
+        return whole;
+      }
+      const path = decodeURIComponent(new URL(src, `https://card.invalid${url}`).pathname).slice(1);
+      if (!cardHashes.fileHash(path)) {
+        problem('card', source, `the card for ${source} names ${src}, which isn't a file in the site`);
+        bad = true;
+        return whole;
+      }
+      images.push(path);
+      return `${before}/${path}${after}`;
+    });
+    if (bad) return undefined;
+    const key = [cardKey, resolved, ...[...new Set(images)].sort().map((i) => `${i}=${cardHashes.fileHash(i) ?? ''}`)].join('\n');
+    const hash = createHash('sha256').update(key).digest('hex').slice(0, 20);
+    return { path: `${url.slice(1)}_card-${hash}.png`, hash, html: resolved, images: [...new Set(images)] };
+  };
 
   const out: RenderedPage[] = [];
   for (const p of pages) {
@@ -364,7 +440,7 @@ export function render(input: RenderInput): RenderResult {
     const socialSource = p.data.socialImage ? resolveAsset(p.dir, String(p.data.socialImage)) : p.cover ?? (typeof hero?.image === 'string' ? hero.image : undefined);
     // The page's own values. Also under `page`, which list items and widget
     // data never shadow: {{page.title}} works inside {{#pages}} or {{#hero}}.
-    const self = {
+    const self: Record<string, unknown> = {
       ...p.data,
       ...(p.generated ? {} : summaryOf(p)),
       title: p.title,
@@ -423,6 +499,15 @@ export function render(input: RenderInput): RenderResult {
     lazy(view, 'sections', () => positions(splitSections()));
     lazy(view, 'sectionCount', () => splitSections().length);
     try {
+      // A public page without its own social image gets a card (R94, R95):
+      // crawlers can't sign in, so private pages get none.
+      if (cardHashes && p.tier === 'public' && !p.data.socialImage) {
+        const card = cardFor(p.url, p.source ?? p.file, Mustache.render(cardTemplate, view, partials));
+        if (card) {
+          cards.push(card);
+          self.socialImage = view.socialImage = absolute(`${p.url}_card-${card.hash}.png`);
+        }
+      }
       out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: p.tier });
     } catch (err) {
       problem('template', p.source, `${p.source ?? p.file}: layout ${layoutName} failed (${firstLine(err)})`);
@@ -432,8 +517,9 @@ export function render(input: RenderInput): RenderResult {
   // Feed (R84): public, dated, listed pages only, newest first.
   const feedItems = pages.filter((p) => p.date && p.tier === 'public' && !p.unlisted && !p.generated && p.url !== '/')
     .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')).slice(0, 50);
-  const result: RenderResult = { pages: out, problems };
-  if (feedItems.length) {
+  const result: RenderResult = { pages: out, problems, ...(cardHashes ? { cards, cardFonts } : {}) };
+  // A site's own feed.xml wins over the generated one.
+  if (feedItems.length && !taken.has('feed.xml')) {
     const abs = (url: string) => new URL(url, siteUrl).href;
     result.feed = `<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0"><channel><title>${escapeHtml(site.title)}</title><link>${abs('/')}</link><description>${escapeHtml(String(site.description ?? site.title))}</description>\n`
       + feedItems.map((p) => `<item><title>${escapeHtml(p.title)}</title><link>${abs(p.url)}</link><guid>${abs(p.url)}</guid><pubDate>${new Date(p.date ?? 0).toUTCString()}</pubDate>${p.excerpt ? `<description>${escapeHtml(p.excerpt)}</description>` : ''}</item>`).join('\n')

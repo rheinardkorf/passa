@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REFUSING, THEME_GUIDE, render, type Source } from './index.ts';
+import { DEFAULT_CARD_FONTS, drawCard, REFUSING, THEME_GUIDE, render, type Source } from './index.ts';
 
 const publicSite = [{ path: '/', tier: 'public' }];
 const build = (sources: Source[], extra: { files?: string[]; rules?: { path: string; tier: string }[] } = {}) => {
@@ -18,6 +18,21 @@ describe('rendering (R67–R71)', () => {
     const r = build([{ path: 'plan.md', content: '# Plan' }], { files: ['plan/index.html'] });
     expect(r.kinds).toContain('conflict');
     expect(REFUSING.has('conflict')).toBe(true);
+  });
+
+  it('refuses two sources rendering to one path', () => {
+    const r = build([{ path: 'plan.md', content: 'A' }, { path: 'plan/index.md', content: 'B' }]);
+    expect(r.problems).toContainEqual(expect.objectContaining({ kind: 'conflict', message: 'plan/index.md and plan.md both render to plan/index.html' }));
+  });
+
+  it('lets a plain file win over a generated home page, tag page or feed', () => {
+    const sources = [{ path: 'post.md', content: '---\ndate: 2026-01-01\ntags: [work]\n---\nA post.' }];
+    expect(build(sources).pages.map((p) => p.path).sort()).toEqual(['index.html', 'post/index.html', 'tags/work/index.html']);
+    const r = build(sources, { files: ['index.html', 'tags/work/index.html', 'feed.xml'] });
+    expect(r.pages.map((p) => p.path)).toEqual(['post/index.html']);
+    expect(r.feed).toBeUndefined();
+    expect(r.html('post/index.html')).not.toContain('href="/tags/work/"');
+    expect(r.problems).toEqual([]);
   });
 
   it('takes the title from front matter, then the first heading, then the file name', () => {
@@ -134,6 +149,12 @@ describe('themes and the template contract (R78–R81)', () => {
   it('uses the default theme when a site has no layouts', () => {
     const r = build([{ path: 'index.md', content: '# Home' }]);
     expect(r.html('index.html')).toMatch(/^<!doctype html>/);
+  });
+
+  it('lists a tag\'s pages in the default theme, and links tags that have a page', () => {
+    const r = build([{ path: 'index.md', content: '# Home' }, { path: 'post.md', content: '---\ntitle: A post\ndate: 2026-01-01\ntags: [work]\n---\nText.' }]);
+    expect(r.html('tags/work/index.html')).toMatch(/<h1>work<\/h1>[\s\S]*<a href="\/post\/">A post<\/a>/);
+    expect(r.html('post/index.html')).toContain('<a href="/tags/work/">work</a>');
   });
 
   it('chooses layouts: front matter, home, kind, then default', () => {
@@ -276,5 +297,67 @@ describe('front matter access (R89)', () => {
     expect(r.pages.find((p) => p.path === 'a/index.html')?.tier).toBe('private');
     expect(r.kinds).toContain('access-public-kept-private');
     expect(REFUSING.has('access-public-kept-private')).toBe(false);
+  });
+});
+
+describe('social cards (R94–R97)', () => {
+  const sha = (s: string) => s.padEnd(64, '0');
+  const files: Record<string, string> = { 'logo.png': sha('a'), '_layouts/fonts/Serif__700__normal.woff': sha('f') };
+  const cards = (sources: Source[], extra: { rules?: { path: string; tier: string }[]; files?: Record<string, string> } = {}) => {
+    const all = { ...files, ...extra.files };
+    return render({ sources, rules: extra.rules ?? publicSite, siteUrl: 'https://demo.example/', files: Object.keys(all), cards: { fileHash: (p) => all[p] } });
+  };
+  const post = (title: string) => ({ path: 'post.md', content: `---\ntitle: ${title}\n---\nText.` });
+
+  it('gives each public page a card beside it, named by its hash, as its social image', () => {
+    const r = cards([post('Hello')]);
+    const card = r.cards?.find((c) => c.path.startsWith('post/'));
+    expect(card?.path).toMatch(/^post\/_card-[0-9a-f]{20}\.png$/);
+    expect(card?.html).toContain('Hello');
+    expect(r.pages.find((p) => p.path === 'post/index.html')?.html).toContain(`<meta property="og:image" content="https://demo.example/${card?.path}">`);
+    expect(r.cardFonts).toEqual([]); // the default card's built-in fonts
+  });
+
+  it('keeps the same name until something the card shows changes', () => {
+    const hash = (r: ReturnType<typeof cards>) => r.cards?.find((c) => c.path.startsWith('post/'))?.hash;
+    const first = hash(cards([post('Hello')]));
+    expect(hash(cards([{ path: 'post.md', content: '---\ntitle: Hello\n---\nOther text.' }]))).toBe(first);
+    expect(hash(cards([post('Hello again')]))).not.toBe(first);
+  });
+
+  it('draws no card for private pages, or pages with their own social image', () => {
+    const r = cards([post('Hidden'), { path: 'own.md', content: '---\nsocialImage: logo.png\n---\nMine.' }], { rules: [{ path: '/', tier: 'public' }, { path: '/post/', tier: 'private' }] });
+    expect(r.cards?.map((c) => c.path).filter((p) => p.startsWith('post/') || p.startsWith('own/'))).toEqual([]);
+    expect(r.pages.find((p) => p.path === 'own/index.html')?.html).toContain('content="https://demo.example/logo.png"');
+  });
+
+  it('uses a theme card with its fonts, and its images by path, in the hash', () => {
+    const theme = { path: '_layouts/card.html', content: '<div style="display:flex;font-family:Serif"><img src="/logo.png" width="60" height="60">{{title}}</div>' };
+    const r = cards([post('Hi'), theme]);
+    const card = r.cards?.find((c) => c.path.startsWith('post/'));
+    expect(card?.images).toEqual(['logo.png']);
+    expect(r.cardFonts).toEqual(['_layouts/fonts/Serif__700__normal.woff']);
+    const changed = cards([post('Hi'), theme], { files: { 'logo.png': sha('b') } }).cards?.find((c) => c.path.startsWith('post/'));
+    expect(changed?.hash).not.toBe(card?.hash);
+    // The card template is never a page layout.
+    expect(r.pages.find((p) => p.path === 'post/index.html')?.html).not.toBe(`<div style="display:flex;font-family:Serif"><img src="/logo.png" width="60" height="60">Hi</div>`);
+  });
+
+  it('refuses a card naming an image that isn\'t the site\'s own, or a theme card without fonts', () => {
+    const remote = cards([post('Hi'), { path: '_layouts/card.html', content: '<div><img src="https://evil.example/x.png"></div>' }]);
+    expect(remote.problems.map((p) => p.kind)).toContain('card');
+    expect(REFUSING.has('card')).toBe(true);
+    const missing = cards([post('Hi'), { path: '_layouts/card.html', content: '<div><img src="nope.png"></div>' }]);
+    expect(missing.problems.some((p) => p.message.includes('nope.png'))).toBe(true);
+    const noFonts = render({ sources: [post('Hi'), { path: '_layouts/card.html', content: '<div>{{title}}</div>' }], rules: publicSite, siteUrl: 'https://demo.example/', cards: { fileHash: () => undefined } });
+    expect(noFonts.problems.some((p) => p.message.includes('needs fonts'))).toBe(true);
+  });
+
+  it('draws a card as a 1200×630 PNG with the default fonts', async () => {
+    const r = cards([post('A card')]);
+    const png = await drawCard(r.cards?.[0]?.html ?? '', { fonts: DEFAULT_CARD_FONTS, image: () => undefined });
+    expect(Buffer.from(png.slice(1, 4)).toString()).toBe('PNG');
+    expect(Buffer.from(png).readUInt32BE(16)).toBe(1200);
+    expect(Buffer.from(png).readUInt32BE(20)).toBe(630);
   });
 });

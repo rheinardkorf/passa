@@ -2,12 +2,12 @@
 // The passa command. These commands work on a local folder, with no account
 // and no network (R92); commands that talk to a deployment come later.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
-import { buildSite, isEmptyDir, type Build, type BuildOptions } from './site.ts';
+import { buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
 
 const USAGE = `passa: build, preview and check a Markdown site, with no account.
@@ -69,7 +69,7 @@ function siteFolder(arg: string | undefined): string {
   return folder;
 }
 
-function renderCommand(args: string[]) {
+async function renderCommand(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     out: { type: 'string', default: 'dist' }, 'site-url': { type: 'string' }, 'include-private': { type: 'boolean' }, 'confirm-public': { type: 'boolean' },
   } });
@@ -96,7 +96,14 @@ function renderCommand(args: string[]) {
     mkdirSync(dirname(join(dest, file)), { recursive: true });
     cpSync(join(folder, file), join(dest, file));
   }
-  out(`Built into ${shown(dest)}`);
+  const drawn = new Map<string, Uint8Array>();
+  for (const card of build.cards) {
+    const png = drawn.get(card.hash) ?? await drawSiteCard(folder, build, card);
+    drawn.set(card.hash, png);
+    mkdirSync(dirname(join(dest, card.path)), { recursive: true });
+    writeFileSync(join(dest, card.path), png);
+  }
+  out(`Built into ${shown(dest)}${build.cards.length ? `, with ${drawn.size} social card${drawn.size === 1 ? '' : 's'}` : ''}`);
   return 0;
 }
 
@@ -123,6 +130,9 @@ async function serveCommand(args: string[]) {
   report(build, folder);
   let pages = new Map(build.pages.map((p) => [p.path, p.html]));
   let files = new Set(build.files);
+  // Cards are drawn when asked for, once per hash.
+  let cards = new Map(build.cards.map((c) => [c.path, c]));
+  const drawn = new Map<string, Promise<Uint8Array>>();
 
   // Rebuild when anything in the folder changes, a moment after the last change.
   let timer: NodeJS.Timeout | undefined;
@@ -134,6 +144,7 @@ async function serveCommand(args: string[]) {
         build = buildSite(folder, options);
         pages = new Map(build.pages.map((p) => [p.path, p.html]));
         files = new Set(build.files);
+        cards = new Map(build.cards.map((c) => [c.path, c]));
         out(`\nRebuilt at ${new Date().toLocaleTimeString()}:`);
         report(build, folder);
       } catch (e) {
@@ -142,7 +153,11 @@ async function serveCommand(args: string[]) {
     }, 150);
   });
 
-  const server = createServer((req, res) => {
+  const server = createServer((req, res) => void respond(req, res).catch((e: unknown) => {
+    err(`Couldn't serve ${req.url ?? ''}: ${e instanceof Error ? e.message : String(e)}`);
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' }).end('Couldn\'t draw this card; see the terminal.');
+  }));
+  async function respond(req: IncomingMessage, res: ServerResponse) {
     let path = decodeURIComponent(new URL(req.url ?? '/', local).pathname).replace(/^\//, '');
     if (path === '' || path.endsWith('/')) path += 'index.html';
     const headers = { 'content-security-policy': CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
@@ -151,8 +166,13 @@ async function serveCommand(args: string[]) {
     if (pages.has(`${path}/index.html`)) return res.writeHead(301, { location: `/${path}/` }).end();
     if (path === 'feed.xml' && build.feed) return res.writeHead(200, { ...headers, 'content-type': TYPES['.xml'] }).end(build.feed);
     if (files.has(path)) return res.writeHead(200, { ...headers, 'content-type': type }).end(readFileSync(join(folder, path)));
+    const card = cards.get(path);
+    if (card) {
+      if (!drawn.has(card.hash)) drawn.set(card.hash, drawSiteCard(folder, build, card));
+      return res.writeHead(200, { ...headers, 'content-type': 'image/png' }).end(await (drawn.get(card.hash) ?? Promise.reject(new Error('no card'))));
+    }
     res.writeHead(404, { ...headers, 'content-type': 'text/plain; charset=utf-8' }).end('Not found (or not public).');
-  });
+  }
   await new Promise<void>((done, fail) => server.once('error', fail).listen(port, '127.0.0.1', done));
   out(`\nServing ${shown(folder) || '.'} at ${local} (Ctrl+C to stop)`);
   return new Promise<number>(() => undefined);

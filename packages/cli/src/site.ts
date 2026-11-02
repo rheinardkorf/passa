@@ -1,10 +1,11 @@
 // Builds a Markdown folder outside Passa (R92, R93): the same renderer as a
 // publish, but nothing enforces access afterwards, so only what's public is
 // built, and only files the built pages use are kept.
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, relative, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { REFUSING, render, slugify, type Problem, type Rule, type Source } from '@passa/render';
+import { type Card, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, slugify, type Problem, type Rule, type Source } from '@passa/render';
 
 export type BuildOptions = {
   siteUrl?: string;
@@ -34,9 +35,11 @@ export type Build = {
   skippedFiles: string[];
   // Links to pages that exist but weren't built because they aren't public.
   linksToSkipped: number;
+  // Social cards for the built pages (drawn by drawSiteCard), and their fonts.
+  cards: Card[];
+  cardFonts: string[];
 };
 
-export const RULES_FILE = '_passa/access.yml';
 const SKIP = new Set(['node_modules']);
 
 const toPosix = (p: string) => p.split(sep).join('/');
@@ -55,9 +58,6 @@ function walk(root: string, ignore?: string): string[] {
   visit(root);
   return out.sort();
 }
-
-const isSource = (path: string) =>
-  (path.endsWith('.md') && !path.startsWith('_layouts/')) || (path.startsWith('_layouts/') && path.endsWith('.html')) || path === '_site.yml';
 
 function frontMatter(content: string): Record<string, unknown> {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
@@ -113,7 +113,13 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
     sources = sources.filter((s) => !skippedPages.includes(s.path));
   }
 
-  const result = render({ sources, rules, siteUrl, siteTitle: typeof siteYml.title === 'string' ? siteYml.title : 'Site', files: plain });
+  const hashes = new Map<string, string>();
+  const fileHash = (path: string) => {
+    if (!plain.includes(path)) return undefined;
+    if (!hashes.has(path)) hashes.set(path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex'));
+    return hashes.get(path);
+  };
+  const result = render({ sources, rules, siteUrl, siteTitle: typeof siteYml.title === 'string' ? siteYml.title : 'Site', files: plain, cards: { fileHash } });
   let pages = result.pages;
   let feed = result.feed;
   if (access === 'rules') {
@@ -170,7 +176,16 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
     access, siteUrl, pages: pages.map(({ path, html }) => ({ path, html })), fromMarkdown: pages.filter((p) => p.from).length, ...(feed ? { feed } : {}),
     files: [...files].sort(), problems, refusing,
     skippedPages: skippedPages.sort(), skippedFiles: plain.filter((p) => !files.has(p)), linksToSkipped,
+    cards: result.cards ?? [], cardFonts: result.cardFonts ?? [],
   };
+}
+
+// Draws one of a build's cards from the site folder's fonts and images, as Passa would.
+export function drawSiteCard(root: string, build: Build, card: Card): Promise<Uint8Array> {
+  const fonts = build.cardFonts.length
+    ? build.cardFonts.map((path) => cardFont(path, readFileSync(join(root, path)))).filter((f) => f !== undefined)
+    : DEFAULT_CARD_FONTS;
+  return drawCard(card.html, { fonts, image: (path) => (card.images.includes(path) ? readFileSync(join(root, path)) : undefined) });
 }
 
 // True if the path is a directory with nothing in it (or doesn't exist).

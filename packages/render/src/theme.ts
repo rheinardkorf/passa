@@ -16,7 +16,7 @@ h1{font-size:2.1rem;margin-top:0}
 h2{font-size:1.45rem}
 h3{font-size:1.15rem}
 .meta{color:var(--muted);font:.9rem/1.4 ui-sans-serif,system-ui,sans-serif;margin:-.4rem 0 2rem}
-.tags span{display:inline-block;margin-right:.4rem;padding:.05rem .5rem;border:1px solid var(--line);border-radius:999px}
+.tags span,.tags a{display:inline-block;margin-right:.4rem;padding:.05rem .5rem;border:1px solid var(--line);border-radius:999px}
 a{color:var(--accent);text-underline-offset:.15em}
 a.wikilink{text-decoration-style:dotted}
 .wikilink.missing{color:var(--muted);text-decoration:line-through dotted}
@@ -83,13 +83,14 @@ const DEFAULT_LAYOUT = `<!doctype html>
 <header class="site"><a href="/">{{site.title}}</a><nav><a href="/feed.xml">Feed</a></nav></header>
 <main>
 {{#isIndex}}<h1>{{site.title}}</h1>{{/isIndex}}
-{{^isIndex}}
+{{#isTag}}<h1>{{title}}</h1>{{/isTag}}
+{{#isPage}}
 {{#hero}}<section class="hero"><h1>{{#hero.title}}{{hero.title}}{{/hero.title}}{{^hero.title}}{{page.title}}{{/hero.title}}</h1>{{#hero.text}}<p>{{#markdown}}{{hero.text}}{{/markdown}}</p>{{/hero.text}}</section>{{/hero}}
 {{^hero}}{{#showTitle}}<h1>{{title}}</h1>{{/showTitle}}{{/hero}}
-{{#dateText}}<p class="meta"><time datetime="{{date}}">{{dateLong}}</time>{{#tags.length}} · <span class="tags">{{#tags}}<span>{{name}}</span>{{/tags}}</span>{{/tags.length}}</p>{{/dateText}}
+{{#dateText}}<p class="meta"><time datetime="{{date}}">{{dateLong}}</time>{{#tags.length}} · <span class="tags">{{#tags}}{{#hasPage}}<a href="{{url}}">{{name}}</a>{{/hasPage}}{{^hasPage}}<span>{{name}}</span>{{/hasPage}}{{/tags}}</span>{{/tags.length}}</p>{{/dateText}}
 <article>{{{content}}}</article>
-{{/isIndex}}
-{{#isIndex}}<ul class="list">{{#pages}}<li><a href="{{url}}">{{title}}</a>{{#dateText}}<time datetime="{{date}}">{{dateText}}</time>{{/dateText}}</li>{{/pages}}</ul>{{/isIndex}}
+{{/isPage}}
+{{^isPage}}<ul class="list">{{#pages}}<li><a href="{{url}}">{{title}}</a>{{#dateText}}<time datetime="{{date}}">{{dateText}}</time>{{/dateText}}</li>{{/pages}}</ul>{{/isPage}}
 {{#backlinks.length}}<aside class="backlinks"><h2>Linked from</h2><ul>{{#backlinks}}<li><a href="{{url}}">{{title}}</a></li>{{/backlinks}}</ul></aside>{{/backlinks.length}}
 </main>
 </div>
@@ -130,3 +131,16 @@ html{scroll-snap-type:y mandatory}body{margin:0}
 `;
 
 export const DEFAULT_LAYOUTS: Record<string, string> = { default: DEFAULT_LAYOUT, deck: DECK_LAYOUT };
+
+// The default social card (R95), in the default theme's colours, for Satori:
+// inline styles, flexbox, and the built-in Inter fonts.
+export const DEFAULT_CARD = `<div style="display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;padding:64px 80px;background:#fbfaf7;color:#1d1d1f;font-family:Inter;border-top:14px solid #b4531f">
+  <div style="display:flex;font-size:28px;font-weight:700;color:#6b6b70">{{site.title}}</div>
+  <div style="display:flex;flex-direction:column;justify-content:center;flex-grow:1">
+    <div style="display:block;line-clamp:3;font-size:72px;font-weight:700;line-height:1.1;letter-spacing:-1.5px">{{title}}</div>
+    {{#description}}<div style="display:block;line-clamp:2;margin-top:24px;font-size:30px;line-height:1.35;color:#6b6b70">{{description}}</div>{{/description}}
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:24px;color:#6b6b70">
+    <span>{{#dateLong}}{{dateLong}}{{/dateLong}}</span><span style="color:#b4531f">{{#tags}}#{{name}}  {{/tags}}</span>
+  </div>
+</div>`;

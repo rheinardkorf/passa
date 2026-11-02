@@ -1,5 +1,6 @@
 // Lambda functions built from the repo's TypeScript with esbuild: Node.js LTS
 // on ARM, ESM bundles, and a log group that keeps logs for a month.
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { Duration, type RemovalPolicy } from 'aws-cdk-lib';
 import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
@@ -12,10 +13,15 @@ export const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 export type FunctionProps = Pick<NodejsFunctionProps, 'environment' | 'memorySize' | 'timeout' | 'description'> & {
   entry: string; // relative to the repo root
   removalPolicy: RemovalPolicy;
+  // Draws social cards: resvg's WebAssembly goes beside the bundle, where
+  // render/src/cards.ts looks for it.
+  cards?: boolean;
 };
 
+const RESVG_WASM = createRequire(resolve(REPO_ROOT, 'packages/render/package.json')).resolve('@resvg/resvg-wasm/index_bg.wasm');
+
 export function nodeFunction(scope: Construct, id: string, props: FunctionProps): NodejsFunction {
-  const { entry, removalPolicy, ...rest } = props;
+  const { entry, removalPolicy, cards, ...rest } = props;
   return new NodejsFunction(scope, id, {
     entry: resolve(REPO_ROOT, entry),
     projectRoot: REPO_ROOT,
@@ -36,6 +42,13 @@ export function nodeFunction(scope: Construct, id: string, props: FunctionProps)
       keepNames: true, // oidc-provider names its stored records after its classes
       sourceMap: true,
       banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+      ...(cards ? {
+        commandHooks: {
+          beforeBundling: () => [],
+          beforeInstall: () => [],
+          afterBundling: (_input: string, output: string) => [`cp "${RESVG_WASM}" "${output}/resvg.wasm"`],
+        },
+      } : {}),
     },
     ...rest,
   });

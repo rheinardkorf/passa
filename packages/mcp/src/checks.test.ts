@@ -32,6 +32,19 @@ describe('paths', () => {
     expect(checkPath('docs/_passa/x.html').ok).toBe(true);
   });
 
+  it('skips the rules file a folder from Passa carries, rather than refusing it (M3 R88)', () => {
+    expect(checkPath('_passa/access.yml')).toEqual({ ok: true, skip: true });
+    expect(checkPath('_passa/src/index.md').ok).toBe(false);
+  });
+
+  it('reserves names starting _card- for social cards, accepting only cards themselves (M3 R95, R97)', () => {
+    expect(checkPath('post/_card-0123456789abcdef0123.png')).toEqual({ ok: true, skip: false });
+    expect(checkPath('post/_card-0123456789abcdef0123.png/x.html').ok).toBe(false);
+    expect(checkPath('_card-short.png').ok).toBe(false);
+    expect(checkPath('_CARD-x.png').ok).toBe(false);
+    expect(checkPath('my_card-x.png').ok).toBe(true);
+  });
+
   it('skips dotfiles and dot folders', () => {
     expect(checkPath('.env')).toEqual({ ok: true, skip: true });
     expect(checkPath('.git/config')).toEqual({ ok: true, skip: true });
