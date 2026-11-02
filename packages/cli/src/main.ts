@@ -7,16 +7,24 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
+import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl } from './auth.ts';
+import { callTool, ToolRefused } from './mcp.ts';
 import { buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
 
-const USAGE = `passa: build, preview and check a Markdown site, with no account.
+const USAGE = `passa: build, preview, check and publish a site.
 
+Local, with no account:
   passa render <folder> [--out dist]   build the site into a folder of HTML
   passa serve <folder> [--port 4321]   preview it on localhost, rebuilding on change
   passa check <folder>                 report the problems a publish would (exits 1 if any)
   passa init [folder]                  start a site
   passa theme guide                    print the theme contract, for writing themes
+
+With a Passa deployment:
+  passa login [server]                 sign in through the browser (server: such as mcp.example.com)
+  passa logout [server]                sign out, revoking the CLI's access
+  passa whoami [--server <server>]     show which deployment you're signed in to
 
 Options for render, serve and check:
   --site-url <url>      the site's address, for absolute links (default: url in _site.yml)
@@ -178,9 +186,38 @@ async function serveCommand(args: string[]) {
   return new Promise<number>(() => undefined);
 }
 
+async function loginCommand(args: string[]) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const server = positionals[0] ? serverUrl(positionals[0]) : chooseServer(undefined, readCredentials());
+  out(`Signing in to ${server}. Your browser will open; if it doesn't, open this link:`);
+  await login(server, { show: (url) => out(`\n  ${url}\n`) });
+  out(`Signed in to ${server}.`);
+  return 0;
+}
+
+async function logoutCommand(args: string[]) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const server = chooseServer(positionals[0], readCredentials());
+  const { revoked } = await logout(server);
+  out(revoked ? `Signed out of ${server}, and the CLI's access was revoked.` : `Signed out of ${server} on this computer.`);
+  return 0;
+}
+
+async function whoamiCommand(args: string[]) {
+  const { values } = parseArgs({ args, allowPositionals: false, options: { server: { type: 'string' } } });
+  const server = chooseServer(values.server, readCredentials());
+  const sites = await callTool<{ sites: unknown[]; next_cursor?: string }>(server, 'find_sites', { limit: 100 });
+  const count = `${sites.sites.length}${sites.next_cursor ? '+' : ''}`;
+  out(`Signed in to ${server}, with ${count} site${count === '1' ? '' : 's'}.`);
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
+    case 'login': return loginCommand(rest);
+    case 'logout': return logoutCommand(rest);
+    case 'whoami': return whoamiCommand(rest);
     case 'render': return renderCommand(rest);
     case 'check': return checkCommand(rest);
     case 'serve': return serveCommand(rest);
@@ -205,6 +242,7 @@ async function main(argv: string[]): Promise<number> {
 }
 
 main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => {
-  err(`passa: ${e instanceof Error ? e.message : String(e)}`);
+  // A refusal or a needed sign-in is meant for the person as it is.
+  err(e instanceof ToolRefused || e instanceof LoginNeeded ? e.message : `passa: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
 });

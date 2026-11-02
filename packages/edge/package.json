@@ -6,7 +6,8 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
-    "./build": "./src/build.ts"
+    "./build": "./src/build.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1152.0",

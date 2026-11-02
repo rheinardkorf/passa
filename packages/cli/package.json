@@ -1,6 +1,6 @@
 {
   "name": "@passa/cli",
-  "description": "The passa command: build, preview and check a Markdown site locally, with no account.",
+  "description": "The passa command: build, preview and check a Markdown site locally, and publish it to a Passa deployment.",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -11,5 +11,9 @@
     "@passa/csp": "workspace:*",
     "@passa/render": "workspace:*",
     "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@passa/edge": "workspace:*",
+    "@passa/mcp": "workspace:*"
   }
 }
