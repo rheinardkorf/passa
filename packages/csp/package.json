@@ -1,0 +1,10 @@
+{
+  "name": "@passa/csp",
+  "description": "The Content Security Policy every Passa site is served with. No dependencies, so anything can use it without pulling in the rest of Passa.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

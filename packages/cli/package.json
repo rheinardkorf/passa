@@ -8,8 +8,8 @@
     "passa": "./src/main.ts"
   },
   "dependencies": {
+    "@passa/csp": "workspace:*",
     "@passa/render": "workspace:*",
-    "@passa/shared": "workspace:*",
     "yaml": "2.9.1"
   }
 }

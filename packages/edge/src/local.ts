@@ -14,7 +14,6 @@ import {
   bootstrapAdmins,
   createTables,
   Events,
-  loadConfigFile,
   loadTokenKey,
   OidcStore,
   senderDomain,
@@ -23,6 +22,7 @@ import {
   Store,
   TableEdgeStore,
 } from '@passa/shared';
+import { loadConfigFile } from '@passa/shared/config-file';
 import { startProxy } from './proxy.ts';
 
 const PORT = Number(process.env.PASSA_LOCAL_PORT ?? 8080);

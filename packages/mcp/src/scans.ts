@@ -6,7 +6,8 @@
 import { CloudFrontKeyValueStoreClient } from '@aws-sdk/client-cloudfront-keyvaluestore';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { type Buckets, type EdgeRecords, Events, isSiteId, KvsEdgeStore, runtimeEnv, STAGED_PREFIX, Store, THREATS } from '@passa/shared';
+import { type Buckets, type EdgeRecords, Events, isSiteId, runtimeEnv, STAGED_PREFIX, Store, THREATS } from '@passa/shared';
+import { KvsEdgeStore } from '@passa/shared/kvs';
 import type { EventBridgeEvent } from 'aws-lambda';
 
 export type ScanResult = {

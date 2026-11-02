@@ -6,7 +6,8 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
-    "./site-headers": "./src/site-headers.ts"
+    "./config-file": "./src/config-file.ts",
+    "./kvs": "./src/kvs.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudfront-keyvaluestore": "3.1152.0",
@@ -16,6 +17,7 @@
     "@aws-sdk/lib-dynamodb": "3.1152.0",
     "@aws-sdk/s3-request-presigner": "3.1152.0",
     "@aws-sdk/signature-v4a": "3.1138.0",
+    "@passa/csp": "workspace:*",
     "yaml": "2.9.1",
     "zod": "4.6.7"
   }

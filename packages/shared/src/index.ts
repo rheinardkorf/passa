@@ -4,7 +4,6 @@ export * from './edge.ts';
 export * from './events.ts';
 export * from './ids.ts';
 export * from './kms.ts';
-export * from './kvs.ts';
 export * from './names.ts';
 export * from './oidc.ts';
 export * from './retention.ts';

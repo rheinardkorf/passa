@@ -1,7 +1,8 @@
 // The CDK app. Run from packages/infra: `pnpm cdk deploy -c stage=dev --all`.
 // Reads the repo's config.yml, or the file PASSA_CONFIG names.
 import { resolve } from 'node:path';
-import { loadConfigFile, STAGES, type Stage } from '@passa/shared';
+import { STAGES, type Stage } from '@passa/shared';
+import { loadConfigFile } from '@passa/shared/config-file';
 import { App } from 'aws-cdk-lib';
 import { addStage } from './stacks.ts';
 

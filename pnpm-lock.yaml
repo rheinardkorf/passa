@@ -245,15 +245,17 @@ importers:
 
   packages/cli:
     dependencies:
+      '@passa/csp':
+        specifier: workspace:*
+        version: link:../csp
       '@passa/render':
         specifier: workspace:*
         version: link:../render
-      '@passa/shared':
-        specifier: workspace:*
-        version: link:../shared
       yaml:
         specifier: 2.9.1
         version: 2.9.1
+
+  packages/csp: {}
 
   packages/edge:
     dependencies:
@@ -411,6 +413,9 @@ importers:
       '@aws-sdk/signature-v4a':
         specifier: 3.1138.0
         version: 3.1138.0
+      '@passa/csp':
+        specifier: workspace:*
+        version: link:../csp
       yaml:
         specifier: 2.9.1
         version: 2.9.1
