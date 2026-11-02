@@ -19,7 +19,7 @@ export default tseslint.config(
     files: ['packages/edge/src/handler.js', 'packages/edge/src/response.js'],
     languageOptions: { ecmaVersion: 2017, sourceType: 'script', globals: {} },
     rules: {
-      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^(handle|robots)$', caughtErrors: 'none' }],
+      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^(handle|viewerResponse)$', caughtErrors: 'none' }],
       'no-restricted-syntax': [
         'error',
         { selector: 'ClassDeclaration, ClassExpression', message: 'Classes are not supported at the edge.' },

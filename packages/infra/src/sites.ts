@@ -62,7 +62,9 @@ export function responseHeadersPolicy(headers: Record<string, string>): Response
       referrerPolicy: { referrerPolicy: HeadersReferrerPolicy.NO_REFERRER, override: true },
     },
     customHeadersBehavior: {
-      customHeaders: Object.entries(custom).map(([header, value]) => ({ header, value, override: true })),
+      // The viewer-response function relaxes cross-origin-resource-policy for
+      // public files (edge/src/response.js), so it doesn't override that one.
+      customHeaders: Object.entries(custom).map(([header, value]) => ({ header, value, override: header !== 'cross-origin-resource-policy' })),
     },
   };
 }
@@ -86,7 +88,8 @@ export class SitesStack extends Stack {
       keyValueStore: data.edgeStore,
     });
 
-    // Decides x-robots-tag by host (M2 R42): the headers policy is the same for every site.
+    // Decides x-robots-tag by host (M2 R42), and lets other sites embed public
+    // files: the headers policy is the same for every site and response.
     const robots = new CloudFrontFunction(this, 'Robots', {
       comment: `Passa ${props.stage} sites indexing`,
       runtime: FunctionRuntime.JS_2_0,

@@ -324,6 +324,8 @@ describe('viewing a public site (M2)', () => {
     expect(home.body).toContain('<h1>Public</h1>');
     expect(home.headers['content-security-policy']).toBe(contentSecurityPolicy(env.config.cdnAllowlist));
     expect(home.headers['x-robots-tag']).toBe('noindex');
+    // Other sites may embed public files (for link previews), not private ones.
+    expect(home.headers['cross-origin-resource-policy']).toBe('cross-origin');
     expect((await get(site.site_id, '/missing.html')).status).toBe(404);
 
     // A private folder, whether or not the file exists, looks the same: sign in.
@@ -332,7 +334,8 @@ describe('viewing a public site (M2)', () => {
       expect(r.status, path).toBe(302);
       expect(String(r.headers.location), path).toContain('/site/signin');
     }
-    expect((await get(site.site_id, '/notes/', { cookie: await signIn(site.site_id) })).body).toBe('secret notes');
+    const notes = await get(site.site_id, '/notes/', { cookie: await signIn(site.site_id) });
+    expect([notes.body, notes.headers['cross-origin-resource-policy']]).toEqual(['secret notes', 'same-origin']);
 
     // Back to private: takes effect on the next request, with no invalidation (R40).
     await withRules(site.site_id, []);

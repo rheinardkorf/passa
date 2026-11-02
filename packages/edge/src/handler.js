@@ -18,6 +18,8 @@ const NAME = /^(?=[a-z0-9-]{2,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // "..", dotfiles and empty segments) can't match a published file.
 const PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
 const HANDOFF = '/_passa/session';
+// Set on every request served from storage, as response.js reads it.
+const TIER = 'x-passa-tier';
 
 function respond(status, description, headers, extra) {
   const response = { statusCode: status, statusDescription: description, headers: {} };
@@ -113,10 +115,13 @@ function isPublic(rules, served) {
   return false;
 }
 
-function serve(request, siteId, version, served) {
+// The tier header tells the viewer-response function (response.js) whether
+// the file is public. It's always set here, so a viewer can't send their own.
+function serve(request, siteId, version, served, open) {
   request.uri = '/' + siteId + '/' + version + served;
   request.querystring = {};
   request.cookies = {};
+  request.headers[TIER] = { value: open ? 'public' : 'private' };
   return request;
 }
 
@@ -174,7 +179,7 @@ async function handle(event, options) {
   // Public paths need no cookie (M2 R39). Rules match the path as served, so
   // /docs and /docs/ are both covered by /docs/.
   const served = indexPath(path);
-  if (record && isPublic(record.r, served)) return serve(request, siteId, record.cur, served);
+  if (record && isPublic(record.r, served)) return serve(request, siteId, record.cur, served, true);
 
   const cookie = parseSigned(request.cookies[COOKIE] ? request.cookies[COOKIE].value : null);
   const key = cookie ? await readKey(options.kvs, cookie.kid) : null;
@@ -188,5 +193,5 @@ async function handle(event, options) {
     return respond(302, 'Found', { location: signin });
   }
 
-  return serve(request, siteId, record.cur, served);
+  return serve(request, siteId, record.cur, served, false);
 }

@@ -31,12 +31,12 @@ async function handler(event) {
   return checkSize(code);
 }
 
-// The viewer-response function, which decides x-robots-tag by host.
+// The viewer-response function, which decides x-robots-tag and cross-origin-resource-policy.
 export function responseFunctionCode(config: Pick<Config, 'domain' | 'siteDomain'>): string {
   const sites = JSON.stringify(siteDomain(config));
   return checkSize(`${withoutComments(responseSource())}
 function handler(event) {
-  return robots(event, { sites: ${sites} });
+  return viewerResponse(event, { sites: ${sites} });
 }
 `);
 }
