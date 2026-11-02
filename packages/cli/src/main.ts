@@ -9,6 +9,7 @@ import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
 import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl } from './auth.ts';
 import { callTool, ToolRefused } from './mcp.ts';
+import { pull, resolveTarget, siteDetails, sitesList } from './sites.ts';
 import { buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
 
@@ -25,6 +26,12 @@ With a Passa deployment:
   passa login [server]                 sign in through the browser (server: such as mcp.example.com)
   passa logout [server]                sign out, revoking the CLI's access
   passa whoami [--server <server>]     show which deployment you're signed in to
+  passa sites [query]                  list your sites
+  passa site <site|folder>             a site's details, access, versions and files
+  passa pull <site> [folder]           write a site's sources and files to a folder, linked to the site
+
+<site> is a site ID or name; a folder linked to a site (by publish or pull) works too.
+Deployment commands take --server <server> and --json (the server's reply, for scripts).
 
 Options for render, serve and check:
   --site-url <url>      the site's address, for absolute links (default: url in _site.yml)
@@ -212,12 +219,57 @@ async function whoamiCommand(args: string[]) {
   return 0;
 }
 
+const DEPLOY_OPTIONS = { server: { type: 'string' }, json: { type: 'boolean' } } as const;
+const printJson = (value: unknown) => out(JSON.stringify(value, null, 2));
+
+async function sitesCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  const server = chooseServer(values.server, readCredentials());
+  const result = await sitesList(server, positionals[0]);
+  if (values.json) return printJson(result), 0;
+  if (!result.sites.length) return out(positionals[0] ? `No sites match ${positionals[0]}.` : 'No sites yet. Publish one with: passa publish <folder> --title <title>'), 0;
+  for (const s of result.sites) out(`${(s.name ?? s.site_id).padEnd(22)} ${s.access.padEnd(8)} ${s.title}  ${s.url}${s.status === 'active' ? '' : `  (${s.status})`}`);
+  if (result.next_cursor) out('…and more: narrow it with a query.');
+  return 0;
+}
+
+async function siteCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  const target = await resolveTarget(positionals[0], values.server ? { server: values.server } : {});
+  const site = await siteDetails(target);
+  if (values.json) return printJson(site), 0;
+  const sources = site.files.filter((f) => f.role === 'source').length;
+  const rendered = site.files.filter((f) => f.role === 'rendered').length;
+  out(`${site.title}  ${site.url}`);
+  out(`  site ${site.site_id}${site.name ? `, named ${site.name}` : ''}; ${site.status}${site.delete_at ? `, deleted after ${site.delete_at}` : ''}`);
+  out(`  access: ${site.access}${site.rules?.length ? ` (${site.rules.map((r) => `${r.path} ${r.tier}`).join(', ')})` : ''}`);
+  out(`  files: ${site.files.length}${sources ? ` (${sources} sources, ${rendered} rendered by Passa)` : ''}`);
+  out('  versions, newest first:');
+  for (const v of site.versions) out(`    ${v.version_id}  ${v.created_at.slice(0, 16).replace('T', ' ')}  ${v.files} files${v.current ? '  (current)' : ''}`);
+  return 0;
+}
+
+async function pullCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  if (!positionals[0]) throw new Error('Which site? passa pull <site> [folder]');
+  const target = await resolveTarget(positionals[0], values.server ? { server: values.server } : {});
+  const folder = resolve(positionals[1] ?? target.folder ?? target.siteId);
+  const result = await pull(target, folder);
+  if (values.json) return printJson({ site_id: target.siteId, folder, ...result }), 0;
+  out(`Pulled ${result.files} file${result.files === 1 ? '' : 's'} of ${target.siteId} (version ${result.version}) into ${shown(folder) || '.'}.`);
+  out('Pages Passa renders aren\'t included: they\'re rebuilt from the sources (passa serve to preview).');
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
     case 'login': return loginCommand(rest);
     case 'logout': return logoutCommand(rest);
     case 'whoami': return whoamiCommand(rest);
+    case 'sites': return sitesCommand(rest);
+    case 'site': return siteCommand(rest);
+    case 'pull': return pullCommand(rest);
     case 'render': return renderCommand(rest);
     case 'check': return checkCommand(rest);
     case 'serve': return serveCommand(rest);

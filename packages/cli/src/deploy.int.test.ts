@@ -1,6 +1,6 @@
 // The CLI against the whole local stack (Moto, auth, MCP, the proxy): a real
 // sign-in through the browser, driven by a scripted browser, then tool calls.
-import { chmodSync, mkdtempSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Browser, type Stack, startStack } from '@passa/edge/testing';
@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { accessToken, LoginNeeded, login, logout, readCredentials } from './auth.ts';
 import { request } from './http.ts';
 import { callTool } from './mcp.ts';
+import { pull, readLink, resolveTarget } from './sites.ts';
 
 let stack: Stack;
 let server: string;
@@ -99,5 +100,45 @@ describe('signing in (R99–R102)', () => {
     const { dir } = await signedIn();
     chmodSync(join(dir, 'credentials.json'), 0o644);
     expect(() => readCredentials(dir)).toThrow(/can be read by other users/);
+  });
+});
+
+describe('reading sites (R103–R105)', () => {
+  const files = [
+    { path: 'index.md', content: '# Home\n\nSee [[Post]].' },
+    { path: 'post.md', content: '---\ntitle: Post\n---\nHello.' },
+    { path: 'logo.png', content: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', encoding: 'base64' },
+  ];
+
+  it('finds a site by ID, name or linked folder, and pulls its sources, not its rendered pages', async () => {
+    const { dir } = await signedIn();
+    const site = await callTool<{ site_id: string }>(server, 'publish', { title: 'Pull me', files }, { dir });
+    await callTool(server, 'set_name', { site_id: site.site_id, name: 'pull-me' }, { dir });
+    expect((await resolveTarget('pull-me', { dir })).siteId).toBe(site.site_id);
+    expect((await resolveTarget(site.site_id, { dir })).siteId).toBe(site.site_id);
+    await expect(resolveTarget('no-such-site', { dir })).rejects.toThrow(/No site no-such-site/);
+
+    const folder = join(mkdtempSync(join(tmpdir(), 'passa-pull-')), 'site');
+    const result = await pull(await resolveTarget('pull-me', { dir }), folder, { dir });
+    expect(result.files).toBe(4); // two sources, the image, and the rules file
+    expect(readFileSync(join(folder, 'post.md'), 'utf8')).toBe('---\ntitle: Post\n---\nHello.');
+    expect(readFileSync(join(folder, 'logo.png')).subarray(1, 4).toString()).toBe('PNG');
+    expect(existsSync(join(folder, '_passa/access.yml'))).toBe(true);
+    expect(existsSync(join(folder, 'post/index.html'))).toBe(false);
+    expect(readLink(folder)).toEqual({ server, site: site.site_id, version: result.version });
+
+    // The linked folder is the site from then on, and pulling again is fine.
+    expect((await resolveTarget(folder, { dir })).siteId).toBe(site.site_id);
+    await pull(await resolveTarget(folder, { dir }), folder, { dir });
+  });
+
+  it('refuses to pull into a folder with other files', async () => {
+    const { dir } = await signedIn();
+    const site = await callTool<{ site_id: string }>(server, 'publish', { title: 'Pull refused', files }, { dir });
+    const folder = mkdtempSync(join(tmpdir(), 'passa-pull-'));
+    mkdirSync(join(folder, 'notes'));
+    writeFileSync(join(folder, 'notes/mine.md'), 'mine');
+    await expect(pull(await resolveTarget(site.site_id, { dir }), folder, { dir })).rejects.toThrow(/has files and isn't linked/);
+    expect(readFileSync(join(folder, 'notes/mine.md'), 'utf8')).toBe('mine');
   });
 });
