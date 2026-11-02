@@ -14,6 +14,7 @@ export const ENV = {
   edgeStore: 'PASSA_EDGE_STORE', // KeyValueStore ARN
   configurationSet: 'PASSA_SES_CONFIGURATION_SET', // optional: reports bounces and complaints
   malwareScan: 'PASSA_MALWARE_SCAN', // "1" when GuardDuty scans the buckets
+  cardsFunction: 'PASSA_CARDS_FUNCTION', // optional: draws the social cards a publish had no time for
 } as const;
 
 export type RuntimeEnv = {
@@ -25,6 +26,7 @@ export type RuntimeEnv = {
   edgeStore: string;
   configurationSet?: string;
   malwareScan: boolean;
+  cardsFunction?: string;
 };
 
 // The config the CDK stacks wrote, already validated against the schema at
@@ -44,6 +46,7 @@ export function runtimeEnv(env: Record<string, string | undefined> = process.env
     return value;
   };
   const configurationSet = env[ENV.configurationSet];
+  const cardsFunction = env[ENV.cardsFunction];
   return {
     config: readConfig(get(ENV.config)),
     tables: { main: get(ENV.table), events: get(ENV.eventsTable) },
@@ -53,6 +56,7 @@ export function runtimeEnv(env: Record<string, string | undefined> = process.env
     edgeStore: get(ENV.edgeStore),
     ...(configurationSet ? { configurationSet } : {}),
     malwareScan: env[ENV.malwareScan] === '1',
+    ...(cardsFunction ? { cardsFunction } : {}),
   };
 }
 

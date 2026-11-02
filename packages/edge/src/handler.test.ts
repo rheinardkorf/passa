@@ -138,6 +138,17 @@ describe('public paths (M2 R32, R33, R39)', () => {
     expect(await tier('/notes/', cookie())).toBe('private');
   });
 
+  it('serves a page\'s social card from the site\'s cards, under the page\'s own rule (M3 R95)', async () => {
+    await rules([['/notes/', 'x'], ['/', 'p']]);
+    const hash = '0123456789abcdef0123';
+    expect(await rewrite(request(`/post/_card-${hash}.png`))).toBe(`/${SITE}/cards/${hash}.png`);
+    expect(await rewrite(request(`/_card-${hash}.png`))).toBe(`/${SITE}/cards/${hash}.png`);
+    expect((await response(request(`/notes/plan/_card-${hash}.png`))).statusCode).toBe(302);
+    expect(await rewrite(request(`/notes/plan/_card-${hash}.png`, { cookie: cookie() }))).toBe(`/${SITE}/cards/${hash}.png`);
+    // Anything else named like a card is an ordinary path in the version.
+    expect(await rewrite(request('/post/_card-short.png'))).toBe(`/${SITE}/${VERSION}/post/_card-short.png`);
+  });
+
   it('makes only a public folder public in a private site', async () => {
     await rules([['/docs/', 'p']]);
     expect(await rewrite(request('/docs'))).toBe(`/${SITE}/${VERSION}/docs/index.html`);

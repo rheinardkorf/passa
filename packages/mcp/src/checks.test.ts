@@ -37,6 +37,12 @@ describe('paths', () => {
     expect(checkPath('_passa/src/index.md').ok).toBe(false);
   });
 
+  it('reserves names starting _card- for social cards (M3 R95)', () => {
+    expect(checkPath('post/_card-0123456789abcdef0123.png').ok).toBe(false);
+    expect(checkPath('_CARD-x.png').ok).toBe(false);
+    expect(checkPath('my_card-x.png').ok).toBe(true);
+  });
+
   it('skips dotfiles and dot folders', () => {
     expect(checkPath('.env')).toEqual({ ok: true, skip: true });
     expect(checkPath('.git/config')).toEqual({ ok: true, skip: true });

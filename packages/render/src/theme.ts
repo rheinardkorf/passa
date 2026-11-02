@@ -131,3 +131,16 @@ html{scroll-snap-type:y mandatory}body{margin:0}
 `;
 
 export const DEFAULT_LAYOUTS: Record<string, string> = { default: DEFAULT_LAYOUT, deck: DECK_LAYOUT };
+
+// The default social card (R95), in the default theme's colours, for Satori:
+// inline styles, flexbox, and the built-in Inter fonts.
+export const DEFAULT_CARD = `<div style="display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;padding:64px 80px;background:#fbfaf7;color:#1d1d1f;font-family:Inter;border-top:14px solid #b4531f">
+  <div style="display:flex;font-size:28px;font-weight:700;color:#6b6b70">{{site.title}}</div>
+  <div style="display:flex;flex-direction:column;justify-content:center;flex-grow:1">
+    <div style="display:block;line-clamp:3;font-size:72px;font-weight:700;line-height:1.1;letter-spacing:-1.5px">{{title}}</div>
+    {{#description}}<div style="display:block;line-clamp:2;margin-top:24px;font-size:30px;line-height:1.35;color:#6b6b70">{{description}}</div>{{/description}}
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:24px;color:#6b6b70">
+    <span>{{#dateLong}}{{dateLong}}{{/dateLong}}</span><span style="color:#b4531f">{{#tags}}#{{name}}  {{/tags}}</span>
+  </div>
+</div>`;

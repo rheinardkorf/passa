@@ -32,7 +32,7 @@ import {
   type UploadSync,
   type Version,
 } from '@passa/shared';
-import { isSource, REFUSING, render, RULES_FILE, rulesFile } from '@passa/render';
+import { type Card, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, rulesFile } from '@passa/render';
 import { type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
 
 export type Caller = { userId: string; ip?: string };
@@ -50,7 +50,20 @@ export type Deps = {
   // Uploads are scanned by GuardDuty Malware Protection (in AWS, not locally),
   // and publish checks each file's result first.
   malwareScan?: boolean;
+  // How long a publish spends drawing social cards (default 4 s), and how the
+  // rest are drawn just after it (in AWS, the cards function). Without it,
+  // they're drawn by the next change to the site.
+  cardBudgetMs?: number;
+  drawCardsLater?: (siteId: string, versionId: string) => Promise<void>;
 };
+
+// The social cards a version's pages name, and the fonts they're drawn with
+// (theme font paths, or none for the default card's).
+type CardJob = { cards: Card[]; fonts: string[] };
+const NO_CARDS: CardJob = { cards: [], fonts: [] };
+const CARD_BUDGET_MS = 4000;
+// The cards function's own budget, inside its 5-minute limit.
+export const CARDS_LATER_MS = 240_000;
 
 // A refusal the agent should see as it is. Anything else is reported generically.
 export class ToolError extends Error {}
@@ -208,7 +221,7 @@ export class Publisher {
   // Runs every check, then writes a complete new version: the files sent, plus
   // the base version's other files (copied within S3) unless removed, plus the
   // pages rendered from its sources (M3 R70), copied when they haven't changed.
-  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[] }> {
+  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[]; cards: CardJob }> {
     const { content, edited = [], base, remove = [] } = changes;
     const sent = !content
       ? { files: [], skipped: [] }
@@ -227,7 +240,7 @@ export class Publisher {
     const kept = (base?.files ?? []).filter((f) => f.role !== 'rendered' && !replaced.has(f.path.toLowerCase()));
     const authored = [...kept.map(withRole), ...checked.map((f) => withRole({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256 }))];
     const fresh = new Map(checked.map((f) => [f.path, f.content]));
-    const { rendered, problems } = await this.#render(changes, authored, fresh, kept);
+    const { rendered, problems, cards } = await this.#render(changes, authored, fresh, kept);
     const entries = [...authored, ...rendered.map((r) => r.entry)].sort((a, b) => a.path.localeCompare(b.path));
     this.#checkTotals(entries);
 
@@ -247,16 +260,16 @@ export class Publisher {
       await inBatches(copies, ({ from, to }) => this.#d.files.copyVersionFile(siteId, base.id, version.id, storedPath(from), storedPath(to)), COPY_PARALLEL);
     }
     if (content && 'uploadId' in content) await this.#d.files.deleteUpload(content.uploadId);
-    return { version, skipped, written: written.length, problems };
+    return { version, skipped, written: written.length, problems, cards };
   }
 
   // Renders the version's sources, if it has any: its pages, its feed, and the
   // read-only copy of its rules (M3 R88). Refused on a page that would replace a
   // file (R68), a missing layout (R79), or an unconfirmed page marked private
   // that the rules make public (R89); other problems are returned (R90).
-  async #render(changes: Changes, authored: FileEntry[], fresh: Map<string, Uint8Array>, kept: FileEntry[]): Promise<{ rendered: RenderedFile[]; problems: string[] }> {
+  async #render(changes: Changes, authored: FileEntry[], fresh: Map<string, Uint8Array>, kept: FileEntry[]): Promise<{ rendered: RenderedFile[]; problems: string[]; cards: CardJob }> {
     const sourceEntries = authored.filter((f) => f.role === 'source');
-    if (!sourceEntries.length) return { rendered: [], problems: [] };
+    if (!sourceEntries.length) return { rendered: [], problems: [], cards: NO_CARDS };
     const { base, site, rules, confirmPublic } = changes;
     const keptByPath = new Map(kept.map((f) => [f.path, f]));
     const sources = await Promise.all(sourceEntries.map(async (f) => {
@@ -265,7 +278,7 @@ export class Publisher {
       if (!bytes && base && before) bytes = await this.#d.files.getVersionFile(site.id, base.id, storedPath(before));
       return { path: f.path, content: Buffer.from(bytes ?? new Uint8Array()).toString('utf8') };
     }));
-    const result = render({ sources, rules, siteUrl: this.#url(site), siteTitle: site.title, files: authored.filter((f) => f.role !== 'source').map((f) => f.path) });
+    const result = this.#renderSources(site, rules, authored, sources);
     const refusing = result.problems.filter((p) => REFUSING.has(p.kind) && !(p.kind === 'access-private-made-public' && confirmPublic));
     if (refusing.length) {
       throw new PublishRefused(refusing.map((p) => p.kind === 'access-private-made-public'
@@ -288,7 +301,70 @@ export class Publisher {
         return { entry, content: f.content, unchanged: before.get(f.path)?.sha256 === f.sha256 };
       }),
       problems: result.problems.filter((p) => !REFUSING.has(p.kind)).map((p) => p.message),
+      cards: { cards: result.cards ?? [], fonts: result.cardFonts ?? [] },
     };
+  }
+
+  #renderSources(site: Pick<Site, 'id' | 'name' | 'title'>, rules: Rule[], entries: FileEntry[], sources: { path: string; content: string }[]) {
+    const plain = entries.filter((f) => f.role !== 'source');
+    const hashes = new Map(plain.map((f) => [f.path, f.sha256]));
+    return render({ sources, rules, siteUrl: this.#url(site), siteTitle: site.title, files: plain.map((f) => f.path), cards: { fileHash: (path) => hashes.get(path) } });
+  }
+
+  // Draws the cards a version names that the site doesn't have yet, for up to
+  // budget ms (M3 R95–R97). Cards are named by the hash of what draws them, so
+  // one that exists is never drawn again, whichever version named it.
+  async #drawCards(siteId: string, version: Version, job: CardJob, budget: number): Promise<{ drawn: number; waiting: number; failed: string[] }> {
+    const deadline = Date.now() + budget;
+    const unique = [...new Map(job.cards.map((c) => [c.hash, c])).values()];
+    if (!unique.length) return { drawn: 0, waiting: 0, failed: [] };
+    const have = await this.#d.files.listCards(siteId);
+    const missing = unique.filter((c) => !have.has(c.hash));
+    if (!missing.length) return { drawn: 0, waiting: 0, failed: [] };
+    const read = (path: string) => this.#d.files.getVersionFile(siteId, version.id, path);
+    const fonts = job.fonts.length
+      ? (await Promise.all(job.fonts.map(async (path) => cardFont(path, await read(path))))).filter((f) => f !== undefined)
+      : DEFAULT_CARD_FONTS;
+    const images = new Map<string, Uint8Array>();
+    let drawn = 0;
+    const failed: string[] = [];
+    for (const card of missing) {
+      if (Date.now() >= deadline) break;
+      try {
+        for (const path of card.images) if (!images.has(path)) images.set(path, await read(path));
+        await this.#d.files.putCard(siteId, card.hash, await drawCard(card.html, { fonts, image: (path) => images.get(path) }));
+        drawn++;
+      } catch (err) {
+        failed.push(`${card.path}: the card couldn't be drawn (${err instanceof Error ? err.message.split('\n')[0] : String(err)})`);
+      }
+    }
+    return { drawn, waiting: missing.length - drawn - failed.length, failed };
+  }
+
+  // After a version is current: draws its cards within the publish's budget,
+  // and hands the rest to drawCardsLater. Returns what the result reports.
+  async #finishCards(siteId: string, version: Version, job: CardJob) {
+    const { waiting, failed } = await this.#drawCards(siteId, version, job, this.#d.cardBudgetMs ?? CARD_BUDGET_MS);
+    if (waiting && this.#d.drawCardsLater) await this.#d.drawCardsLater(siteId, version.id);
+    return {
+      ...(waiting ? { cards_waiting: waiting, cards_note: this.#d.drawCardsLater ? 'The remaining social cards are being drawn now, and appear within a few minutes.' : 'The remaining social cards are drawn by the next change to the site.' } : {}),
+      ...(failed.length ? { card_problems: failed } : {}),
+    };
+  }
+
+  // The cards function: draws what a publish had no time for, if the version
+  // is still current (a newer one draws its own).
+  async drawPendingCards(siteId: string, versionId: string): Promise<{ drawn: number; waiting: number; failed: string[] }> {
+    const site = await this.#d.store.getSite(siteId);
+    if (!site || site.status !== 'active' || site.current !== versionId) return { drawn: 0, waiting: 0, failed: [] };
+    const version = await this.#version(site, versionId);
+    const authored = version.files.filter((f) => f.role !== 'rendered');
+    const sources = await Promise.all(authored.filter((f) => f.role === 'source').map(async (f) => ({
+      path: f.path, content: Buffer.from(await this.#d.files.getVersionFile(site.id, version.id, storedPath(f))).toString('utf8'),
+    })));
+    if (!sources.length) return { drawn: 0, waiting: 0, failed: [] };
+    const result = this.#renderSources(site, site.rules ?? [], authored, sources);
+    return this.#drawCards(site.id, version, { cards: result.cards ?? [], fonts: result.cardFonts ?? [] }, CARDS_LATER_MS);
   }
 
   // On a site with sources, anything that changes what its pages say (its
@@ -298,7 +374,7 @@ export class Publisher {
   // Returns undefined for a site without sources, which needs no new version.
   async #rerender(caller: Caller, site: Site, base: Version, change: { rules: Rule[]; confirmPublic: boolean; setRules?: boolean }) {
     if (!base.files.some((f) => f.role === 'source')) return undefined;
-    const { version, problems } = await this.#storeVersion(caller, site.id, { base, site, rules: change.rules, confirmPublic: change.confirmPublic });
+    const { version, problems, cards } = await this.#storeVersion(caller, site.id, { base, site, rules: change.rules, confirmPublic: change.confirmPublic });
     try {
       await this.#d.store.addVersion(caller.userId, version, site.current, change.setRules ? { rules: change.rules, seen: site.updatedAt } : undefined);
     } catch (err) {
@@ -306,7 +382,7 @@ export class Publisher {
       const now = await this.#d.store.getSite(site.id);
       throw new ToolError(now?.ownerId === caller.userId && now.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
     }
-    return { version_id: version.id, ...(problems.length ? { problems } : {}) };
+    return { version_id: version.id, ...(problems.length ? { problems } : {}), ...(await this.#finishCards(site.id, version, cards)) };
   }
 
   // Limits on the whole version, after changes are applied to the base.
@@ -370,7 +446,7 @@ export class Publisher {
   async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string; rules?: Rule[]; confirmPublic?: boolean }) {
     const change = input.rules ? this.#checkAccess([], input.rules, input.confirmPublic ?? false) : undefined;
     const siteId = newSiteId();
-    const { version, skipped, problems } = await this.#storeVersion(caller, siteId, {
+    const { version, skipped, problems, cards } = await this.#storeVersion(caller, siteId, {
       content: input.content, site: { id: siteId, title: input.title }, rules: input.rules ?? [], confirmPublic: input.confirmPublic ?? false,
     });
     const site: Site = {
@@ -388,7 +464,8 @@ export class Publisher {
     };
     await this.#d.store.createSite(site, version);
     await this.#sync(site.id);
-    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...(change ? this.#accessResult(site, change) : {}) };
+    const drawn = await this.#finishCards(site.id, version, cards);
+    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...drawn, ...(change ? this.#accessResult(site, change) : {}) };
   }
 
   // By default the new version is the current one with the changes applied.
@@ -440,7 +517,7 @@ export class Publisher {
       if (problems.length) throw new PublishRefused(problems);
     }
     const edited = base && edits.length ? await this.#applyEdits(base, edits) : [];
-    const { version, skipped, written, problems } = await this.#storeVersion(caller, site.id, {
+    const { version, skipped, written, problems, cards } = await this.#storeVersion(caller, site.id, {
       ...(input.content ? { content: input.content } : {}),
       ...(base ? { base } : {}),
       edited,
@@ -461,6 +538,7 @@ export class Publisher {
     }
     if (input.details) await this.#setDetails(caller, site, input.details);
     const updated = (await this.#sync(site.id)) ?? site;
+    const drawn = await this.#finishCards(site.id, version, cards);
     return {
       ...this.#summary(updated),
       files: version.files.length,
@@ -469,6 +547,7 @@ export class Publisher {
       removed: remove.length,
       skipped,
       ...(problems.length ? { problems } : {}),
+      ...drawn,
       ...(change ? this.#accessResult(updated, change) : {}),
     };
   }

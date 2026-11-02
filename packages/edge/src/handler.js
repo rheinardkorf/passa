@@ -20,6 +20,9 @@ const PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
 const HANDOFF = '/_passa/session';
 // Set on every request served from storage, as response.js reads it.
 const TIER = 'x-passa-tier';
+// A page's social card (render's CARD_FILE): served from the site's cards,
+// which live outside versions, under the page's own access rule.
+const CARD = /\/_card-([0-9a-f]{20})\.png$/;
 
 function respond(status, description, headers, extra) {
   const response = { statusCode: status, statusDescription: description, headers: {} };
@@ -118,7 +121,8 @@ function isPublic(rules, served) {
 // The tier header tells the viewer-response function (response.js) whether
 // the file is public. It's always set here, so a viewer can't send their own.
 function serve(request, siteId, version, served, open) {
-  request.uri = '/' + siteId + '/' + version + served;
+  const card = CARD.exec(served);
+  request.uri = card ? '/' + siteId + '/cards/' + card[1] + '.png' : '/' + siteId + '/' + version + served;
   request.querystring = {};
   request.cookies = {};
   request.headers[TIER] = { value: open ? 'public' : 'private' };

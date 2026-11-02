@@ -1,6 +1,9 @@
 // Site files in S3. Each version lives under its own immutable prefix,
 // <site-id>/<version-id>/<path>, so it can be cached forever and switching the
-// current version never needs an invalidation. Uploads go to a separate bucket
+// current version never needs an invalidation. Social cards live outside
+// versions, at <site-id>/cards/<hash>.png: a card is named by the hash of
+// everything that draws it, so it's never replaced, and every version shares it
+// (M3 R97). Uploads go to a separate bucket
 // that expires objects on its own.
 //
 // GuardDuty scans only the uploads bucket. New content for a version is
@@ -115,6 +118,24 @@ export class SiteFiles {
   async uploadScanStatus(uploadId: string, path: string): Promise<string | undefined> {
     const { TagSet = [] } = await this.#s3.send(new GetObjectTaggingCommand({ Bucket: this.#buckets.uploads, Key: `${uploadId}/${path}` }));
     return TagSet.find((tag) => tag.Key === SCAN_STATUS_TAG)?.Value;
+  }
+
+  // The hashes of the cards a site has.
+  async listCards(siteId: string): Promise<Set<string>> {
+    const hashes = new Set<string>();
+    const prefix = `${siteId}/cards/`;
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.#s3.send(new ListObjectsV2Command({ Bucket: this.#buckets.sites, Prefix: prefix, ContinuationToken }));
+      for (const { Key = '' } of page.Contents ?? []) hashes.add(Key.slice(prefix.length).replace(/\.png$/, ''));
+      ContinuationToken = page.NextContinuationToken;
+    } while (ContinuationToken);
+    return hashes;
+  }
+
+  // Cards are drawn by Passa from files that were scanned, so aren't staged.
+  async putCard(siteId: string, hash: string, png: Uint8Array): Promise<void> {
+    await this.#s3.send(new PutObjectCommand({ Bucket: this.#buckets.sites, Key: `${siteId}/cards/${hash}.png`, Body: png, ContentType: 'image/png', CacheControl: IMMUTABLE }));
   }
 
   deleteUpload(uploadId: string): Promise<void> {

@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { newSiteId, newVersionId } from '@passa/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { Publisher } from './publisher.ts';
 import { createServer } from './server.ts';
 import { addUser, type TestEnv, testEnv } from './testing/moto.ts';
 
@@ -32,7 +33,7 @@ type Folder = Record<string, string>;
 type Listed = { path: string; sha256: string; role?: string; rendered_from?: string };
 const filesOf = (folder: Folder) => Object.entries(folder).map(([path, content]) => ({ path, content }));
 const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
-const PUBLIC = [{ path: '/', tier: 'public' }];
+const PUBLIC = [{ path: '/', tier: 'public' as const }];
 
 const site: Folder = {
   'index.md': '---\ntitle: Home\n---\n# Welcome\n\nSee [[Plan]] and [about](about.html).',
@@ -280,5 +281,66 @@ describe('changes that re-render (M3 R71, R84, R85)', () => {
     const refused = await call('rollback', { site_id: r.site_id, version_id: first });
     expect(refused.text).toContain('diary.md says access: private');
     expect((await call('rollback', { site_id: r.site_id, version_id: first, confirm_public: true })).isError).toBe(false);
+  });
+});
+
+describe('social cards (M3 R94–R97)', () => {
+  const posts: Folder = {
+    'index.md': '# Home',
+    'post.md': '---\ntitle: A post worth sharing\ndate: 2026-10-02\n---\nHello.',
+  };
+  const cardsOf = async (siteId: unknown) => {
+    const { Contents = [] } = await env.s3.send(new ListObjectsV2Command({ Bucket: env.buckets.sites, Prefix: `${String(siteId)}/cards/` }));
+    return Contents.map((c) => c.Key ?? '');
+  };
+  const cardUrl = (html: string | undefined) => /og:image" content="[^"]*\/(_card-[0-9a-f]{20})\.png"/.exec(html ?? '')?.[1];
+
+  it('draws a card for each public page, outside versions, and names it in the page', async () => {
+    const r = (await call('publish', { title: 'Cards', files: filesOf(posts), rules: PUBLIC, confirm_public: true })).json();
+    expect(r.cards_waiting).toBeUndefined();
+    const card = cardUrl(await read(r.site_id, r.current_version, 'post/index.html'));
+    expect(card).toBeDefined();
+    const stored = await cardsOf(r.site_id);
+    expect(stored).toContain(`${String(r.site_id)}/cards/${String(card).slice('_card-'.length)}.png`);
+    const { ContentType, CacheControl } = await env.s3.send(new GetObjectCommand({ Bucket: env.buckets.sites, Key: stored[0] }));
+    expect([ContentType, CacheControl]).toEqual(['image/png', 'public, max-age=31536000, immutable']);
+
+    // An update that doesn't change what a card shows draws nothing new.
+    const before = stored.length;
+    await call('update', { site_id: r.site_id, files: [{ path: 'style.css', content: 'p{}' }] });
+    expect((await cardsOf(r.site_id)).length).toBe(before);
+    // A new title is a new card; the old one stays for earlier versions.
+    const renamed = (await call('update', { site_id: r.site_id, edits: [{ path: 'post.md', old: 'A post worth', new: 'A post very much worth' }] })).json();
+    expect(cardUrl(await read(r.site_id, renamed.current_version, 'post/index.html'))).not.toBe(card);
+    expect((await cardsOf(r.site_id)).length).toBe(before + 1);
+  });
+
+  it('draws no cards for a private site', async () => {
+    const r = (await call('publish', { title: 'Private cards', files: filesOf(posts) })).json();
+    expect(await cardsOf(r.site_id)).toEqual([]);
+    expect(await read(r.site_id, r.current_version, 'post/index.html')).not.toContain('og:image');
+  });
+
+  it('draws what a publish had no time for afterwards', async () => {
+    const later: string[] = [];
+    const publisher = new Publisher({ ...env, cardBudgetMs: 0, drawCardsLater: (siteId, versionId) => Promise.resolve(void later.push(`${siteId}/${versionId}`)) });
+    const enc = (text: string) => new TextEncoder().encode(text);
+    const r = await publisher.publish({ userId: 'alice' }, { title: 'Later', content: { files: Object.entries(posts).map(([path, text]) => ({ path, content: enc(text) })) }, rules: PUBLIC, confirmPublic: true });
+    expect(r).toMatchObject({ cards_waiting: 2 });
+    expect(later).toEqual([`${r.site_id}/${r.current_version}`]);
+    expect(await publisher.drawPendingCards(r.site_id, r.current_version)).toEqual({ drawn: 2, waiting: 0, failed: [] });
+    expect(await cardsOf(r.site_id)).toHaveLength(2);
+    // Nothing left to draw, and nothing for a version that's no longer current.
+    expect(await publisher.drawPendingCards(r.site_id, r.current_version)).toMatchObject({ drawn: 0 });
+    expect(await publisher.drawPendingCards(r.site_id, newVersionId(1))).toMatchObject({ drawn: 0 });
+  });
+
+  it('refuses a theme card that names an image from elsewhere', async () => {
+    const r = await call('publish', {
+      title: 'Remote card', rules: PUBLIC, confirm_public: true,
+      files: filesOf({ ...posts, '_layouts/card.html': '<div style="display:flex"><img src="https://example.org/x.png" width="10" height="10"></div>' }),
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('cards can only use the site\'s own images');
   });
 });

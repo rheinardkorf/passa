@@ -104,9 +104,9 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 ### Social cards
 
 - **R94** Every page gets its absolute address (`absoluteUrl`) and an absolute `socialImage`: front matter `socialImage`, else the page's card (R95), else `cover`, else `hero.image`. The default theme writes Open Graph and Twitter tags from them; the theme guide tells themes to.
-- **R95** A theme's `_layouts/card.html` is a Mustache template with the page's values, written for Satori's subset of HTML and CSS. Passa renders it for every public page into a 1200×630 PNG served beside the page (crawlers can't sign in, so private pages get none). The default theme has a card. A card that fails to render is listed in the publish result, and the page falls back to `cover` or no image.
-- **R96** Cards use only the theme's fonts (`.woff`, `.ttf` or `.otf` in the theme, with a default in the default theme) and the site's own images: every image a card names is embedded from the version's files before rendering, and nothing is fetched or read from anywhere else.
-- **R97** A card is drawn again only when its inputs change (the page's values it uses, the template and its fonts and images); otherwise the previous version's card is copied (R70).
+- **R95** A theme's `_layouts/card.html` is a Mustache template with the page's values, written for Satori's subset of HTML and CSS. Passa renders it for every public page without its own `socialImage` into a 1200×630 PNG, served beside the page as `_card-<hash>.png` under the page's own access rule (crawlers can't sign in, so private pages get none). The default theme has a card. A card that fails to draw is listed in the publish result. A publish draws cards for up to about 4 seconds; the rest are drawn just after it by a separate function, and the result says how many are waiting.
+- **R96** Cards use only the theme's fonts (`.woff`, `.ttf` or `.otf` in `_layouts/fonts/`, named `Family__weight__style`; the default card has its own) and the site's own images: every image a card names is embedded from the version's files before drawing, and nothing is fetched or read from anywhere else. A card naming any other image, or a theme card without fonts, refuses the publish. Names starting `_card-` are reserved.
+- **R97** Cards live outside versions, one store per site, each named by the hash of everything that draws it (its HTML, which holds the page's values it uses, and the content of its fonts and images). A card that exists is never drawn again or copied, whichever version names it; a change to anything it shows gives it a new name. Deleting the site deletes its cards.
 - **R98** `theme_guide` includes the card guide: the values, Satori's CSS rules and limits, fonts, and what makes a good card.
 
 ## Security and quality requirements
@@ -192,8 +192,7 @@ Both done before the build (a throwaway function in dev, Node 24 on ARM):
 1. **Cold start and render time in Lambda:** the render bundle adds 150–200 ms to a cold start. At 1769 MB, the real blog renders in 0.4 s cold and 2,000 pages in about 3 s, inside the limit (see Starting values).
 2. **`theme_guide` size:** the guide, default layouts and widget templates are about 22,000 characters (about 6,000 tokens), comfortably one tool result.
 
-Still to check, before the card step:
-3. **Cards in Lambda:** Satori and resvg (WebAssembly) per card at 1769 MB, and the bundle size. Locally a card takes 25–110 ms depending on its CSS (gradients and patterns cost most); with R97's caching only new and changed pages pay, but a first publish of a large public site may need cards drawn just after the publish.
+3. **Cards in Lambda** (done before the card step, the same way): at 1769 MB, Satori and resvg (WebAssembly) add about 1.9 MB of JavaScript and a 2.5 MB WebAssembly file (1.8 MB zipped), about 130 ms to load the WebAssembly and fonts, and about 260 MB of memory. A warm card takes 40–90 ms with flat colours and type, and 140–220 ms with gradients and patterns; the first card after a cold start takes about 650 ms. So one publish can draw a few dozen cards, not hundreds: a first publish of a large public site can't draw every card in the request.
 
 Checked in the spikes: Mermaid renders under the site CSP with no `connect-src`; rendering is linear at about 0.56 ms a page; the real blog renders with all its links; agents write working themes and decks from the guide; the visibility tests pass across public, private, shared and paid tiers.
 

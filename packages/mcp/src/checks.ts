@@ -92,6 +92,7 @@ export function checkPath(path: string): PathResult {
   }
   if (path.toLowerCase() === '_passa/access.yml') return { ok: true, skip: true };
   if (segments[0]?.toLowerCase() === '_passa') return { ok: false, problem: `${shown}: /_passa/ is reserved` };
+  if (segments.some((s) => /^_card-/i.test(s))) return { ok: false, problem: `${shown}: names starting _card- are reserved for social cards` };
   if (segments.some((s) => s.startsWith('.'))) return { ok: true, skip: true };
   return { ok: true, skip: false };
 }

@@ -123,6 +123,16 @@ describe('the passa command', () => {
     expect(existsSync(join(other, 'keep.txt'))).toBe(true);
   });
 
+  it('render draws a social card beside each page, as Passa would', () => {
+    const root = site({ 'a.md': '---\ntitle: Card test\naccess: public\n---\nHello.' });
+    const out = mkdtempSync(join(tmpdir(), 'passa-out-'));
+    const r = run('render', root, '--out', out);
+    expect(r.stdout).toMatch(/with \d+ social cards?/);
+    const page = readFileSync(join(out, 'a/index.html'), 'utf8');
+    const card = /og:image" content="http:\/\/localhost:4321\/(a\/_card-[0-9a-f]{20}\.png)"/.exec(page)?.[1] ?? '';
+    expect(readFileSync(join(out, card)).subarray(1, 4).toString()).toBe('PNG');
+  });
+
   it('theme guide prints the contract', () => {
     expect(run('theme', 'guide').stdout).toContain('# Passa theme guide');
   });
