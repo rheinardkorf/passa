@@ -80,6 +80,11 @@ const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 export type PathResult = { ok: true; skip: boolean } | { ok: false; problem: string };
 
+// A social card drawn outside Passa (such as by passa render), sent at the path
+// Passa serves it: it goes to the site's cards, not the version (M3 R97).
+const CARD_PATH = /(?:^|\/)_card-([0-9a-f]{20})\.png$/;
+export const cardHash = (path: string) => CARD_PATH.exec(path)?.[1];
+
 // Validates one path. Dotfiles (any segment starting with ".") are skipped,
 // not refused, so agents can publish a folder as it is, and so is the rules
 // file a folder taken out of Passa carries (M3 R88): only set_access changes access.
@@ -92,6 +97,7 @@ export function checkPath(path: string): PathResult {
   }
   if (path.toLowerCase() === '_passa/access.yml') return { ok: true, skip: true };
   if (segments[0]?.toLowerCase() === '_passa') return { ok: false, problem: `${shown}: /_passa/ is reserved` };
+  if (cardHash(path)) return { ok: true, skip: false };
   if (segments.some((s) => /^_card-/i.test(s))) return { ok: false, problem: `${shown}: names starting _card- are reserved for social cards` };
   if (segments.some((s) => s.startsWith('.'))) return { ok: true, skip: true };
   return { ok: true, skip: false };
@@ -134,7 +140,8 @@ export function checkManifest(files: { path: string; size: number }[], limits: L
     keep.add(path);
   }
   if (keep.size === 0 && problems.length === 0) problems.push('no files to publish');
-  if (keep.size > limits.files) problems.push(`more than ${limits.files} files`);
+  // Cards aren't site files, so they don't count.
+  if ([...keep].filter((p) => !cardHash(p)).length > limits.files) problems.push(`more than ${limits.files} files`);
   if (total > totalLimit) problems.push(`larger than the ${totalLimit}-byte total limit`);
   if (problems.length) throw new PublishRefused(problems);
   return { keep, skipped };

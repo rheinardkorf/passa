@@ -145,6 +145,8 @@ A fenced block whose name is a widget renders through a template instead of show
 
 When a public page is shared (Slack, Bluesky, LinkedIn, iMessage), the preview shows its social card: a 1200×630 image. Passa draws one for every public page without its own \`socialImage\`, from the theme's \`_layouts/card.html\` or the built-in card, and gives the page its URL as \`socialImage\`. Private pages get none: crawlers can't sign in. A card is drawn again only when something it shows changes.
 
+\`passa render\` draws the same cards locally, as \`_card-<hash>.png\` beside each page. Send them with the site and Passa keeps the ones its pages name, so it needn't draw them. The names match when the local build matches what Passa renders: the same files, the site's title in \`_site.yml\`, and \`--site-url\` set to the site's address if the card shows a URL.
+
 ### The template
 
 \`_layouts/card.html\` is a Mustache template with the same values as the page's layout (\`title\`, \`description\`, \`excerpt\`, \`kind\`, \`dateLong\`, \`year\`, \`readingTime\`, \`tags\`, \`cover\`, \`hero\`, \`site.*\`, \`page.*\` and any front matter). It's one HTML element, 1200×630, written for **Satori**, which lays out HTML and CSS without a browser, with rules a browser doesn't have:

@@ -32,8 +32,8 @@ import {
   type UploadSync,
   type Version,
 } from '@passa/shared';
-import { type Card, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, rulesFile } from '@passa/render';
-import { type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
+import { type Card, CARD_HEIGHT, CARD_WIDTH, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, rulesFile } from '@passa/render';
+import { cardHash, type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
 
 export type Caller = { userId: string; ip?: string };
 
@@ -60,6 +60,9 @@ export type Deps = {
 // The social cards a version's pages name, and the fonts they're drawn with
 // (theme font paths, or none for the default card's).
 type CardJob = { cards: Card[]; fonts: string[] };
+// What happened to cards sent with a site.
+type SentCards = { stored: number; skipped: string[] };
+const sentCardsResult = (s: SentCards) => ({ ...(s.stored ? { cards_stored: s.stored } : {}), ...(s.skipped.length ? { cards_skipped: s.skipped } : {}) });
 const NO_CARDS: CardJob = { cards: [], fonts: [] };
 const CARD_BUDGET_MS = 4000;
 // The cards function's own budget, inside its 5-minute limit.
@@ -221,11 +224,14 @@ export class Publisher {
   // Runs every check, then writes a complete new version: the files sent, plus
   // the base version's other files (copied within S3) unless removed, plus the
   // pages rendered from its sources (M3 R70), copied when they haven't changed.
-  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[]; cards: CardJob }> {
+  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[]; cards: CardJob; sentCards: SentCards }> {
     const { content, edited = [], base, remove = [] } = changes;
-    const sent = !content
+    const received = !content
       ? { files: [], skipped: [] }
       : 'files' in content ? this.#checkInline(content.files) : await this.#takeUpload(caller, content.uploadId, siteId);
+    // Cards sent with the site go to its cards, not the version.
+    const sentCardFiles = received.files.filter((f) => cardHash(f.path));
+    const sent = { ...received, files: received.files.filter((f) => !cardHash(f.path)) };
     const editedPaths = new Set(edited.map((f) => f.path.toLowerCase()));
     const overlap = sent.files.filter((f) => editedPaths.has(f.path.toLowerCase())).map((f) => `${f.path}: both sent and edited`);
     if (overlap.length) throw new PublishRefused(overlap);
@@ -241,6 +247,7 @@ export class Publisher {
     const authored = [...kept.map(withRole), ...checked.map((f) => withRole({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256 }))];
     const fresh = new Map(checked.map((f) => [f.path, f.content]));
     const { rendered, problems, cards } = await this.#render(changes, authored, fresh, kept);
+    const sentCards = await this.#storeSentCards(siteId, sentCardFiles, cards);
     const entries = [...authored, ...rendered.map((r) => r.entry)].sort((a, b) => a.path.localeCompare(b.path));
     this.#checkTotals(entries);
 
@@ -260,7 +267,7 @@ export class Publisher {
       await inBatches(copies, ({ from, to }) => this.#d.files.copyVersionFile(siteId, base.id, version.id, storedPath(from), storedPath(to)), COPY_PARALLEL);
     }
     if (content && 'uploadId' in content) await this.#d.files.deleteUpload(content.uploadId);
-    return { version, skipped, written: written.length, problems, cards };
+    return { version, skipped, written: written.length, problems, cards, sentCards };
   }
 
   // Renders the version's sources, if it has any: its pages, its feed, and the
@@ -309,6 +316,28 @@ export class Publisher {
     const plain = entries.filter((f) => f.role !== 'source');
     const hashes = new Map(plain.map((f) => [f.path, f.sha256]));
     return render({ sources, rules, siteUrl: this.#url(site), siteTitle: site.title, files: plain.map((f) => f.path), cards: { fileHash: (path) => hashes.get(path) } });
+  }
+
+  // Cards drawn outside Passa (passa render), sent at the paths Passa serves
+  // them: stored if a page in this version names them and the site doesn't
+  // have them yet, so Passa needn't draw them. Passa can't tell what a card
+  // shows from its pixels, so, like socialImage, it's the owner's choice.
+  async #storeSentCards(siteId: string, files: InputFile[], job: CardJob): Promise<SentCards> {
+    if (!files.length) return { stored: 0, skipped: [] };
+    const checked = await checkContent(files);
+    const wrongSize = checked.filter((f) => f.content.byteLength < 24 || Buffer.from(f.content).readUInt32BE(16) !== CARD_WIDTH || Buffer.from(f.content).readUInt32BE(20) !== CARD_HEIGHT);
+    if (wrongSize.length) throw new PublishRefused(wrongSize.map((f) => `${f.path}: a card must be a ${CARD_WIDTH}×${CARD_HEIGHT} PNG`));
+    const named = new Set(job.cards.map((c) => c.hash));
+    const have = await this.#d.files.listCards(siteId);
+    const skipped: string[] = [];
+    const store: CheckedFile[] = [];
+    for (const f of checked) {
+      const hash = cardHash(f.path) ?? '';
+      if (!named.has(hash)) skipped.push(`${f.path}: no public page in this version names this card`);
+      else if (!have.has(hash) && !store.some((s) => cardHash(s.path) === hash)) store.push(f);
+    }
+    await inBatches(store, (f) => this.#d.files.putCard(siteId, cardHash(f.path) ?? '', f.content, { staged: true }));
+    return { stored: store.length, skipped };
   }
 
   // Draws the cards a version names that the site doesn't have yet, for up to
@@ -446,7 +475,7 @@ export class Publisher {
   async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string; rules?: Rule[]; confirmPublic?: boolean }) {
     const change = input.rules ? this.#checkAccess([], input.rules, input.confirmPublic ?? false) : undefined;
     const siteId = newSiteId();
-    const { version, skipped, problems, cards } = await this.#storeVersion(caller, siteId, {
+    const { version, skipped, problems, cards, sentCards } = await this.#storeVersion(caller, siteId, {
       content: input.content, site: { id: siteId, title: input.title }, rules: input.rules ?? [], confirmPublic: input.confirmPublic ?? false,
     });
     const site: Site = {
@@ -465,7 +494,7 @@ export class Publisher {
     await this.#d.store.createSite(site, version);
     await this.#sync(site.id);
     const drawn = await this.#finishCards(site.id, version, cards);
-    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...drawn, ...(change ? this.#accessResult(site, change) : {}) };
+    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...sentCardsResult(sentCards), ...drawn, ...(change ? this.#accessResult(site, change) : {}) };
   }
 
   // By default the new version is the current one with the changes applied.
@@ -517,7 +546,7 @@ export class Publisher {
       if (problems.length) throw new PublishRefused(problems);
     }
     const edited = base && edits.length ? await this.#applyEdits(base, edits) : [];
-    const { version, skipped, written, problems, cards } = await this.#storeVersion(caller, site.id, {
+    const { version, skipped, written, problems, cards, sentCards } = await this.#storeVersion(caller, site.id, {
       ...(input.content ? { content: input.content } : {}),
       ...(base ? { base } : {}),
       edited,
@@ -547,6 +576,7 @@ export class Publisher {
       removed: remove.length,
       skipped,
       ...(problems.length ? { problems } : {}),
+      ...sentCardsResult(sentCards),
       ...drawn,
       ...(change ? this.#accessResult(updated, change) : {}),
     };
@@ -814,11 +844,14 @@ export class Publisher {
       // A folder holds sources and plain files; Passa renders the rest (M3 R87).
       const authored = base.files.filter((f) => f.role !== 'rendered');
       const current = new Map(authored.map((f) => [f.path, f]));
-      const same = (f: { path: string; size: number; sha256?: string }) => current.get(f.path)?.sha256 === f.sha256 && current.get(f.path)?.size === f.size;
+      // Cards the site already has are unchanged too, wherever the folder has them.
+      const cards = files.some((f) => cardHash(f.path)) ? await this.#d.files.listCards(site.id) : new Set<string>();
+      const same = (f: { path: string; size: number; sha256?: string }) =>
+        cards.has(cardHash(f.path) ?? '') || (current.get(f.path)?.sha256 === f.sha256 && current.get(f.path)?.size === f.size);
       const inFolder = new Set(files.map((f) => f.path));
       const remove = authored.filter((f) => !inFolder.has(f.path)).map((f) => f.path);
-      unchanged = files.filter((f) => f.sha256 && same(f)).length;
-      files = files.filter((f) => !f.sha256 || !same(f));
+      unchanged = files.filter((f) => (f.sha256 || cardHash(f.path)) && same(f)).length;
+      files = files.filter((f) => !(f.sha256 || cardHash(f.path)) || !same(f));
       if (!files.length && !remove.length) return { site_id: site.id, up_to_date: true, version: base.id, skipped };
       sync = { siteId: site.id, baseVersion: base.id, remove };
     }

@@ -146,7 +146,8 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
   const sizes = `Limits: ${limits.files} files, ${size(limits.file)} per file, ${size(limits.site)} per site.`;
   const markdown = 'Markdown files (.md) are rendered to pages when published: index.md becomes /, notes/plan.md becomes /notes/plan/, with a default theme, lists of pages, tag pages and, for public dated pages, a feed. '
     + 'Front matter sets the title, date, tags, layout and more; wikilinks like [[Plan]] link pages by title; fenced blocks such as ```chart or ```cards render as widgets. '
-    + 'A site can mix Markdown with HTML and other files. Front matter access never makes a page public: only rules do. Call theme_guide before writing a theme (_layouts/), widgets or front matter beyond the basics.';
+    + 'A site can mix Markdown with HTML and other files. Front matter access never makes a page public: only rules do. Call theme_guide before writing a theme (_layouts/), widgets or front matter beyond the basics. '
+    + 'Public pages get social cards, drawn by Passa; cards already drawn by passa render (the _card-<hash>.png files beside its pages) can be sent with the site, and Passa keeps those its pages name instead of drawing them.';
   const kept = `Every version is kept for ${retention.versionDays} days${retention.monthEndMonths ? `, then only the last version of each month, for ${retention.monthEndMonths} months` : ''}; the current version is always kept.`;
   return {
     publish: `Publish files as a new site. It's private unless you pass rules: only you can open it, after signing in. Send files inline up to ${inline} in total; for larger sites, or files you can read from disk (such as images), use begin_upload instead. ${markdown} The result lists any problems the render found, such as links to missing pages. ${sizes} A Markdown file and the page made from it count as one file.`,

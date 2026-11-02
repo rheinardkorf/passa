@@ -133,9 +133,17 @@ export class SiteFiles {
     return hashes;
   }
 
-  // Cards are drawn by Passa from files that were scanned, so aren't staged.
-  async putCard(siteId: string, hash: string, png: Uint8Array): Promise<void> {
-    await this.#s3.send(new PutObjectCommand({ Bucket: this.#buckets.sites, Key: `${siteId}/cards/${hash}.png`, Body: png, ContentType: 'image/png', CacheControl: IMMUTABLE }));
+  // Cards Passa draws come from files that were scanned, so aren't staged; a
+  // card sent with a site is staged and scanned like any new file.
+  async putCard(siteId: string, hash: string, png: Uint8Array, options: { staged?: boolean } = {}): Promise<void> {
+    const key = `${siteId}/cards/${hash}.png`;
+    if (!options.staged) {
+      await this.#s3.send(new PutObjectCommand({ Bucket: this.#buckets.sites, Key: key, Body: png, ContentType: 'image/png', CacheControl: IMMUTABLE }));
+      return;
+    }
+    const staged = `${STAGED_PREFIX}${key}`;
+    await this.#s3.send(new PutObjectCommand({ Bucket: this.#buckets.uploads, Key: staged, Body: png, ContentType: 'image/png', CacheControl: IMMUTABLE }));
+    await this.#s3.send(new CopyObjectCommand({ Bucket: this.#buckets.sites, Key: key, CopySource: encodeURI(`${this.#buckets.uploads}/${staged}`), TaggingDirective: 'REPLACE' }));
   }
 
   deleteUpload(uploadId: string): Promise<void> {

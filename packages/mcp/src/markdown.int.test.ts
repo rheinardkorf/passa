@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { DEFAULT_CARD_FONTS, drawCard, render } from '@passa/render';
 import { newSiteId, newVersionId } from '@passa/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Publisher } from './publisher.ts';
@@ -342,5 +343,53 @@ describe('social cards (M3 R94–R97)', () => {
     });
     expect(r.isError).toBe(true);
     expect(r.text).toContain('cards can only use the site\'s own images');
+  });
+});
+
+describe('cards drawn outside Passa (M3 R97)', () => {
+  const posts: Folder = { 'index.md': '# Home', 'post.md': '---\ntitle: Drawn at home\n---\nHello.' };
+  const enc = (text: string) => new TextEncoder().encode(text);
+  let publisher: Publisher;
+  beforeAll(() => {
+    publisher = new Publisher({ ...env, cardBudgetMs: 0 }); // Passa draws nothing itself
+  });
+  const alice = { userId: 'alice' };
+  // What passa render would make: the same render, drawn locally.
+  // The site title is on the card, so the local build uses the same one (a real site sets it in _site.yml).
+  const local = (siteUrl: string, siteTitle: string) =>
+    render({ sources: Object.entries(posts).map(([path, content]) => ({ path, content })), rules: PUBLIC, siteUrl, siteTitle, cards: { fileHash: () => undefined } }).cards ?? [];
+  const png = (html: string) => drawCard(html, { fonts: DEFAULT_CARD_FONTS, image: () => undefined });
+
+  it('stores the cards a version names, so Passa needn\'t draw them, and skips the rest', async () => {
+    const r = await publisher.publish(alice, { title: 'Home-drawn', content: { files: Object.entries(posts).map(([path, text]) => ({ path, content: enc(text) })) }, rules: PUBLIC, confirmPublic: true });
+    expect(r).toMatchObject({ cards_waiting: 2 });
+    const cards = local(r.url, 'Home-drawn');
+    // The local build names the same cards as Passa.
+    expect(await read(r.site_id, r.current_version, 'post/index.html')).toContain(cards.find((c) => c.path.startsWith('post/'))?.path);
+
+    const sent = await Promise.all(cards.map(async (c) => ({ path: c.path, content: await png(c.html) })));
+    const stray = { path: 'post/_card-ffffffffffffffffffff.png', content: sent[0]?.content ?? new Uint8Array() };
+    const u = await publisher.update(alice, { siteId: r.site_id, content: { files: [...sent, stray] } });
+    expect(u).toMatchObject({ cards_stored: 2, cards_skipped: ['post/_card-ffffffffffffffffffff.png: no public page in this version names this card'] });
+    expect(u).not.toHaveProperty('cards_waiting');
+    // Cards aren't site files.
+    expect((await listed(r.site_id)).has(cards[0]?.path ?? '')).toBe(false);
+    const { Contents = [] } = await env.s3.send(new ListObjectsV2Command({ Bucket: env.buckets.sites, Prefix: `${r.site_id}/cards/` }));
+    expect(Contents).toHaveLength(2);
+    // Staged for scanning, like any new file.
+    const staged = await env.s3.send(new ListObjectsV2Command({ Bucket: env.buckets.uploads, Prefix: `inline/${r.site_id}/cards/` }));
+    expect(staged.Contents).toHaveLength(2);
+
+    // A folder sync with the cards in it uploads none of them again.
+    const folder = Object.entries(posts).map(([path, text]) => ({ path, size: enc(text).byteLength, sha256: sha256(text) }));
+    const begun = await publisher.beginUpload(alice, { siteId: r.site_id, files: [...folder, ...sent.map((c) => ({ path: c.path, size: c.content.byteLength }))] });
+    expect(begun).toMatchObject({ up_to_date: true });
+  });
+
+  it('refuses a card that isn\'t a 1200×630 PNG', async () => {
+    const r = await publisher.publish(alice, { title: 'Wrong card', content: { files: Object.entries(posts).map(([path, text]) => ({ path, content: enc(text) })) }, rules: PUBLIC, confirmPublic: true });
+    const card = local(r.url, 'Wrong card')[0];
+    const tiny = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    await expect(publisher.update(alice, { siteId: r.site_id, content: { files: [{ path: card?.path ?? '', content: new Uint8Array(tiny) }] } })).rejects.toThrow('a card must be a 1200×630 PNG');
   });
 });

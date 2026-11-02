@@ -37,8 +37,10 @@ describe('paths', () => {
     expect(checkPath('_passa/src/index.md').ok).toBe(false);
   });
 
-  it('reserves names starting _card- for social cards (M3 R95)', () => {
-    expect(checkPath('post/_card-0123456789abcdef0123.png').ok).toBe(false);
+  it('reserves names starting _card- for social cards, accepting only cards themselves (M3 R95, R97)', () => {
+    expect(checkPath('post/_card-0123456789abcdef0123.png')).toEqual({ ok: true, skip: false });
+    expect(checkPath('post/_card-0123456789abcdef0123.png/x.html').ok).toBe(false);
+    expect(checkPath('_card-short.png').ok).toBe(false);
     expect(checkPath('_CARD-x.png').ok).toBe(false);
     expect(checkPath('my_card-x.png').ok).toBe(true);
   });
