@@ -15,6 +15,11 @@ export type BuildOptions = {
   confirmPublic?: boolean;
   // A folder inside the site to leave out (the output, when it's there).
   ignore?: string;
+  // A deployment's rules and title, to build exactly what it will publish
+  // (such as for drawing its cards): the rules win over any rules file, and
+  // the title is used when _site.yml doesn't set one, as Passa does.
+  rules?: Rule[];
+  siteTitle?: string;
 };
 
 export type Build = {
@@ -44,13 +49,19 @@ const SKIP = new Set(['node_modules']);
 
 const toPosix = (p: string) => p.split(sep).join('/');
 
-function walk(root: string, ignore?: string): string[] {
+// What passa render writes into its output folder, so a build is never
+// mistaken for the site (and only a folder it built is ever replaced).
+export const BUILD_MARKER = '.passa-build';
+
+// A site folder's files: no dotfiles, node_modules, or folders passa render built.
+export function walk(root: string, ignore?: string): string[] {
   const out: string[] = [];
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
       const full = join(dir, entry.name);
       if (ignore && (full === ignore || full.startsWith(ignore + sep))) continue;
+      if (entry.isDirectory() && existsSync(join(full, BUILD_MARKER))) continue;
       if (entry.isDirectory()) visit(full);
       else if (entry.isFile()) out.push(toPosix(relative(root, full)));
     }
@@ -104,10 +115,10 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
   // How access is decided (R93): the rules file wins; without one, only pages
   // marked access: public are built; --include-private builds everything.
   const hasRules = existsSync(join(root, RULES_FILE));
-  const access: Build['access'] = options.includePrivate ? 'everything' : hasRules ? 'rules' : 'front-matter';
+  const access: Build['access'] = options.includePrivate ? 'everything' : hasRules || options.rules ? 'rules' : 'front-matter';
   let rules: Rule[] = [{ path: '/', tier: 'public' }];
   let skippedPages: string[] = [];
-  if (access === 'rules') rules = readRules(read(RULES_FILE));
+  if (access === 'rules') rules = options.rules ?? readRules(read(RULES_FILE));
   if (access === 'front-matter') {
     skippedPages = sources.filter((s) => markdown(s) && String(frontMatter(s.content).access ?? '').toLowerCase() !== 'public').map((s) => s.path);
     sources = sources.filter((s) => !skippedPages.includes(s.path));
@@ -119,7 +130,7 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
     if (!hashes.has(path)) hashes.set(path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex'));
     return hashes.get(path);
   };
-  const result = render({ sources, rules, siteUrl, siteTitle: typeof siteYml.title === 'string' ? siteYml.title : 'Site', files: plain, cards: { fileHash } });
+  const result = render({ sources, rules, siteUrl, siteTitle: typeof siteYml.title === 'string' ? siteYml.title : options.siteTitle ?? 'Site', files: plain, cards: { fileHash } });
   let pages = result.pages;
   let feed = result.feed;
   if (access === 'rules') {

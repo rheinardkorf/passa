@@ -1,6 +1,6 @@
 // The CLI against the whole local stack (Moto, auth, MCP, the proxy): a real
 // sign-in through the browser, driven by a scripted browser, then tool calls.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Browser, type Stack, startStack } from '@passa/edge/testing';
@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { accessToken, LoginNeeded, login, logout, readCredentials } from './auth.ts';
 import { request } from './http.ts';
 import { callTool } from './mcp.ts';
+import { deleteSite, publishFolder, rollback, setAccess, setName, syncFolder } from './deploy.ts';
 import { pull, readLink, resolveTarget } from './sites.ts';
 
 let stack: Stack;
@@ -140,5 +141,95 @@ describe('reading sites (R103–R105)', () => {
     writeFileSync(join(folder, 'notes/mine.md'), 'mine');
     await expect(pull(await resolveTarget(site.site_id, { dir }), folder, { dir })).rejects.toThrow(/has files and isn't linked/);
     expect(readFileSync(join(folder, 'notes/mine.md'), 'utf8')).toBe('mine');
+  });
+});
+
+describe('changing sites (R106–R110)', () => {
+  // A folder of files, written fresh.
+  const folderWith = (files: Record<string, string>) => {
+    const folder = mkdtempSync(join(tmpdir(), 'passa-site-'));
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(join(folder, path, '..'), { recursive: true });
+      writeFileSync(join(folder, path), content);
+    }
+    return folder;
+  };
+  // Answers questions, and remembers them.
+  const answering = (answer: boolean) => {
+    const asked: string[] = [];
+    return { asked, ask: (q: string) => Promise.resolve(void asked.push(q)).then(() => answer) };
+  };
+
+  it('publishes a folder privately, then syncs changes, asking before it removes anything', async () => {
+    const { dir } = await signedIn();
+    const folder = folderWith({ 'index.md': '# Home', 'about.md': '# About', 'old.md': '# Old', '.secret': 'never sent' });
+    const published = await publishFolder(server, folder, 'From a folder', { dir, ask: answering(true).ask });
+    expect(published).toMatchObject({ access: 'private', title: 'From a folder' });
+    expect(readLink(folder)).toMatchObject({ site: published.site_id, version: published.current_version });
+    await expect(publishFolder(server, folder, 'Again', { dir, ask: answering(true).ask })).rejects.toThrow(/already linked/);
+
+    writeFileSync(join(folder, 'about.md'), '# About us');
+    rmSync(join(folder, 'old.md'));
+    const no = answering(false);
+    await expect(syncFolder(await resolveTarget(folder, { dir }), { dir, ask: no.ask })).rejects.toThrow('Nothing was changed.');
+    expect(no.asked[0]).toContain('old.md');
+
+    const synced = await syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask });
+    expect(synced).toMatchObject({ removed: 1 });
+    expect(readLink(folder)?.version).toBe(synced.current_version);
+    const files = (await callTool<{ files: { path: string }[] }>(server, 'get_site', { site_id: published.site_id, limit: 1 }, { dir })).files.map((f) => f.path);
+    expect(files).toContain('about.md');
+    expect(files).not.toContain('old.md');
+    expect(files).not.toContain('.secret');
+    expect((await syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask })).up_to_date).toBe(true);
+  });
+
+  it('refuses a sync with --base when the site moved on', async () => {
+    const { dir } = await signedIn();
+    const folder = folderWith({ 'index.md': '# Home' });
+    const published = await publishFolder(server, folder, 'Moving', { dir, ask: answering(true).ask });
+    await callTool(server, 'update', { site_id: published.site_id, files: [{ path: 'extra.md', content: '# Extra' }] }, { dir });
+    writeFileSync(join(folder, 'index.md'), '# Home, edited');
+    await expect(syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask, base: true })).rejects.toThrow(/has changed since this folder/);
+  });
+
+  it('makes a site public only once confirmed, then draws its cards locally so Passa draws none', async () => {
+    const { dir } = await signedIn();
+    const folder = folderWith({ '_site.yml': 'title: Local cards', 'index.md': '# Home', 'post.md': '---\ntitle: A post\n---\nHello.' });
+    const published = await publishFolder(server, folder, 'Local cards', { dir, ask: answering(true).ask });
+    const target = await resolveTarget(folder, { dir });
+
+    const no = answering(false);
+    await expect(setAccess(target, [{ path: '/', tier: 'public' }], { dir, ask: no.ask })).rejects.toThrow('Nothing was changed.');
+    expect(no.asked[0]).toContain('This would make / public');
+    const made = await setAccess(target, [{ path: '/', tier: 'public' }], { dir, ask: answering(true).ask });
+    expect(made).toMatchObject({ access: 'public', made_public: ['/'] });
+
+    // Set public by the access change, which re-rendered: the folder's next sync draws the cards.
+    writeFileSync(join(folder, 'post.md'), '---\ntitle: A post, edited\n---\nHello.');
+    const synced = await syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask });
+    expect(synced.cards_drawn_locally).toBe(2);
+    expect(synced).toMatchObject({ cards_stored: 1 }); // the home page's card was drawn by the access change
+    expect(synced).not.toHaveProperty('cards_waiting');
+    expect(synced).not.toHaveProperty('cards_skipped');
+    expect((await syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask })).up_to_date).toBe(true);
+    expect(published.site_id).toBe(target.siteId);
+  });
+
+  it('names, rolls back and deletes', async () => {
+    const { dir } = await signedIn();
+    const folder = folderWith({ 'index.html': '<p>one</p>' });
+    const published = await publishFolder(server, folder, 'Lifecycle', { dir, ask: answering(true).ask });
+    writeFileSync(join(folder, 'index.html'), '<p>two</p>');
+    await syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask });
+    const target = await resolveTarget(folder, { dir });
+
+    const named = await setName(target, `life-${Date.now().toString(36)}`, { dir });
+    expect(String(named.url)).toContain('life-');
+    const back = await rollback(target, undefined, { dir, ask: answering(true).ask });
+    expect(back.restored).toBe(published.current_version);
+    expect(back.current_version).toBe(published.current_version); // plain HTML: the version itself
+    expect(await deleteSite(target, true, { dir })).toMatchObject({ deleted: true });
+    await expect(resolveTarget(published.site_id, { dir })).rejects.toThrow(/No site/);
   });
 });
