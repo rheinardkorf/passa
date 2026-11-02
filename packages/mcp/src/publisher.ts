@@ -291,6 +291,24 @@ export class Publisher {
     };
   }
 
+  // On a site with sources, anything that changes what its pages say (its
+  // rules, its name, which version is current) makes a new version, rendered
+  // from the base version's sources (M3 R71, R84, R85). The version and any new
+  // rules are written in one change, so no page ever lists what the rules hide.
+  // Returns undefined for a site without sources, which needs no new version.
+  async #rerender(caller: Caller, site: Site, base: Version, change: { rules: Rule[]; confirmPublic: boolean; setRules?: boolean }) {
+    if (!base.files.some((f) => f.role === 'source')) return undefined;
+    const { version, problems } = await this.#storeVersion(caller, site.id, { base, site, rules: change.rules, confirmPublic: change.confirmPublic });
+    try {
+      await this.#d.store.addVersion(caller.userId, version, site.current, change.setRules ? { rules: change.rules, seen: site.updatedAt } : undefined);
+    } catch (err) {
+      if (!(err instanceof NotFoundOrConflict)) throw err;
+      const now = await this.#d.store.getSite(site.id);
+      throw new ToolError(now?.ownerId === caller.userId && now.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
+    }
+    return { version_id: version.id, ...(problems.length ? { problems } : {}) };
+  }
+
   // Limits on the whole version, after changes are applied to the base.
   #checkTotals(entries: FileEntry[]) {
     const { limits } = this.#d.config;
@@ -575,9 +593,16 @@ export class Publisher {
     return { sites: page.map((s) => this.#summary(s)), ...(more ? { next_cursor: page[page.length - 1]?.id } : {}) };
   }
 
-  async rollback(caller: Caller, input: { siteId: string; versionId: string }) {
+  // A Markdown site's earlier version is rendered again with the site's rules
+  // and name as they are now, as a new version: its pages may list what the
+  // rules have hidden since. Unchanged pages are copied, as on any update.
+  async rollback(caller: Caller, input: { siteId: string; versionId: string; confirmPublic?: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
+    const target = isVersionId(input.versionId) ? await this.#d.store.getVersion(site.id, input.versionId) : undefined;
+    if (!target) throw new ToolError('No version with that ID.');
+    const rendered = await this.#rerender(caller, site, target, { rules: site.rules ?? [], confirmPublic: input.confirmPublic ?? false });
+    if (rendered) return { ...this.#summary((await this.#sync(site.id)) ?? site), restored_from: target.id, ...rendered };
     const now = this.#now().toISOString();
     try {
       if (!isVersionId(input.versionId)) throw new NotFoundOrConflict();
@@ -596,15 +621,19 @@ export class Publisher {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
     const change = this.#checkAccess(site.rules ?? [], input.rules, input.confirmPublic);
-    try {
-      await this.#d.store.setRules(caller.userId, site.id, input.rules, this.#now().toISOString(), site.updatedAt);
-    } catch (err) {
-      if (!(err instanceof NotFoundOrConflict)) throw err;
-      const now = await this.#d.store.getSite(site.id);
-      throw new ToolError(now?.ownerId === caller.userId && now.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
+    // A Markdown site gets a new version with the rules, in the same change (M3 R85).
+    const rendered = await this.#rerender(caller, site, await this.#version(site), { rules: input.rules, confirmPublic: input.confirmPublic, setRules: true });
+    if (!rendered) {
+      try {
+        await this.#d.store.setRules(caller.userId, site.id, input.rules, this.#now().toISOString(), site.updatedAt);
+      } catch (err) {
+        if (!(err instanceof NotFoundOrConflict)) throw err;
+        const now = await this.#d.store.getSite(site.id);
+        throw new ToolError(now?.ownerId === caller.userId && now.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
+      }
     }
     const updated = (await this.#sync(site.id)) ?? site;
-    return { ...this.#summary(updated), ...this.#accessResult(updated, change) };
+    return { ...this.#summary(updated), ...this.#accessResult(updated, change), ...(rendered ?? {}) };
   }
 
   async delete(caller: Caller, input: { siteId: string; now: boolean }) {
@@ -655,6 +684,10 @@ export class Publisher {
       const current = await this.#d.store.getSite(site.id);
       throw new ToolError(current?.ownerId === caller.userId && current.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
     }
+    // A Markdown site's absolute links and feed follow the name (M3 R84). Its
+    // rules haven't changed, so the current version already passed R89.
+    const renamed = (await this.#d.store.getSite(site.id)) ?? site;
+    const rendered = await this.#rerender(caller, renamed, await this.#version(renamed), { rules: renamed.rules ?? [], confirmPublic: true });
     // The new name before the site record, so its redirect has somewhere to go.
     if (to) await this.syncName(to);
     const updated = (await this.#sync(site.id)) ?? site;
@@ -662,6 +695,7 @@ export class Publisher {
     return {
       ...this.#summary(updated),
       name_change: { from: site.name ?? null, to: to ?? null },
+      ...(rendered ?? {}),
       ...(site.name ? { held: { name: site.name, until: holdUntil, note: 'The old name redirects here until then, and only you can claim it again.' } } : {}),
     };
   }

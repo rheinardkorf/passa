@@ -217,3 +217,68 @@ describe('sites from before M3', () => {
     expect(await read(siteId, r.current_version, 'index.html')).toContain('Old notes');
   });
 });
+
+describe('changes that re-render (M3 R71, R84, R85)', () => {
+  // No index.md, so the home page is generated and lists every page it may name.
+  const blog: Folder = {
+    'post.md': '---\ntitle: Open post\ndate: 2026-10-02\n---\nHello.',
+    'notes/secret.md': '---\ntitle: Secret plan\ndate: 2026-10-03\ntags: [hush]\n---\nPrivate.',
+  };
+  const versions = async (siteId: unknown) => ((await call('get_site', { site_id: siteId })).json().versions as unknown[]).length;
+
+  it('makes a folder private and drops it from public lists in the same change', async () => {
+    const r = (await call('publish', { title: 'Re-render', files: filesOf(blog), rules: PUBLIC, confirm_public: true })).json();
+    expect(await read(r.site_id, r.current_version, 'index.html')).toContain('Secret plan');
+    expect(await read(r.site_id, r.current_version, 'tags/hush/index.html')).toBeDefined();
+
+    const changed = (await call('set_access', { site_id: r.site_id, rules: [...PUBLIC, { path: '/notes/', tier: 'private' }] })).json();
+    expect(changed).toMatchObject({ made_private: ['/notes/'], access: 'mixed' });
+    expect(changed.current_version).not.toBe(r.current_version);
+    expect(changed.version_id).toBe(changed.current_version);
+    for (const path of ['index.html', 'feed.xml']) expect(await read(r.site_id, changed.current_version, path), path).not.toContain('Secret plan');
+    expect((await listed(r.site_id)).has('tags/hush/index.html')).toBe(false);
+    expect(await read(r.site_id, changed.current_version, '_passa/access.yml')).toContain('"/notes/"');
+    expect(await versions(r.site_id)).toBe(2);
+  });
+
+  it('changes rules on a site without sources with no new version, as before', async () => {
+    const r = (await call('publish', { title: 'Plain', files: [{ path: 'index.html', content: '<p>hi</p>' }] })).json();
+    const changed = (await call('set_access', { site_id: r.site_id, rules: PUBLIC, confirm_public: true })).json();
+    expect(changed.current_version).toBe(r.current_version);
+    expect(await versions(r.site_id)).toBe(1);
+  });
+
+  it('follows a new name in absolute links and the feed', async () => {
+    const r = (await call('publish', { title: 'Named', files: filesOf(blog), rules: PUBLIC, confirm_public: true })).json();
+    expect(await read(r.site_id, r.current_version, 'feed.xml')).toContain(String(r.url));
+    const named = (await call('set_name', { site_id: r.site_id, name: 'rerender-test' })).json();
+    expect(named.url).toContain('rerender-test');
+    const feed = await read(r.site_id, named.current_version, 'feed.xml');
+    expect(feed).toContain(`${String(named.url)}post/`);
+    expect(feed).not.toContain(String(r.site_id));
+  });
+
+  it('rolls back by rendering the old sources with the current rules', async () => {
+    const r = (await call('publish', { title: 'Rollback', files: filesOf(blog), rules: PUBLIC, confirm_public: true })).json();
+    const first = r.current_version;
+    await call('set_access', { site_id: r.site_id, rules: [...PUBLIC, { path: '/notes/', tier: 'private' }] });
+    const back = (await call('rollback', { site_id: r.site_id, version_id: first })).json();
+    expect(back.restored_from).toBe(first);
+    expect(back.current_version).not.toBe(first);
+    expect(await read(r.site_id, back.current_version, 'index.html')).not.toContain('Secret plan');
+  });
+
+  it('refuses a rollback that would make a page marked private public, until confirmed', async () => {
+    const r = (await call('publish', {
+      title: 'Marked', files: filesOf({ 'diary.md': '---\naccess: private\n---\nDear diary', 'index.md': '# Home' }),
+      rules: [...PUBLIC, { path: '/diary/', tier: 'private' }], confirm_public: true,
+    })).json();
+    const first = r.current_version;
+    // Removing the page, then opening the folder: rolling back would publish it.
+    await call('update', { site_id: r.site_id, remove: ['diary.md'] });
+    await call('set_access', { site_id: r.site_id, rules: PUBLIC, confirm_public: true });
+    const refused = await call('rollback', { site_id: r.site_id, version_id: first });
+    expect(refused.text).toContain('diary.md says access: private');
+    expect((await call('rollback', { site_id: r.site_id, version_id: first, confirm_public: true })).isError).toBe(false);
+  });
+});

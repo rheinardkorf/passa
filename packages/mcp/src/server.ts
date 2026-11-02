@@ -95,7 +95,11 @@ const schemas = {
     site_id: siteId,
     name: z.string().max(40).nullable().describe('The new name, such as cv for cv.<site domain>; null removes the name'),
   }),
-  rollback: z.strictObject({ site_id: siteId, version_id: versionId.describe('A version listed by get_site') }),
+  rollback: z.strictObject({
+    site_id: siteId,
+    version_id: versionId.describe('A version listed by get_site'),
+    confirm_public: confirmPublic.describe('On a Markdown site: must be true if the version has a page marked access: private that the current rules make public. Ask the person first'),
+  }),
   delete: z.strictObject({
     site_id: siteId,
     now: z.boolean().default(false).describe('Delete immediately and permanently instead of after the grace period'),
@@ -157,11 +161,12 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. '
       + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. '
       + 'Changes take effect within seconds, and everywhere within about a minute. '
+      + 'On a Markdown site, the pages are rendered again with the new rules in the same change, so lists, tags and the feed never name a page the rules make private. '
       + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
     get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. On a Markdown site, sources have role source, and pages made from them have role rendered and rendered_from; _passa/access.yml is a read-only copy of the rules, for folders taken out of Passa. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
     find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
-    rollback: `Make an earlier version of a site current again. Takes effect immediately. Only versions get_site lists can be restored: ${kept}`,
+    rollback: `Make an earlier version of a site current again. Takes effect immediately. On a Markdown site, the version's sources are rendered again with the site's current rules and name, as a new version. Only versions get_site lists can be restored: ${kept}`,
     delete: `Delete a site. It stops being served at once, and is removed permanently after ${deleteGraceDays} days, or immediately with now=true.`,
     begin_upload: `Start an upload, for sites over ${inline} or files you can read from disk. Returns a URL per file, valid for ${minutes}: PUT each file's bytes to its URL (for example, curl -T path/to/file '<url>'), then call finish_upload. File contents never pass through the conversation. To sync a local folder to an existing site, pass site_id and each file's sha256: only new and changed files get URLs, and update with sync: true applies the folder as a whole. ${sizes}`,
   };
@@ -282,7 +287,7 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
   }));
 
   tool('rollback', describe.rollback, { idempotentHint: true }, schemas.rollback, async (i) => {
-    const r = await publisher.rollback(caller, { siteId: i.site_id, versionId: i.version_id });
+    const r = await publisher.rollback(caller, { siteId: i.site_id, versionId: i.version_id, confirmPublic: i.confirm_public });
     return { result: r, siteId: r.site_id };
   });
 
