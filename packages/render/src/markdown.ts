@@ -8,7 +8,7 @@ import hljs from 'highlight.js/lib/core';
 import Mustache from 'mustache';
 import { parse as parseYaml } from 'yaml';
 import { languages } from './languages.ts';
-import { DEFAULT_WIDGETS, chartSvg, parseOptions } from './widgets.ts';
+import { DEFAULT_WIDGETS, chartSvg, parseOptions, widgetShapeProblem } from './widgets.ts';
 import { escapeHtml, resolveFrom, slugify } from './text.ts';
 
 for (const [name, lang] of Object.entries(languages)) hljs.registerLanguage(name, lang);
@@ -111,6 +111,8 @@ export function markdownFor(ctx: MarkdownContext): Markdown {
         data = Array.isArray(parsed) ? { items: parsed } : typeof parsed === 'object' && parsed ? { ...parsed } : { text: String(parsed) };
         if (name === 'chart') data.svg = chartSvg(data);
       }
+      const shape = ctx.widgets.has(name) ? undefined : widgetShapeProblem(name, data, lines);
+      if (shape) throw new Error(shape);
       // List items that are maps know their place, like page lists.
       if (Array.isArray(data.items)) {
         const items: unknown[] = data.items;

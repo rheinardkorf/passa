@@ -127,6 +127,18 @@ describe('widgets (R76, R77)', () => {
     expect(r.kinds).toContain('widget');
   });
 
+  it('reports built-in widget data of the wrong shape, which would render empty', () => {
+    const r = build([{ path: 'index.md', content: '```stats\n- just a string\n```\n\n```cards\n- title: Fine\n```\n\n```timeline\n2024: Began\nno colon here\n```' }]);
+    expect(r.problems.filter((p) => p.kind === 'widget').map((p) => p.message)).toEqual([
+      'stats block: each stat needs a label and a value, as a YAML list: - label: … value: …',
+      'timeline block: each line must be "when: what"',
+    ]);
+    expect(r.html('index.html')).toContain('<code class="language-stats">');
+    // A theme's own template decides its own data.
+    const themed = build([{ path: 'index.md', content: '```stats\n- just a string\n```' }, { path: '_layouts/widgets/stats.html', content: '<ul>{{#items}}<li>{{.}}</li>{{/items}}</ul>' }]);
+    expect(themed.kinds).not.toContain('widget');
+  });
+
   it('leaves other fence names as code blocks', () => {
     expect(home).toContain('<code class="language-unknown">left alone');
   });

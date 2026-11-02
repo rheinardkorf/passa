@@ -19,6 +19,19 @@ export const DEFAULT_WIDGETS: Record<string, string> = {
   stats: '<dl class="w-stats">{{#items}}<div class="w-stat"><dt>{{label}}</dt><dd>{{value}}</dd></div>{{/items}}</dl>',
 };
 
+// What a built-in widget's data must look like, or it would render empty
+// (R76): the reason, or undefined when it's fine. A theme's own template for a
+// widget decides its own data, so this applies to the built-ins only.
+export function widgetShapeProblem(name: string, data: Record<string, unknown>, lines: string[]): string | undefined {
+  const items = Array.isArray(data.items) ? (data.items as unknown[]) : undefined;
+  const every = (ok: (item: Record<string, unknown>) => boolean) => !!items?.length && items.every((i) => !!i && typeof i === 'object' && ok(i as Record<string, unknown>));
+  if (name === 'cards' && !every((i) => i.title !== undefined || i.text !== undefined)) return 'each card needs a title or text, as a YAML list: - title: …';
+  if (name === 'stats' && !every((i) => i.label !== undefined && i.value !== undefined)) return 'each stat needs a label and a value, as a YAML list: - label: … value: …';
+  if (name === 'gallery' && items?.length !== lines.length) return 'each line must be an image: ![caption](path)';
+  if (name === 'timeline' && items?.length !== lines.length) return 'each line must be "when: what"';
+  return undefined;
+}
+
 const esc = (s: unknown) => escapeHtml(String(s));
 
 // Rounds a chart's top value up to 1, 2, 2.5 or 5 times a power of ten.
