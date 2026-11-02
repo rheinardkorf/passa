@@ -14,6 +14,12 @@ const ALLOWED = new Set([
   'ISC',
   'MIT',
   'MIT-0',
+  // Weak copyleft limited to the library's own files: fine for unmodified
+  // dependencies (Satori and resvg, for social cards). Never for code we change.
+  'MPL-2.0',
+  // The Python Software Foundation license, under its old and new SPDX names
+  // (argparse, a dependency of markdown-it's command line, uses both over time).
+  'PSF-2.0',
   'Python-2.0',
   'Unlicense',
 ]);
