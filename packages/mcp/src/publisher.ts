@@ -26,11 +26,13 @@ import {
   type SiteFiles,
   siteDomain,
   type Store,
+  storedPath,
   syncEdge,
   THREATS,
   type UploadSync,
   type Version,
 } from '@passa/shared';
+import { isSource, REFUSING, render, RULES_FILE, rulesFile } from '@passa/render';
 import { type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
 
 export type Caller = { userId: string; ip?: string };
@@ -79,16 +81,32 @@ export type SiteSummary = {
 // What a change of rules did, for the response and the event (R48).
 export type AccessChange = { made_public: string[]; made_private: string[] };
 
-export type SiteFile = { path: string; size: number; content_type: string; sha256: string; content?: string; download_url?: string };
+export type SiteFile = {
+  path: string; size: number; content_type: string; sha256: string; role?: FileEntry['role']; rendered_from?: string; content?: string; download_url?: string;
+};
 
 export type Content = { files: InputFile[] } | { uploadId: string };
 
 // Replaces old with new in a text file; old must appear exactly once.
 export type Edit = { path: string; old: string; new: string };
 
-type Changes = { content?: Content; edited?: InputFile[]; base?: Version; remove?: string[] };
+// What a new version is made from. The site's details and rules are what its
+// pages render with; confirmPublic also confirms a page marked access: private
+// that the rules make public (M3 R89).
+type Changes = {
+  content?: Content; edited?: InputFile[]; base?: Version; remove?: string[];
+  site: Pick<Site, 'id' | 'name' | 'title'>; rules: Rule[]; confirmPublic: boolean;
+};
+
+// A file Passa rendered for a version, and whether the base version has it already.
+type RenderedFile = { entry: FileEntry; content: Uint8Array; unchanged: boolean };
 
 const isText = (f: FileEntry) => f.contentType.includes('charset=utf-8');
+const encode = (text: string) => new TextEncoder().encode(text);
+
+// Why a rendered file can't be changed directly.
+const renderedProblem = (f: FileEntry, action: string) =>
+  `${f.path}: rendered ${f.from ? `from ${f.from}, so ${action} that instead` : `by Passa, so it can't be ${action === 'edit' ? 'edited' : 'removed'}`}`;
 
 // Counts overlapping matches too, stopping at two: only exactly one is usable.
 function occurrences(text: string, find: string): number {
@@ -188,8 +206,9 @@ export class Publisher {
   }
 
   // Runs every check, then writes a complete new version: the files sent, plus
-  // the base version's other files (copied within S3) unless removed.
-  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; kept: number }> {
+  // the base version's other files (copied within S3) unless removed, plus the
+  // pages rendered from its sources (M3 R70), copied when they haven't changed.
+  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[] }> {
     const { content, edited = [], base, remove = [] } = changes;
     const sent = !content
       ? { files: [], skipped: [] }
@@ -200,9 +219,16 @@ export class Publisher {
     const { skipped } = sent;
     const checked = await checkContent([...sent.files, ...edited]);
     const replaced = new Set([...checked, ...remove.map((path) => ({ path }))].map((f) => f.path.toLowerCase()));
-    const kept = (base?.files ?? []).filter((f) => !replaced.has(f.path.toLowerCase()));
-    const entries = [...kept, ...checked.map((f): FileEntry => ({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256 }))]
-      .sort((a, b) => a.path.localeCompare(b.path));
+    // Rendered files are made again from the sources every time (M3 R71). A
+    // file's role follows its path, so a site's Markdown from before M3 becomes
+    // a source when it's next updated.
+    const withRole = (f: FileEntry): FileEntry =>
+      ({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256, ...(isSource(f.path) ? { role: 'source' as const } : {}) });
+    const kept = (base?.files ?? []).filter((f) => f.role !== 'rendered' && !replaced.has(f.path.toLowerCase()));
+    const authored = [...kept.map(withRole), ...checked.map((f) => withRole({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256 }))];
+    const fresh = new Map(checked.map((f) => [f.path, f.content]));
+    const { rendered, problems } = await this.#render(changes, authored, fresh, kept);
+    const entries = [...authored, ...rendered.map((r) => r.entry)].sort((a, b) => a.path.localeCompare(b.path));
     this.#checkTotals(entries);
 
     const version: Version = {
@@ -213,10 +239,56 @@ export class Publisher {
       createdAt: this.#now().toISOString(),
       createdBy: caller.userId,
     };
-    await inBatches(checked, (f: CheckedFile) => this.#d.files.putVersionFile(siteId, version.id, f.path, f.content, f.contentType));
-    if (base) await inBatches(kept, (f) => this.#d.files.copyVersionFile(siteId, base.id, version.id, f.path), COPY_PARALLEL);
+    // New content, including changed rendered pages, is staged and scanned.
+    const written = [...checked.map((f: CheckedFile) => ({ entry: withRole(f), content: f.content })), ...rendered.filter((r) => !r.unchanged)];
+    await inBatches(written, ({ entry, content: body }) => this.#d.files.putVersionFile(siteId, version.id, storedPath(entry), body, entry.contentType));
+    if (base) {
+      const copies = [...kept.map((f) => ({ from: f, to: withRole(f) })), ...rendered.filter((r) => r.unchanged).map((r) => ({ from: r.entry, to: r.entry }))];
+      await inBatches(copies, ({ from, to }) => this.#d.files.copyVersionFile(siteId, base.id, version.id, storedPath(from), storedPath(to)), COPY_PARALLEL);
+    }
     if (content && 'uploadId' in content) await this.#d.files.deleteUpload(content.uploadId);
-    return { version, skipped, kept: kept.length };
+    return { version, skipped, written: written.length, problems };
+  }
+
+  // Renders the version's sources, if it has any: its pages, its feed, and the
+  // read-only copy of its rules (M3 R88). Refused on a page that would replace a
+  // file (R68), a missing layout (R79), or an unconfirmed page marked private
+  // that the rules make public (R89); other problems are returned (R90).
+  async #render(changes: Changes, authored: FileEntry[], fresh: Map<string, Uint8Array>, kept: FileEntry[]): Promise<{ rendered: RenderedFile[]; problems: string[] }> {
+    const sourceEntries = authored.filter((f) => f.role === 'source');
+    if (!sourceEntries.length) return { rendered: [], problems: [] };
+    const { base, site, rules, confirmPublic } = changes;
+    const keptByPath = new Map(kept.map((f) => [f.path, f]));
+    const sources = await Promise.all(sourceEntries.map(async (f) => {
+      let bytes = fresh.get(f.path);
+      const before = keptByPath.get(f.path);
+      if (!bytes && base && before) bytes = await this.#d.files.getVersionFile(site.id, base.id, storedPath(before));
+      return { path: f.path, content: Buffer.from(bytes ?? new Uint8Array()).toString('utf8') };
+    }));
+    const result = render({ sources, rules, siteUrl: this.#url(site), siteTitle: site.title, files: authored.filter((f) => f.role !== 'source').map((f) => f.path) });
+    const refusing = result.problems.filter((p) => REFUSING.has(p.kind) && !(p.kind === 'access-private-made-public' && confirmPublic));
+    if (refusing.length) {
+      throw new PublishRefused(refusing.map((p) => p.kind === 'access-private-made-public'
+        ? `${p.message}: change its front matter, or check with the person and call again with confirm_public set to true`
+        : p.message));
+    }
+    const outputs = [
+      ...result.pages.map((p) => ({ path: p.path, content: encode(p.html), from: p.from })),
+      ...(result.feed ? [{ path: 'feed.xml', content: encode(result.feed), from: null }] : []),
+      { path: RULES_FILE, content: encode(rulesFile(rules)), from: null },
+    ];
+    const fromOf = new Map(outputs.map((o) => [o.path, o.from]));
+    // Rendered pages pass the same checks as any file.
+    const checked = await checkContent(outputs.map(({ path, content }) => ({ path, content })));
+    const before = new Map((base?.files ?? []).filter((f) => f.role === 'rendered').map((f) => [f.path, f]));
+    return {
+      rendered: checked.map((f) => {
+        const from = fromOf.get(f.path);
+        const entry: FileEntry = { path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256, role: 'rendered', ...(from ? { from } : {}) };
+        return { entry, content: f.content, unchanged: before.get(f.path)?.sha256 === f.sha256 };
+      }),
+      problems: result.problems.filter((p) => !REFUSING.has(p.kind)).map((p) => p.message),
+    };
   }
 
   // Limits on the whole version, after changes are applied to the base.
@@ -224,7 +296,8 @@ export class Publisher {
     const { limits } = this.#d.config;
     const problems: string[] = [];
     if (entries.length === 0) problems.push('no files left in the site');
-    if (entries.length > limits.files) problems.push(`more than ${limits.files} files`);
+    // A source and the page rendered from it count as one file (M3 R70).
+    if (entries.filter((f) => f.role !== 'rendered').length > limits.files) problems.push(`more than ${limits.files} files`);
     if (entries.reduce((sum, f) => sum + f.size, 0) > limits.site) problems.push(`larger than the ${limits.site}-byte total limit`);
     if (problems.length) throw new PublishRefused(problems);
   }
@@ -279,7 +352,9 @@ export class Publisher {
   async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string; rules?: Rule[]; confirmPublic?: boolean }) {
     const change = input.rules ? this.#checkAccess([], input.rules, input.confirmPublic ?? false) : undefined;
     const siteId = newSiteId();
-    const { version, skipped } = await this.#storeVersion(caller, siteId, { content: input.content });
+    const { version, skipped, problems } = await this.#storeVersion(caller, siteId, {
+      content: input.content, site: { id: siteId, title: input.title }, rules: input.rules ?? [], confirmPublic: input.confirmPublic ?? false,
+    });
     const site: Site = {
       id: siteId,
       ownerId: caller.userId,
@@ -295,7 +370,7 @@ export class Publisher {
     };
     await this.#d.store.createSite(site, version);
     await this.#sync(site.id);
-    return { ...this.#summary(site), files: version.files.length, skipped, ...(change ? this.#accessResult(site, change) : {}) };
+    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...(change ? this.#accessResult(site, change) : {}) };
   }
 
   // By default the new version is the current one with the changes applied.
@@ -335,22 +410,26 @@ export class Publisher {
     const base = input.replaceAll ? undefined : await this.#d.store.getVersion(site.id, site.current);
     if (base) {
       // Checked before anything is stored or an upload is claimed.
-      const current = new Set(base.files.map((f) => f.path));
+      const current = new Map(base.files.map((f) => [f.path, f]));
       const sent = new Set(input.content && 'files' in input.content ? input.content.files.map((f) => f.path) : []);
       const edited = new Set(edits.map((e) => e.path));
       const problems = [
         ...remove.filter((p) => !current.has(p)).map((p) => `${p}: not in the current version, so it can't be removed`),
+        ...remove.flatMap((p) => { const f = current.get(p); return f?.role === 'rendered' ? [renderedProblem(f, 'remove')] : []; }),
         ...remove.filter((p) => sent.has(p)).map((p) => `${p}: both sent and removed`),
         ...remove.filter((p) => edited.has(p)).map((p) => `${p}: both edited and removed`),
       ];
       if (problems.length) throw new PublishRefused(problems);
     }
     const edited = base && edits.length ? await this.#applyEdits(base, edits) : [];
-    const { version, skipped, kept } = await this.#storeVersion(caller, site.id, {
+    const { version, skipped, written, problems } = await this.#storeVersion(caller, site.id, {
       ...(input.content ? { content: input.content } : {}),
       ...(base ? { base } : {}),
       edited,
       remove,
+      site: { ...site, ...(input.details?.title ? { title: input.details.title } : {}) },
+      rules: input.rules ?? site.rules ?? [],
+      confirmPublic: input.confirmPublic ?? false,
     });
     try {
       // Fails if another update landed first, so neither silently undoes the other.
@@ -367,9 +446,11 @@ export class Publisher {
     return {
       ...this.#summary(updated),
       files: version.files.length,
-      changed: version.files.length - kept,
+      // Files written new, including pages rendered differently; the rest were copied.
+      changed: written,
       removed: remove.length,
       skipped,
+      ...(problems.length ? { problems } : {}),
       ...(change ? this.#accessResult(updated, change) : {}),
     };
   }
@@ -406,8 +487,9 @@ export class Publisher {
     await inBatches([...byPath], async ([path, list]) => {
       const entry = base.files.find((f) => f.path === path);
       if (!entry) return void problems.push(`${path}: not in the current version, so it can't be edited`);
+      if (entry.role === 'rendered') return void problems.push(renderedProblem(entry, 'edit'));
       if (!isText(entry)) return void problems.push(`${path}: only text files can be edited; send the whole file instead`);
-      let text = Buffer.from(await this.#d.files.getVersionFile(base.siteId, base.id, path)).toString('utf8');
+      let text = Buffer.from(await this.#d.files.getVersionFile(base.siteId, base.id, storedPath(entry))).toString('utf8');
       for (const { edit, n } of list) {
         const count = occurrences(text, edit.old);
         if (count !== 1) {
@@ -464,8 +546,8 @@ export class Publisher {
       files: await Promise.all(files.map(async ({ entry: f, inline }): Promise<SiteFile> => ({
         ...this.#fileDetails(f),
         ...(inline
-          ? { content: Buffer.from(await this.#d.files.getVersionFile(version.siteId, version.id, f.path)).toString('utf8') }
-          : { download_url: await this.#d.files.presignVersionFile(version.siteId, version.id, f.path, config.lifetimes.uploadUrl) }),
+          ? { content: Buffer.from(await this.#d.files.getVersionFile(version.siteId, version.id, storedPath(f))).toString('utf8') }
+          : { download_url: await this.#d.files.presignVersionFile(version.siteId, version.id, storedPath(f), config.lifetimes.uploadUrl) }),
       }))),
     };
   }
@@ -477,7 +559,7 @@ export class Publisher {
   }
 
   #fileDetails(f: FileEntry): SiteFile {
-    return { path: f.path, size: f.size, content_type: f.contentType, sha256: f.sha256 };
+    return { path: f.path, size: f.size, content_type: f.contentType, sha256: f.sha256, ...(f.role ? { role: f.role } : {}), ...(f.from ? { rendered_from: f.from } : {}) };
   }
 
   // Newest first, one page at a time. The cursor is the last site of the
@@ -616,10 +698,12 @@ export class Publisher {
       const site = await this.#ownSite(caller, input.siteId);
       this.#assertChangeable(site);
       const base = await this.#version(site);
-      const current = new Map(base.files.map((f) => [f.path, f]));
+      // A folder holds sources and plain files; Passa renders the rest (M3 R87).
+      const authored = base.files.filter((f) => f.role !== 'rendered');
+      const current = new Map(authored.map((f) => [f.path, f]));
       const same = (f: { path: string; size: number; sha256?: string }) => current.get(f.path)?.sha256 === f.sha256 && current.get(f.path)?.size === f.size;
       const inFolder = new Set(files.map((f) => f.path));
-      const remove = base.files.filter((f) => !inFolder.has(f.path)).map((f) => f.path);
+      const remove = authored.filter((f) => !inFolder.has(f.path)).map((f) => f.path);
       unchanged = files.filter((f) => f.sha256 && same(f)).length;
       files = files.filter((f) => !f.sha256 || !same(f));
       if (!files.length && !remove.length) return { site_id: site.id, up_to_date: true, version: base.id, skipped };

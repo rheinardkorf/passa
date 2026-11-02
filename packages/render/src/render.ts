@@ -42,7 +42,17 @@ export type Problem = { kind: ProblemKind; source: string | null; message: strin
 // only until the change is confirmed with confirm_public.
 export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public']);
 
-export type RenderedPage = { path: string; html: string; from: string | null; tier: string };
+// The files a site renders from (R86): Markdown, layouts and the site's settings.
+export const isSource = (path: string) =>
+  (path.endsWith('.md') && !path.startsWith('_layouts/')) || (path.startsWith('_layouts/') && path.endsWith('.html')) || path === '_site.yml';
+
+// The read-only copy of a site's rules that each version with sources carries
+// (R88), so a folder taken out of Passa knows what's public.
+export const RULES_FILE = '_passa/access.yml';
+export const rulesFile = (rules: Rule[]) => '# Written by Passa on every publish: the site\'s access rules. Editing this changes nothing; use set_access.\n'
+  + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, tier: ${JSON.stringify(r.tier)} }\n`).join('') : '[]\n');
+
+export type RenderedPage ={ path: string; html: string; from: string | null; tier: string };
 
 export type RenderResult = { pages: RenderedPage[]; feed?: string; problems: Problem[] };
 
@@ -175,7 +185,13 @@ export function render(input: RenderInput): RenderResult {
 
   // Pages that would replace a plain file (R68).
   const taken = new Set(files.map((f) => f.toLowerCase()));
-  for (const p of pages) if (taken.has(p.file.toLowerCase())) problem('conflict', p.source, `${p.source} renders to ${p.file}, which is already a file in the site`);
+  const rendersTo = new Map<string, string>();
+  for (const p of pages) {
+    const file = p.file.toLowerCase();
+    if (taken.has(file)) problem('conflict', p.source, `${p.source} renders to ${p.file}, which is already a file in the site`);
+    else if (rendersTo.has(file)) problem('conflict', p.source, `${p.source} and ${rendersTo.get(file)} both render to ${p.file}`);
+    else rendersTo.set(file, p.source ?? '');
+  }
 
   // Front matter access never grants access (R89), but disagreements are reported.
   for (const p of pages) {
@@ -249,7 +265,9 @@ export function render(input: RenderInput): RenderResult {
   const tagPages = new Map<string, boolean>();
   const hasTagPage = (t: string) => {
     let has = tagPages.get(t);
-    if (has === undefined) tagPages.set(t, (has = forTier(tierFor(rules, `${tagUrl(t)}index.html`)).byTag.has(t)));
+    // A plain file at the tag page's path wins: the tag then has no page.
+    const file = `${tagUrl(t)}index.html`;
+    if (has === undefined) tagPages.set(t, (has = !taken.has(file.slice(1).toLowerCase()) && forTier(tierFor(rules, file)).byTag.has(t)));
     return has;
   };
   const tagLink = (t: string) => (hasTagPage(t) ? { name: t, url: tagUrl(t), hasPage: true } : { name: t, url: null, hasPage: false });
@@ -293,7 +311,7 @@ export function render(input: RenderInput): RenderResult {
     source: null, dir: '', file, url, data: {}, body: '', tier, date: undefined, unlisted: true, words: 0, tags: [],
     state: pageState(null, ''), generated, ...(tag === undefined ? {} : { tag }), title, content: '', kind: '', cover: undefined, excerpt: '', backlinks: [],
   });
-  if (!pages.some((p) => p.file === 'index.html')) pages.push(generatedPage('index.html', '/', site.title, tierFor(rules, '/index.html'), 'index'));
+  if (!pages.some((p) => p.file === 'index.html') && !taken.has('index.html')) pages.push(generatedPage('index.html', '/', site.title, tierFor(rules, '/index.html'), 'index'));
   for (const t of [...new Set(sorted.flatMap((p) => p.tags))].sort((a, b) => a.localeCompare(b))) {
     const url = tagUrl(t);
     if (hasTagPage(t)) pages.push(generatedPage(`${url.slice(1)}index.html`, url, t, tierFor(rules, `${url}index.html`), 'tag', t));
@@ -433,7 +451,8 @@ export function render(input: RenderInput): RenderResult {
   const feedItems = pages.filter((p) => p.date && p.tier === 'public' && !p.unlisted && !p.generated && p.url !== '/')
     .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')).slice(0, 50);
   const result: RenderResult = { pages: out, problems };
-  if (feedItems.length) {
+  // A site's own feed.xml wins over the generated one.
+  if (feedItems.length && !taken.has('feed.xml')) {
     const abs = (url: string) => new URL(url, siteUrl).href;
     result.feed = `<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0"><channel><title>${escapeHtml(site.title)}</title><link>${abs('/')}</link><description>${escapeHtml(String(site.description ?? site.title))}</description>\n`
       + feedItems.map((p) => `<item><title>${escapeHtml(p.title)}</title><link>${abs(p.url)}</link><guid>${abs(p.url)}</guid><pubDate>${new Date(p.date ?? 0).toUTCString()}</pubDate>${p.excerpt ? `<description>${escapeHtml(p.excerpt)}</description>` : ''}</item>`).join('\n')

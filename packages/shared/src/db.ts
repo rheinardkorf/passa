@@ -50,7 +50,14 @@ export type SiteDetails = { title?: string; dataSource?: string | null; dataAsOf
 // or none: until then only the owner can claim it again (M2 R46).
 export type SiteName = { name: string; siteId: string; ownerId: string; claimedAt: string; heldUntil?: string };
 
-export type FileEntry = { path: string; size: number; contentType: string; sha256: string };
+// A file in a version, at the path tools use. A source (Markdown, layouts,
+// _site.yml) is stored under _passa/src/<path> and never served (M3 R86); a
+// rendered file was made by Passa, from the source named in from if it has one.
+// Plain files have no role.
+export type FileEntry = { path: string; size: number; contentType: string; sha256: string; role?: 'source' | 'rendered'; from?: string };
+
+// Where a version file is stored, under the version's prefix.
+export const storedPath = (f: Pick<FileEntry, 'path' | 'role'>) => (f.role === 'source' ? `_passa/src/${f.path}` : f.path);
 
 export type Version = {
   id: string;

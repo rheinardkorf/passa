@@ -37,6 +37,8 @@ const KINDS: Record<string, FileKind> = {
   webmanifest: { contentType: 'application/manifest+json; charset=utf-8', text: true },
   txt: { contentType: 'text/plain; charset=utf-8', text: true },
   md: { contentType: 'text/markdown; charset=utf-8', text: true },
+  yml: { contentType: 'application/yaml; charset=utf-8', text: true },
+  yaml: { contentType: 'application/yaml; charset=utf-8', text: true },
   csv: { contentType: 'text/csv; charset=utf-8', text: true },
   xml: { contentType: 'application/xml; charset=utf-8', text: true },
   svg: { contentType: 'image/svg+xml; charset=utf-8', text: true },
@@ -79,7 +81,8 @@ const utf8 = new TextDecoder('utf-8', { fatal: true });
 export type PathResult = { ok: true; skip: boolean } | { ok: false; problem: string };
 
 // Validates one path. Dotfiles (any segment starting with ".") are skipped,
-// not refused, so agents can publish a folder as it is.
+// not refused, so agents can publish a folder as it is, and so is the rules
+// file a folder taken out of Passa carries (M3 R88): only set_access changes access.
 export function checkPath(path: string): PathResult {
   const shown = JSON.stringify(path.slice(0, MAX_PATH_LENGTH));
   if (path.length === 0 || path.length > MAX_PATH_LENGTH) return { ok: false, problem: `${shown}: paths must be 1–${MAX_PATH_LENGTH} characters` };
@@ -87,6 +90,7 @@ export function checkPath(path: string): PathResult {
   if (segments.some((s) => s === '' || s === '.' || s === '..' || !SEGMENT.test(s))) {
     return { ok: false, problem: `${shown}: use relative paths of letters, digits and . _ ~ @ + - only` };
   }
+  if (path.toLowerCase() === '_passa/access.yml') return { ok: true, skip: true };
   if (segments[0]?.toLowerCase() === '_passa') return { ok: false, problem: `${shown}: /_passa/ is reserved` };
   if (segments.some((s) => s.startsWith('.'))) return { ok: true, skip: true };
   return { ok: true, skip: false };

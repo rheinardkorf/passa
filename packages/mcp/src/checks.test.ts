@@ -32,6 +32,11 @@ describe('paths', () => {
     expect(checkPath('docs/_passa/x.html').ok).toBe(true);
   });
 
+  it('skips the rules file a folder from Passa carries, rather than refusing it (M3 R88)', () => {
+    expect(checkPath('_passa/access.yml')).toEqual({ ok: true, skip: true });
+    expect(checkPath('_passa/src/index.md').ok).toBe(false);
+  });
+
   it('skips dotfiles and dot folders', () => {
     expect(checkPath('.env')).toEqual({ ok: true, skip: true });
     expect(checkPath('.git/config')).toEqual({ ok: true, skip: true });

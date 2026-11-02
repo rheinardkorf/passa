@@ -20,6 +20,21 @@ describe('rendering (R67–R71)', () => {
     expect(REFUSING.has('conflict')).toBe(true);
   });
 
+  it('refuses two sources rendering to one path', () => {
+    const r = build([{ path: 'plan.md', content: 'A' }, { path: 'plan/index.md', content: 'B' }]);
+    expect(r.problems).toContainEqual(expect.objectContaining({ kind: 'conflict', message: 'plan/index.md and plan.md both render to plan/index.html' }));
+  });
+
+  it('lets a plain file win over a generated home page, tag page or feed', () => {
+    const sources = [{ path: 'post.md', content: '---\ndate: 2026-01-01\ntags: [work]\n---\nA post.' }];
+    expect(build(sources).pages.map((p) => p.path).sort()).toEqual(['index.html', 'post/index.html', 'tags/work/index.html']);
+    const r = build(sources, { files: ['index.html', 'tags/work/index.html', 'feed.xml'] });
+    expect(r.pages.map((p) => p.path)).toEqual(['post/index.html']);
+    expect(r.feed).toBeUndefined();
+    expect(r.html('post/index.html')).not.toContain('href="/tags/work/"');
+    expect(r.problems).toEqual([]);
+  });
+
   it('takes the title from front matter, then the first heading, then the file name', () => {
     const r = build([
       { path: 'a.md', content: '---\ntitle: From front matter\n---\n# Heading' },
@@ -134,6 +149,12 @@ describe('themes and the template contract (R78–R81)', () => {
   it('uses the default theme when a site has no layouts', () => {
     const r = build([{ path: 'index.md', content: '# Home' }]);
     expect(r.html('index.html')).toMatch(/^<!doctype html>/);
+  });
+
+  it('lists a tag\'s pages in the default theme, and links tags that have a page', () => {
+    const r = build([{ path: 'index.md', content: '# Home' }, { path: 'post.md', content: '---\ntitle: A post\ndate: 2026-01-01\ntags: [work]\n---\nText.' }]);
+    expect(r.html('tags/work/index.html')).toMatch(/<h1>work<\/h1>[\s\S]*<a href="\/post\/">A post<\/a>/);
+    expect(r.html('post/index.html')).toContain('<a href="/tags/work/">work</a>');
   });
 
   it('chooses layouts: front matter, home, kind, then default', () => {

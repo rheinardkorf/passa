@@ -16,7 +16,7 @@ h1{font-size:2.1rem;margin-top:0}
 h2{font-size:1.45rem}
 h3{font-size:1.15rem}
 .meta{color:var(--muted);font:.9rem/1.4 ui-sans-serif,system-ui,sans-serif;margin:-.4rem 0 2rem}
-.tags span{display:inline-block;margin-right:.4rem;padding:.05rem .5rem;border:1px solid var(--line);border-radius:999px}
+.tags span,.tags a{display:inline-block;margin-right:.4rem;padding:.05rem .5rem;border:1px solid var(--line);border-radius:999px}
 a{color:var(--accent);text-underline-offset:.15em}
 a.wikilink{text-decoration-style:dotted}
 .wikilink.missing{color:var(--muted);text-decoration:line-through dotted}
@@ -83,13 +83,14 @@ const DEFAULT_LAYOUT = `<!doctype html>
 <header class="site"><a href="/">{{site.title}}</a><nav><a href="/feed.xml">Feed</a></nav></header>
 <main>
 {{#isIndex}}<h1>{{site.title}}</h1>{{/isIndex}}
-{{^isIndex}}
+{{#isTag}}<h1>{{title}}</h1>{{/isTag}}
+{{#isPage}}
 {{#hero}}<section class="hero"><h1>{{#hero.title}}{{hero.title}}{{/hero.title}}{{^hero.title}}{{page.title}}{{/hero.title}}</h1>{{#hero.text}}<p>{{#markdown}}{{hero.text}}{{/markdown}}</p>{{/hero.text}}</section>{{/hero}}
 {{^hero}}{{#showTitle}}<h1>{{title}}</h1>{{/showTitle}}{{/hero}}
-{{#dateText}}<p class="meta"><time datetime="{{date}}">{{dateLong}}</time>{{#tags.length}} · <span class="tags">{{#tags}}<span>{{name}}</span>{{/tags}}</span>{{/tags.length}}</p>{{/dateText}}
+{{#dateText}}<p class="meta"><time datetime="{{date}}">{{dateLong}}</time>{{#tags.length}} · <span class="tags">{{#tags}}{{#hasPage}}<a href="{{url}}">{{name}}</a>{{/hasPage}}{{^hasPage}}<span>{{name}}</span>{{/hasPage}}{{/tags}}</span>{{/tags.length}}</p>{{/dateText}}
 <article>{{{content}}}</article>
-{{/isIndex}}
-{{#isIndex}}<ul class="list">{{#pages}}<li><a href="{{url}}">{{title}}</a>{{#dateText}}<time datetime="{{date}}">{{dateText}}</time>{{/dateText}}</li>{{/pages}}</ul>{{/isIndex}}
+{{/isPage}}
+{{^isPage}}<ul class="list">{{#pages}}<li><a href="{{url}}">{{title}}</a>{{#dateText}}<time datetime="{{date}}">{{dateText}}</time>{{/dateText}}</li>{{/pages}}</ul>{{/isPage}}
 {{#backlinks.length}}<aside class="backlinks"><h2>Linked from</h2><ul>{{#backlinks}}<li><a href="{{url}}">{{title}}</a></li>{{/backlinks}}</ul></aside>{{/backlinks.length}}
 </main>
 </div>

@@ -56,9 +56,9 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 ### Rendering
 
 - **R67** Every `.md` file in a version is a source, rendered to a page when the version is published: `index.md` becomes the `index.html` of its folder, and `notes/plan.md` becomes `notes/plan/index.html`, served at `/notes/plan/`. Other files are served as they are, so a site can mix Markdown, HTML and assets.
-- **R68** A source that would render to a path another file already has (such as `plan.md` beside `plan/index.html`) refuses the publish, naming both.
+- **R68** A source that would render to a path another file already has (such as `plan.md` beside `plan/index.html`), or to the same path as another source (`plan.md` and `plan/index.md`), refuses the publish, naming both.
 - **R69** Front matter (YAML between `---` lines) can set `title`, `description`, `date`, `tags`, `layout`, `kind`, `cover`, `accent`, `hero` (`title`, `text`, `image`), `author`, `draft`, `hidden` (or `unlisted`) and `access`, and any other fields, which layouts can use. A page without a `title` takes it from its first heading, then its file name. `draft: true` keeps the source but renders no page; `hidden: true` renders the page but leaves it out of every list and the feed. Image paths in front matter resolve from the source's folder.
-- **R70** Rendering is part of publishing: the rendered pages are written with the version, pass the same checks as any file, and are staged and scanned like other new content. A page whose rendered HTML is the same as in the previous version is copied, not written again. A source and the page rendered from it count as one file toward the site's file limit, so a Markdown site can have as many pages as an HTML one.
+- **R70** Rendering is part of publishing: the rendered pages are written with the version, pass the same checks as any file, and are staged and scanned like other new content. A page whose rendered HTML is the same as in the previous version is copied, not written again. A source and the page rendered from it count as one file toward the site's file limit, so a Markdown site can have as many pages as an HTML one; pages Passa generates (home, tags, feed, `access.yml`) don't count.
 - **R71** Every version is rendered whole, from all its sources. Anything that changes rendered output makes a new version: an update, `set_access` (R85) and `set_name` (R84) on a site with sources.
 
 ### Markdown
@@ -83,7 +83,7 @@ Without an agent: run `passa serve` on the same folder, offline, and see the sam
 ### Site-wide pages and access
 
 - **R82** One rule decides what a page may name, for every list, backlink, related page, previous and next, and tag page: a page's visitors see public pages and pages of the page's own tier; owner-only (private) pages see everything. No other tier includes another, so a shared page never names an owner-only or paid page, and a paid page never names a shared one. The home page is never in a list.
-- **R83** A site whose sources include no `index.md` gets a generated home page. Each tag gets a page at `/tags/<tag>/` only if that page's own visitors can see a page with the tag, so a tag used only on private pages never gets a public page naming it.
+- **R83** A site with no `index.md` and no `index.html` gets a generated home page. A plain file always wins over a generated one: a site's own `index.html`, `feed.xml` or tag page is kept, and nothing is generated in its place. Each tag gets a page at `/tags/<tag>/` only if that page's own visitors can see a page with the tag, so a tag used only on private pages never gets a public page naming it.
 - **R84** When a site has dated public pages, it gets an RSS feed at `/feed.xml` of its 50 newest, with absolute URLs at the site's address. `set_name` on a site with sources re-renders it, so the feed and absolute links follow the name.
 - **R85** Because listings depend on rules, `set_access` on a site with sources re-renders it in the same change as the rules: there's no moment when a public page lists a page that's private.
 

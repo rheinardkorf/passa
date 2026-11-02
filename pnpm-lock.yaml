@@ -345,6 +345,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.7)
+      '@passa/render':
+        specifier: workspace:*
+        version: link:../render
       '@passa/shared':
         specifier: workspace:*
         version: link:../shared

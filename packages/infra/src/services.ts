@@ -136,6 +136,8 @@ export class ServicesStack extends Stack {
       entry: 'packages/mcp/src/lambda.ts',
       environment,
       description: `Passa ${props.stage} mcp.`,
+      // One full vCPU: publishing renders Markdown sites, on one thread (M3).
+      memorySize: 1769,
       removalPolicy: data.removalPolicy,
     });
     data.table.grantReadWriteData(mcp);

@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, relative, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { REFUSING, render, slugify, type Problem, type Rule, type Source } from '@passa/render';
+import { isSource, REFUSING, render, RULES_FILE, slugify, type Problem, type Rule, type Source } from '@passa/render';
 
 export type BuildOptions = {
   siteUrl?: string;
@@ -36,7 +36,6 @@ export type Build = {
   linksToSkipped: number;
 };
 
-export const RULES_FILE = '_passa/access.yml';
 const SKIP = new Set(['node_modules']);
 
 const toPosix = (p: string) => p.split(sep).join('/');
@@ -55,9 +54,6 @@ function walk(root: string, ignore?: string): string[] {
   visit(root);
   return out.sort();
 }
-
-const isSource = (path: string) =>
-  (path.endsWith('.md') && !path.startsWith('_layouts/')) || (path.startsWith('_layouts/') && path.endsWith('.html')) || path === '_site.yml';
 
 function frontMatter(content: string): Record<string, unknown> {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);

@@ -66,12 +66,12 @@ export class SiteFiles {
     }));
   }
 
-  // Carries an unchanged file into a new version. S3 copies the content type
-  // and cache headers with it.
-  async copyVersionFile(siteId: string, fromVersionId: string, toVersionId: string, path: string): Promise<void> {
+  // Carries an unchanged file into a new version, at a new path if given. S3
+  // copies the content type and cache headers with it.
+  async copyVersionFile(siteId: string, fromVersionId: string, toVersionId: string, path: string, toPath = path): Promise<void> {
     await this.#s3.send(new CopyObjectCommand({
       Bucket: this.#buckets.sites,
-      Key: `${siteId}/${toVersionId}/${path}`,
+      Key: `${siteId}/${toVersionId}/${toPath}`,
       CopySource: encodeURI(`${this.#buckets.sites}/${siteId}/${fromVersionId}/${path}`),
     }));
   }
