@@ -18,7 +18,8 @@
     "prepare": "husky",
     "local:up": "docker compose up -d --wait",
     "local:down": "docker compose down",
-    "local": "node scripts/local.ts"
+    "local": "node scripts/local.ts",
+    "passa": "node packages/cli/src/main.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

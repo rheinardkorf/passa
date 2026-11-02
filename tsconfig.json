@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/shared" },
     { "path": "packages/render" },
+    { "path": "packages/cli" },
     { "path": "packages/auth" },
     { "path": "packages/mcp" },
     { "path": "packages/edge" },

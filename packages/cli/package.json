@@ -1,0 +1,15 @@
+{
+  "name": "@passa/cli",
+  "description": "The passa command: build, preview and check a Markdown site locally, with no account.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "passa": "./src/main.ts"
+  },
+  "dependencies": {
+    "@passa/render": "workspace:*",
+    "@passa/shared": "workspace:*",
+    "yaml": "2.9.1"
+  }
+}
