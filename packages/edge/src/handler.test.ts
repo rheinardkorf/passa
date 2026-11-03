@@ -231,6 +231,60 @@ describe('named sites (M2 R44, R45)', () => {
   });
 });
 
+describe('custom domains (M4 R122)', () => {
+  const at = (host: string, uri = '/', extra: { cookie?: string } = {}) => request(uri, { ...extra, host });
+
+  beforeEach(async () => {
+    await kvs.putName('cv', SITE);
+    await kvs.putDomain('docs.example.org', SITE);
+    await kvs.putDomain('www.docs.example.org', SITE);
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [], n: 'cv', d: 'docs.example.org' });
+  });
+
+  it('serves a site at its primary domain, checking the same cookie', async () => {
+    expect(await rewrite(at('docs.example.org', '/guide/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/guide/index.html`);
+    expect((await response(at('docs.example.org', '/guide/'))).headers.location?.value)
+      .toBe(`https://auth.example.com/site/signin?site=docs.example.org&path=${encodeURIComponent('/guide/')}`);
+  });
+
+  it('redirects an alias, the name and the ID to the primary domain, keeping the path', async () => {
+    for (const host of ['www.docs.example.org', 'cv.example.com', `${SITE}.example.com`]) {
+      const r = await response(at(host, '/guide/a.html', { cookie: cookie() }));
+      expect([host, r.statusCode, r.headers.location?.value]).toEqual([host, 302, 'https://docs.example.org/guide/a.html']);
+    }
+  });
+
+  it('goes back to the name once the site has no domain, and a stale domain redirects there', async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/', 'p']], n: 'cv' });
+    expect(await rewrite(at('cv.example.com'))).toBe(`/${SITE}/${VERSION}/index.html`);
+    expect((await response(at('docs.example.org', '/x/'))).headers.location?.value).toBe('https://cv.example.com/x/');
+  });
+
+  it('gives a domain no site has not-found, and refuses hosts that are not domains', async () => {
+    for (const host of ['other.example.org', 'not_a_domain.org', '1.2.3.4']) expect((await response(at(host))).statusCode).toBe(404);
+  });
+
+  it('serves public paths at the domain without a cookie', async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/', 'p']], n: 'cv', d: 'docs.example.org' });
+    expect(await rewrite(at('docs.example.org', '/'))).toBe(`/${SITE}/${VERSION}/index.html`);
+  });
+
+  it('hands sign-in back on the domain', async () => {
+    const url = new URL(handoffUrl({ key, siteId: SITE, accessVersion: 1, origin: 'https://docs.example.org', path: '/guide/', cookieLifetime: 3600, now: NOW }));
+    const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
+    const r = await response({ request: { ...request(url.pathname, { query }).request, headers: { host: { value: 'docs.example.org' } } } });
+    expect([r.statusCode, r.headers.location?.value, r.cookies?.['__Host-passa']?.value]).toEqual([302, '/guide/', cookie({ expires: now + 3600 })]);
+  });
+
+  it('keeps the local proxy port on domain redirects', async () => {
+    const local = (host: string) => handle(at(host, '/a/'), { kvs, crypto, now: NOW, sites: 'localhost:8080', auth: 'http://localhost:8080', scheme: 'http' });
+    const r = await local('www.docs.example.org:8080');
+    expect(isResponse(r) && r.headers.location?.value).toBe('http://docs.example.org:8080/a/');
+    const served = await local('docs.example.org:8080');
+    expect(isResponse(served) && served.headers.location?.value).toMatch(/^http:\/\/localhost:8080\/site\/signin\?site=docs\.example\.org&/);
+  });
+});
+
 describe('paths', () => {
   it('returns 404 for paths that no published file can have', async () => {
     const c = cookie();
@@ -343,11 +397,12 @@ describe('indexing (response.js, M2 R42)', () => {
   const robots = loadViewerResponse();
   const tag = (host: string) => robots({ request: { headers: { host: { value: host } } }, response: { statusCode: 200, headers: {} } }, { sites: 'example.com' }).headers['x-robots-tag']?.value;
 
-  it('lets search engines index pages on a name host only', () => {
+  it('lets search engines index pages on a name host or a custom domain only', () => {
     expect(tag('cv.example.com')).toBeUndefined();
+    expect(tag('docs.example.org')).toBeUndefined(); // a custom domain (M4 R125)
     expect(tag(`${SITE}.example.com`)).toBe('noindex');
     expect(tag('example.com')).toBe('noindex');
-    expect(tag('cv.example.org')).toBe('noindex');
+    expect(tag('localhost')).toBe('noindex');
   });
 
   it('lets other sites embed public files only', () => {

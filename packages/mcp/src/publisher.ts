@@ -47,6 +47,8 @@ export type Deps = {
   // Where a site is served, by its ID or name. Defaults to
   // https://<label>.<siteDomain>/; the local proxy serves sites over http on its own port.
   siteUrl?: (label: string) => string;
+  // A site's URL at its custom domain; https://<domain>/ unless set (local).
+  domainUrl?: (domain: string) => string;
   // Uploads are scanned by GuardDuty Malware Protection (in AWS, not locally),
   // and publish checks each file's result first.
   malwareScan?: boolean;
@@ -90,6 +92,9 @@ export type SiteSummary = {
   data_as_of?: string;
   delete_at?: string;
   name?: string;
+  // Its custom domains (M4 R126); the primary one is then its address.
+  domain?: string;
+  domains?: string[];
   access: Access;
   rules?: Rule[];
 };
@@ -146,8 +151,10 @@ export class Publisher {
     return (this.#d.now ?? (() => new Date()))();
   }
 
-  // A site's one address: its name when it has one (M2 R45, R47).
-  #url(site: Pick<Site, 'id' | 'name'>) {
+  // A site's one address: its primary domain (M4 R124), else its name (M2
+  // R45, R47), else its ID.
+  #url(site: Pick<Site, 'id' | 'name' | 'domain'>) {
+    if (site.domain) return this.#d.domainUrl ? this.#d.domainUrl(site.domain) : `https://${site.domain}/`;
     const label = site.name ?? site.id;
     return this.#d.siteUrl ? this.#d.siteUrl(label) : `https://${label}.${siteDomain(this.#d.config)}/`;
   }
@@ -157,6 +164,8 @@ export class Publisher {
       site_id: site.id,
       url: this.#url(site),
       ...(site.name ? { name: site.name } : {}),
+      ...(site.domain ? { domain: site.domain } : {}),
+      ...(site.domains?.length ? { domains: site.domains } : {}),
       title: site.title,
       status: site.status,
       current_version: site.current,
@@ -768,8 +777,10 @@ export class Publisher {
   // Hard delete: stop serving, then files, then records, so a failure part-way
   // leaves the records in place and the purge can simply run again.
   async purge(siteId: string): Promise<void> {
+    const site = await this.#d.store.getSite(siteId);
     await this.#d.edge.remove(siteId);
     for (const { name } of await this.#d.store.namesOf(siteId)) await this.#d.edge.removeName(name);
+    for (const domain of site?.domains ?? []) await this.#d.edge.removeDomain(domain);
     await this.#d.files.deleteSite(siteId);
     await this.#d.store.deleteSiteRecords(siteId);
   }
@@ -807,6 +818,28 @@ export class Publisher {
       ...(rendered ?? {}),
       ...(site.name ? { held: { name: site.name, until: holdUntil, note: 'The old name redirects here until then, and only you can claim it again.' } } : {}),
     };
+  }
+
+  // Sets which live custom domains serve a site, and its primary (M4 R114,
+  // R117), then renders its Markdown again for the new address (R124). Not an
+  // MCP tool: the admin function calls it, once a domain serves or before it
+  // goes. New domains reach the edge before the record that redirects to them,
+  // and removed ones leave after it, so a redirect always has somewhere to go.
+  async setDomains(siteId: string, domains: string[], primary: string | undefined) {
+    const site = await this.#d.store.getSite(siteId);
+    if (!site || site.status === 'deleting') throw new ToolError(NOT_FOUND);
+    if (primary ? !domains.includes(primary) : domains.length > 0) throw new ToolError('The primary domain must be one of the site\'s domains.');
+    const before = site.domains ?? [];
+    for (const domain of domains) if (!before.includes(domain)) await this.#d.edge.putDomain(domain, siteId);
+    await this.#d.store.setSiteDomains(siteId, domains, primary, this.#now().toISOString());
+    const updated = (await this.#d.store.getSite(siteId)) ?? site;
+    // The rules haven't changed, so the current version already passed R89.
+    const rendered = primary !== site.domain && updated.status === 'active'
+      ? await this.#rerender({ userId: site.ownerId }, updated, await this.#version(updated), { rules: updated.rules ?? [], confirmPublic: true })
+      : undefined;
+    const synced = (await this.#sync(siteId)) ?? updated;
+    for (const domain of before) if (!domains.includes(domain)) await this.#d.edge.removeDomain(domain);
+    return { ...this.#summary(synced), ...(rendered ?? {}) };
   }
 
   // Writes a name's edge record from DynamoDB as it is now: pointing at its

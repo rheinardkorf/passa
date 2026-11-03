@@ -33,11 +33,16 @@ export async function startStack(): Promise<Stack> {
   }, 0);
   const port = (server.address() as AddressInfo).port;
   const siteUrl = (id: string) => `http://${id}.localhost:${port}/`;
-  const deps = await authTestDeps(env, { auth: `http://localhost:${port}`, mcp: `http://mcp.localhost:${port}`, site: (id) => `http://${id}.localhost:${port}` });
+  // Custom domains have no DNS here: tests send the Host themselves.
+  const domainUrl = (domain: string) => `http://${domain}:${port}/`;
+  const deps = await authTestDeps(env, {
+    auth: `http://localhost:${port}`, mcp: `http://mcp.localhost:${port}`, site: (id) => `http://${id}.localhost:${port}`, domain: (d) => `http://${d}:${port}`,
+  });
   auth = createAuthApp(deps);
   mcp = createMcpApp({
     ...env,
     siteUrl,
+    domainUrl,
     oidc: new OidcStore(env.db, env.tables.main),
     tokenKeys: [await loadTokenKey(deps.kms, deps.tokenKeyId)],
     issuer: `http://localhost:${port}`,
@@ -48,7 +53,7 @@ export async function startStack(): Promise<Stack> {
     env,
     server,
     port,
-    publisher: new Publisher({ ...env, siteUrl }),
+    publisher: new Publisher({ ...env, siteUrl, domainUrl }),
     sent: deps.sent,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
@@ -98,8 +103,9 @@ export class Browser {
     return { ...r, url: u };
   }
 
-  // Follows redirects and continuing pages while they stay on localhost hosts
-  // the proxy serves; stops at a page, or at a redirect anywhere else.
+  // Follows redirects and continuing pages while they stay on hosts the proxy
+  // serves (any host on its port, custom domains included); stops at a page, or
+  // at a redirect anywhere else.
   async follow(url: string, form?: Record<string, string>): Promise<Reply & { url: URL }> {
     let reply = await this.open(url, form);
     for (let i = 0; i < 12; i++) {
@@ -107,7 +113,7 @@ export class Browser {
       const next = reply.status >= 300 && reply.status < 400 ? String(reply.headers.location) : refresh;
       if (!next) break;
       const to = new URL(next, reply.url);
-      if (!to.host.endsWith(`localhost:${this.#port}`)) return { ...reply, url: to };
+      if (to.port !== String(this.#port) || to.hostname === '127.0.0.1') return { ...reply, url: to };
       reply = await this.open(to.href);
     }
     return reply;

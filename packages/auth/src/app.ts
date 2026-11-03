@@ -1,7 +1,7 @@
 // The auth. web app: sign-in pages, sessions, the site handoff, and the OAuth
 // authorization server for MCP clients, all on one session.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { isName, isSiteId, isSitePath } from '@passa/shared';
+import { isDomain, isName, isSiteId, isSitePath } from '@passa/shared';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { CSRF_COOKIE, readCookies, SESSION_COOKIE } from './cookies.ts';
 import { createProvider, type OAuthDeps } from './oauth.ts';
@@ -48,7 +48,7 @@ const field = (value: unknown) => (typeof value === 'string' ? value : '');
 function parseTarget(site: unknown, path: unknown): Target | undefined {
   const siteId = field(site);
   const p = field(path);
-  return (isSiteId(siteId) || isName(siteId)) && isSitePath(p) ? { siteId, path: p } : undefined;
+  return (isSiteId(siteId) || isName(siteId) || isDomain(siteId)) && isSitePath(p) ? { siteId, path: p } : undefined;
 }
 
 function parseNext(body: Record<string, unknown>): Next | undefined {

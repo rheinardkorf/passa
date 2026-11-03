@@ -14,6 +14,8 @@ const SITE_ID = /^[a-z]{3,6}-[a-z]{3,6}-[b-df-hj-km-np-tv-z2-9]{6}$/;
 // Site names (shared/names.ts, NAME_PATTERN). Checked after SITE_ID, so a
 // label that is an ID is never looked up as a name.
 const NAME = /^(?=[a-z0-9-]{2,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// Custom domains (shared/domains.ts, checkDomain): lowercase hostnames.
+const DOMAIN = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]*[a-z0-9]$/;
 // Same characters as publishable paths. Anything else (including %-escapes,
 // "..", dotfiles and empty segments) can't match a published file.
 const PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
@@ -134,14 +136,22 @@ async function handle(event, options) {
   const request = event.request;
   const host = request.headers.host ? request.headers.host.value.toLowerCase() : '';
   const suffix = '.' + options.sites;
-  // The host's label is a site ID or a name (M2 R44); a name is looked up.
+  // Locally the site domain carries the proxy's port, which no domain has.
+  const portMatch = /:\d+$/.exec(options.sites);
+  const port = portMatch ? portMatch[0] : '';
+  // The host's label is a site ID or a name (M2 R44); a name is looked up. A
+  // host outside the site domain is a custom domain, looked up whole (M4 R122).
   const label = host.endsWith(suffix) ? host.slice(0, -suffix.length) : '';
+  const domain = label ? '' : host.slice(0, host.length - port.length);
+  const custom = domain !== '' && host === domain + port && DOMAIN.test(domain);
   const byId = SITE_ID.test(label);
   const path = request.uri;
-  if ((!byId && !NAME.test(label)) || !PATH.test(path)) return notFound();
+  if ((!custom && !byId && !NAME.test(label)) || !PATH.test(path)) return notFound();
 
   const now = Math.floor(options.now / 1000);
-  const siteId = byId ? label : await readText(options.kvs, 'n:' + label);
+  const siteId = custom ? await readText(options.kvs, 'd:' + domain) : byId ? label : await readText(options.kvs, 'n:' + label);
+  // CloudFront only routes attached domains here, so an unknown one is a slip.
+  if (custom && !siteId) return notFound();
   const record = siteId ? await readJson(options.kvs, 's:' + siteId) : null;
 
   // Sign-in hands the visitor back here with a short-lived token, since auth.
@@ -173,11 +183,11 @@ async function handle(event, options) {
   // Reserved for Passa; never served from storage (R14).
   if (path === '/_passa' || path.indexOf('/_passa/') === 0) return notFound();
 
-  // A named site has one address, its name (M2 R45): its ID and any held
-  // names redirect there, keeping the path.
-  const canonical = record ? record.n || siteId : label;
-  if (canonical !== label) {
-    return respond(302, 'Found', { location: (options.scheme || 'https') + '://' + canonical + suffix + path });
+  // A site has one address: its primary domain (M4 R122), else its name (M2
+  // R45), else its ID. Every other address redirects there, keeping the path.
+  const canonical = record && record.d ? record.d + port : (record ? record.n || siteId : label || domain) + (record || label ? suffix : port);
+  if (canonical !== host) {
+    return respond(302, 'Found', { location: (options.scheme || 'https') + '://' + canonical + path });
   }
 
   // Public paths need no cookie (M2 R39). Rules match the path as served, so
@@ -193,7 +203,7 @@ async function handle(event, options) {
   // A missing site, or a name no site has, looks exactly like a private one, so
   // the redirect reveals nothing (R12). auth. resolves names itself.
   if (!allowed) {
-    const signin = options.auth + '/site/signin?site=' + label + '&path=' + encodeURIComponent(path);
+    const signin = options.auth + '/site/signin?site=' + (custom ? domain : label) + '&path=' + encodeURIComponent(path);
     return respond(302, 'Found', { location: signin });
   }
 

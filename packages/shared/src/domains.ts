@@ -67,11 +67,17 @@ export type Domain = Attachment & {
 
 const LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
 
+// A lowercase hostname of two or more labels, its last not all digits (so not
+// an IP address). Names have no dots, so a value is never both.
+export function isDomain(value: string): boolean {
+  const labels = value.split('.');
+  return value === value.toLowerCase() && value.length <= 253 && labels.length >= 2 && labels.every((l) => LABEL.test(l)) && !/^\d+$/.test(labels.at(-1) ?? '');
+}
+
 // R114: a lowercase hostname of two or more labels, not under the site domain;
 // under Passa's own domain it's allowed with a warning (same-site with auth.).
 export function checkDomain(domain: string, deployment: { domain: string; siteDomain: string }): { problem?: string; warning?: string } {
-  const labels = domain.split('.');
-  if (domain !== domain.toLowerCase() || domain.length > 253 || labels.length < 2 || !labels.every((l) => LABEL.test(l)) || /^\d+$/.test(labels.at(-1) ?? '')) {
+  if (!isDomain(domain)) {
     return { problem: `${domain} isn't a valid domain name (lowercase letters, digits and hyphens, such as docs.example.com)` };
   }
   const under = (parent: string) => domain === parent || domain.endsWith(`.${parent}`);
