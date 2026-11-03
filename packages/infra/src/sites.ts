@@ -148,6 +148,8 @@ export class SitesStack extends Stack {
     // passa admin (M4 R113): invoked with AWS credentials, never through MCP.
     const admin = nodeFunction(this, 'AdminFunction', {
       entry: 'packages/admin/src/lambda.ts',
+      // A fixed name, so passa admin finds it from the stage alone.
+      functionName: `passa-${props.stage}-admin`,
       description: `Passa ${props.stage} admin`,
       environment: {
         [ENV.config]: JSON.stringify(config),

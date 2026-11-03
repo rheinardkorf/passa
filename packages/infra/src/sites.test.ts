@@ -42,6 +42,7 @@ describe('sites stack', () => {
 
   it('gives the admin function only what attaching domains needs (M4 security)', () => {
     const fn = Object.entries(sites.findResources('AWS::Lambda::Function')).find(([id]) => id.startsWith('AdminFunction'));
+    expect(fn?.[1].Properties.FunctionName).toBe('passa-prod-admin');
     expect(fn?.[1].Properties.Environment.Variables).toMatchObject({ PASSA_DOMAINS_DISTRIBUTION: expect.anything(), PASSA_DOMAINS_CONNECTION_GROUP: expect.anything() });
     const policy = JSON.stringify(Object.values(sites.findResources('AWS::IAM::Policy')).filter((p) => JSON.stringify(p).includes('AdminFunction')));
     // Certificates only when tagged for Passa; no Route 53 unless config lists zones.

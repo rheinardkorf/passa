@@ -83,3 +83,7 @@ Commands use, in order:
 4. the current server: the last one you signed in to, or chose with `passa use`
 
 So a folder published to one deployment always syncs back to it, whatever else is set.
+
+## Admin commands
+
+Admins of a deployment manage custom domains with `passa admin domain`, using the deployment's AWS credentials rather than a Passa sign-in: `add`, `list`, `status` and `remove`, each with `--stage`. See [[Custom domains]].

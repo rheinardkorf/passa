@@ -282,6 +282,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@aws-sdk/client-lambda':
+        specifier: 3.1152.0
+        version: 3.1152.0
       '@passa/csp':
         specifier: workspace:*
         version: link:../csp

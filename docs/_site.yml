@@ -20,4 +20,5 @@ nav:
   - title: Self-hosting
     items:
       - { title: Deploying Passa, url: /deploying/ }
+      - { title: Custom domains, url: /custom-domains/ }
       - { title: Security, url: /security/ }
