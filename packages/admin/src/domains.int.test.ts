@@ -148,7 +148,8 @@ describe('passa admin domain', () => {
     const r = await admin.add({ domain: 'docs.example.org', site: 'elsewhere', tenant: 'new' });
     expect(r.dns).toBe('manual');
     expect(r.waiting.map((w) => w.record.purpose).sort()).toEqual(['pointer', 'validation']);
-    expect([...route53.records.keys()].some((k) => k.includes('example.org'))).toBe(false);
+    const name = (r: DnsRecord) => r.name.replace(/\.$/, '');
+    expect([...route53.records.values()].some((r) => name(r) === 'example.org' || name(r).endsWith('.example.org'))).toBe(false);
     await removeToGone('docs.example.org');
   });
 
