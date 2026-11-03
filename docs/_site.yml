@@ -1,0 +1,11 @@
+title: Passa
+description: Publish what you and your AI agents make to private links on your own domain.
+author: Rheinard Korf
+nav:
+  - { title: Home, url: / }
+  - { title: Get started, url: /getting-started/ }
+  - { title: Markdown, url: /markdown/ }
+  - { title: Access, url: /access/ }
+  - { title: CLI, url: /cli/ }
+  - { title: Agents, url: /agents/ }
+  - { title: Deploy, url: /deploying/ }

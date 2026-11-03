@@ -35,6 +35,19 @@ describe('rendering (R67–R71)', () => {
     expect(r.problems).toEqual([]);
   });
 
+  it('shows the site\'s nav in the default theme, and links the feed only when there is one', () => {
+    const site = { path: '_site.yml', content: 'title: Docs\nnav:\n  - { title: Home, url: / }\n  - { title: Guide, url: /guide/ }\n' };
+    const undated = build([site, { path: 'index.md', content: '# Home' }, { path: 'guide.md', content: '# Guide' }]);
+    const guide = undated.html('guide/index.html');
+    expect(guide).toContain('<a href="/">Home</a><a href="/guide/" aria-current="page">Guide</a>');
+    expect(undated.feed).toBeUndefined();
+    expect(guide).not.toContain('feed.xml');
+    const dated = build([site, { path: 'post.md', content: '---\ndate: 2026-01-01\n---\nA post.' }]);
+    expect(dated.feed).toContain('<title>post</title>');
+    expect(dated.html('post/index.html')).toContain('<a href="/feed.xml">Feed</a>');
+    expect(dated.html('post/index.html')).toContain('<link rel="alternate" type="application/rss+xml" title="Docs" href="/feed.xml">');
+  });
+
   it('takes the title from front matter, then the first heading, then the file name', () => {
     const r = build([
       { path: 'a.md', content: '---\ntitle: From front matter\n---\n# Heading' },

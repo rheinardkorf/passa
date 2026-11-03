@@ -8,9 +8,11 @@ const CSS = `
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:18px/1.65 ui-serif,Georgia,Cambria,"Times New Roman",serif}
 .wrap{max-width:42rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}
-header.site{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:2.5rem;font:600 .95rem/1.4 ui-sans-serif,system-ui,sans-serif}
+header.site{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.5rem 1rem;margin-bottom:2.5rem;font:600 .95rem/1.4 ui-sans-serif,system-ui,sans-serif}
 header.site a{color:var(--fg);text-decoration:none}
-header.site nav a{color:var(--muted);margin-left:1rem}
+header.site nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem}
+header.site nav a{color:var(--muted)}
+header.site nav a[aria-current]{color:var(--fg)}
 h1,h2,h3,h4{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.25;letter-spacing:-.01em;margin:2.2rem 0 .8rem}
 h1{font-size:2.1rem;margin-top:0}
 h2{font-size:1.45rem}
@@ -76,11 +78,12 @@ const DEFAULT_LAYOUT = `<!doctype html>
 <meta property="og:site_name" content="{{site.title}}">
 {{#description}}<meta property="og:description" content="{{description}}">{{/description}}{{^description}}{{#excerpt}}<meta property="og:description" content="{{excerpt}}">{{/excerpt}}{{/description}}
 {{#socialImage}}<meta property="og:image" content="{{socialImage}}"><meta name="twitter:card" content="summary_large_image">{{/socialImage}}{{^socialImage}}<meta name="twitter:card" content="summary">{{/socialImage}}
+{{#feed}}<link rel="alternate" type="application/rss+xml" title="{{site.title}}" href="{{feed}}">{{/feed}}
 <style>${CSS.trim()}</style>
 </head>
 <body>
 <div class="wrap">
-<header class="site"><a href="/">{{site.title}}</a><nav><a href="/feed.xml">Feed</a></nav></header>
+<header class="site"><a href="/">{{site.title}}</a><nav>{{#nav}}<a href="{{url}}"{{#current}} aria-current="page"{{/current}}>{{title}}</a>{{/nav}}{{#feed}}<a href="{{feed}}">Feed</a>{{/feed}}</nav></header>
 <main>
 {{#isIndex}}<h1>{{site.title}}</h1>{{/isIndex}}
 {{#isTag}}<h1>{{title}}</h1>{{/isTag}}

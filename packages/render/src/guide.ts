@@ -77,6 +77,7 @@ Put the full archive (\`pages\`, \`years\`) on the home, archive or tag pages, n
 **The site** (\`site\`, from \`_site.yml\`)
 - \`site.title\`, \`site.description\`, \`site.author\`, \`site.url\`
 - \`site.nav\` (also \`nav\`): \`[{ title, url, current }]\`. \`current\` is true on the page a link leads to and pages under it; a link to \`/\` is current only on the home page
+- \`feed\`: the feed's URL (\`/feed.xml\`) when the site has one, else null. Link to it only inside \`{{#feed}}…{{/feed}}\`, and add \`<link rel="alternate" type="application/rss+xml" href="{{feed}}">\` to \`<head>\` the same way: a site whose public pages have no dates has no feed
 - \`lang\`: the page language for \`<html lang="{{lang}}">\` (\`site.lang\`, else \`site.locale\`, else \`en\`)
 - optional: \`site.locale\` (dates; default \`en-GB\`), \`site.undated\`, \`site.recentCount\`, \`site.logo\`, and any other field in \`_site.yml\`
 

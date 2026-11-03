@@ -375,6 +375,13 @@ export function render(input: RenderInput): RenderResult {
     return { path: `${url.slice(1)}_card-${hash}.png`, hash, html: resolved, images: [...new Set(images)] };
   };
 
+  // Feed (R84): public, dated, listed pages only, newest first. A site's own
+  // feed.xml wins over the generated one. Layouts get its URL as `feed`, so
+  // they only link to a feed that exists.
+  const feedItems = pages.filter((p) => p.date && p.tier === 'public' && !p.unlisted && !p.generated && p.url !== '/')
+    .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')).slice(0, 50);
+  const feed = feedItems.length || taken.has('feed.xml') ? '/feed.xml' : null;
+
   const out: RenderedPage[] = [];
   for (const p of pages) {
     const layoutName = p.data.layout ? String(p.data.layout)
@@ -475,6 +482,7 @@ export function render(input: RenderInput): RenderResult {
       nav,
       lang: String(site.lang ?? site.locale ?? 'en'),
       mermaid: p.state.mermaid ? MERMAID : null,
+      feed,
       // {{#markdown}}{{hero.text}}{{/markdown}}: a value as inline Markdown.
       markdown: inlineLambda(md, { page: pageState(p.source, p.dir) }),
     };
@@ -514,11 +522,7 @@ export function render(input: RenderInput): RenderResult {
     }
   }
 
-  // Feed (R84): public, dated, listed pages only, newest first.
-  const feedItems = pages.filter((p) => p.date && p.tier === 'public' && !p.unlisted && !p.generated && p.url !== '/')
-    .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')).slice(0, 50);
   const result: RenderResult = { pages: out, problems, ...(cardHashes ? { cards, cardFonts } : {}) };
-  // A site's own feed.xml wins over the generated one.
   if (feedItems.length && !taken.has('feed.xml')) {
     const abs = (url: string) => new URL(url, siteUrl).href;
     result.feed = `<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0"><channel><title>${escapeHtml(site.title)}</title><link>${abs('/')}</link><description>${escapeHtml(String(site.description ?? site.title))}</description>\n`
