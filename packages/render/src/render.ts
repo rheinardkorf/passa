@@ -143,6 +143,7 @@ function lazy(obj: object, name: string, make: () => unknown) {
 
 // Positions for a plain list: index (from 1), isFirst, isLast.
 const pad = (n: number) => String(n).padStart(2, '0');
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const positions = <T extends object>(list: T[]) => list.map((item, i) => ({ ...item, index: i + 1, indexPadded: pad(i + 1), isFirst: i === 0, isLast: i === list.length - 1 }));
 
 // Page lists: each item inherits from the shared summary, so lists stay cheap
@@ -188,7 +189,16 @@ export function render(input: RenderInput): RenderResult {
       problem('site-settings', '_site.yml', `_site.yml isn't valid YAML (${firstLine(err)})`);
     }
   }
-  const navItems = (Array.isArray(siteData.nav) ? siteData.nav : []).filter((n): n is Record<string, unknown> => !!n && typeof n === 'object');
+  const navItems = (Array.isArray(siteData.nav) ? siteData.nav : []).filter(isRecord);
+  // Every link in the nav, sections included, in order: for navPrev and navNext.
+  const readingOrder: { title: unknown; url: string }[] = [];
+  const read = (items: Record<string, unknown>[]) => {
+    for (const n of items) {
+      if (typeof n.url === 'string' && !readingOrder.some((l) => l.url === n.url)) readingOrder.push({ title: n.title, url: n.url });
+      if (Array.isArray(n.items)) read(n.items.filter(isRecord));
+    }
+  };
+  read(navItems);
   const site: FrontMatter & { title: string; url: string; nav: Record<string, unknown>[] } = {
     ...siteData, title: typeof siteData.title === 'string' ? siteData.title : siteTitle, url: siteUrl, nav: navItems,
   };
@@ -430,8 +440,15 @@ export function render(input: RenderInput): RenderResult {
       return best.map(([q]) => summaryOf(q));
     };
     // Nav items know whether they lead to this page or the section it's in;
-    // a link to / is current only on the home page.
-    const nav = positions(site.nav.map((n) => ({ ...n, current: n.url === p.url || (n.url !== '/' && typeof n.url === 'string' && p.url.startsWith(n.url)) })));
+    // a link to / is current only on the home page. An item with its own
+    // items is a section, current when one of them is.
+    const leads = (url: unknown) => typeof url === 'string' && (url === p.url || (url !== '/' && p.url.startsWith(url)));
+    const navTree = (items: Record<string, unknown>[]): Record<string, unknown>[] => positions(items.map((n) => {
+      const children = Array.isArray(n.items) ? navTree(n.items.filter(isRecord)) : undefined;
+      return { ...n, ...(children ? { items: children } : {}), current: leads(n.url) || !!children?.some((c) => c.current) };
+    }));
+    const nav = navTree(site.nav);
+    const reading = readingOrder.findIndex((l) => l.url === p.url);
     const older = at >= 0 ? dated[at + 1] : undefined;
     const newer = at > 0 ? dated[at - 1] : undefined;
     const prev = older ? summaryOf(older) : null;
@@ -480,6 +497,9 @@ export function render(input: RenderInput): RenderResult {
       recent: placed(first(recentCount)),
       site: { ...site, nav },
       nav,
+      // The pages before and after this one in the nav's reading order.
+      navPrev: reading > 0 ? readingOrder[reading - 1] : null,
+      navNext: reading >= 0 ? readingOrder[reading + 1] ?? null : null,
       lang: String(site.lang ?? site.locale ?? 'en'),
       mermaid: p.state.mermaid ? MERMAID : null,
       feed,

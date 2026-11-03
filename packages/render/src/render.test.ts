@@ -48,6 +48,15 @@ describe('rendering (R67–R71)', () => {
     expect(dated.html('post/index.html')).toContain('<link rel="alternate" type="application/rss+xml" title="Docs" href="/feed.xml">');
   });
 
+  it('gives nav sections their current state, and the reading order as navPrev and navNext', () => {
+    const site = { path: '_site.yml', content: 'title: Docs\nnav:\n  - { title: Home, url: / }\n  - title: Guides\n    items:\n      - { title: Access, url: /access/ }\n      - { title: CLI, url: /cli/ }\n' };
+    const layout = { path: '_layouts/default.html', content: '{{#nav}}[{{title}}{{#current}}*{{/current}}{{#items}} {{title}}{{#current}}*{{/current}}{{/items}}]{{/nav}}|{{#navPrev}}<{{title}}{{/navPrev}}|{{#navNext}}{{title}}>{{/navNext}}' };
+    const r = build([site, layout, { path: 'index.md', content: 'Home' }, { path: 'access.md', content: 'A' }, { path: 'cli.md', content: 'C' }]);
+    expect(r.html('access/index.html')).toBe('[Home][Guides* Access* CLI]|<Home|CLI>');
+    expect(r.html('cli/index.html')).toBe('[Home][Guides* Access CLI*]|<Access|');
+    expect(r.html('index.html')).toBe('[Home*][Guides Access CLI]||Access>');
+  });
+
   it('takes the title from front matter, then the first heading, then the file name', () => {
     const r = build([
       { path: 'a.md', content: '---\ntitle: From front matter\n---\n# Heading' },

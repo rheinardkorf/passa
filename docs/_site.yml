@@ -1,11 +1,23 @@
 title: Passa
 description: Publish what you and your AI agents make to private links on your own domain.
 author: Rheinard Korf
+repo: https://github.com/rheinardkorf/passa
 nav:
-  - { title: Home, url: / }
-  - { title: Get started, url: /getting-started/ }
-  - { title: Markdown, url: /markdown/ }
-  - { title: Access, url: /access/ }
-  - { title: CLI, url: /cli/ }
-  - { title: Agents, url: /agents/ }
-  - { title: Deploy, url: /deploying/ }
+  - title: Introduction
+    items:
+      - { title: Overview, url: / }
+      - { title: Get started, url: /getting-started/ }
+  - title: Guides
+    items:
+      - { title: Markdown sites, url: /markdown/ }
+      - { title: Access, url: /access/ }
+      - { title: Themes, url: /themes/ }
+      - { title: Social cards, url: /social-cards/ }
+  - title: Reference
+    items:
+      - { title: The passa CLI, url: /cli/ }
+      - { title: Agents and MCP, url: /agents/ }
+  - title: Self-hosting
+    items:
+      - { title: Deploying Passa, url: /deploying/ }
+      - { title: Security, url: /security/ }
