@@ -27,6 +27,7 @@ jobs:
       - run: pnpm check:leaks
       - run: pnpm check:licenses
       - run: pnpm audit --audit-level critical
+      - run: pnpm smoke:cli
 
   integration:
     runs-on: ubuntu-latest
