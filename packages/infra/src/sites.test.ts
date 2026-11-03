@@ -24,6 +24,42 @@ describe('sites stack', () => {
     });
   });
 
+  it('serves custom domains from a multi-tenant distribution with the same behaviour (M4 R121)', () => {
+    const distributions = Object.values(sites.findResources('AWS::CloudFront::Distribution'));
+    const tenantOnly = distributions.find((d) => d.Properties.DistributionConfig.ConnectionMode === 'tenant-only');
+    const main = distributions.find((d) => d.Properties.DistributionConfig.Aliases);
+    expect(tenantOnly).toBeDefined();
+    const config = tenantOnly?.Properties.DistributionConfig;
+    expect([config.Aliases, config.IPV6Enabled, config.PriceClass]).toEqual([undefined, undefined, undefined]);
+    expect(config.ViewerCertificate).toEqual({ CloudFrontDefaultCertificate: true, SslSupportMethod: 'sni-only', MinimumProtocolVersion: 'TLSv1.2_2021' });
+    // The same origin, functions, headers and error pages as the main one.
+    const behaviour = (d: typeof config) => ({ ...d.DefaultCacheBehavior, TargetOriginId: undefined });
+    expect(behaviour(config)).toEqual(behaviour(main?.Properties.DistributionConfig));
+    expect(config.Origins[0].DomainName).toEqual(main?.Properties.DistributionConfig.Origins[0].DomainName);
+    expect(config.CustomErrorResponses).toEqual(main?.Properties.DistributionConfig.CustomErrorResponses);
+    sites.hasResourceProperties('AWS::CloudFront::ConnectionGroup', { Name: 'passa-prod-domains', Ipv6Enabled: true });
+  });
+
+  it('gives the admin function only what attaching domains needs (M4 security)', () => {
+    const fn = Object.entries(sites.findResources('AWS::Lambda::Function')).find(([id]) => id.startsWith('AdminFunction'));
+    expect(fn?.[1].Properties.Environment.Variables).toMatchObject({ PASSA_DOMAINS_DISTRIBUTION: expect.anything(), PASSA_DOMAINS_CONNECTION_GROUP: expect.anything() });
+    const policy = JSON.stringify(Object.values(sites.findResources('AWS::IAM::Policy')).filter((p) => JSON.stringify(p).includes('AdminFunction')));
+    // Certificates only when tagged for Passa; no Route 53 unless config lists zones.
+    expect(policy).toContain('"aws:RequestTag/project":"passa"');
+    expect(policy).toContain('"aws:ResourceTag/project":"passa"');
+    expect(policy).not.toContain('route53:');
+    expect(policy).not.toMatch(/"cloudfront:\*"|"acm:\*"/);
+    // Nothing can invoke it but IAM principals allowed to: no URL, no API.
+    expect(Object.keys(sites.findResources('AWS::Lambda::Url'))).toEqual([]);
+  });
+
+  it('lets the admin function change only the Route 53 zones config lists', () => {
+    const zoned = addStage(testApp(), parseConfig({ ...exampleConfig(), domains: { zones: ['Z0123456789ABC'] } }), 'prod');
+    const policy = JSON.stringify(Template.fromStack(zoned.sites).findResources('AWS::IAM::Policy'));
+    expect(policy).toContain('hostedzone/Z0123456789ABC');
+    expect(policy).toContain('route53:ChangeResourceRecordSets');
+  });
+
   it('builds the function from handler.js with the store and both domains', () => {
     const fn = Object.values(sites.findResources('AWS::CloudFront::Function')).find((f) => JSON.stringify(f).includes('cf.kvs'));
     // Fn::Join of the code around the store's ID.

@@ -29,7 +29,7 @@ export function senderDomain(from: string): string {
 export function stageConfig(config: Config, stage: Stage): Config {
   const { stages, ...base } = config;
   const overrides = stages?.[stage] ?? {};
-  const result: Config = { ...base, domain: overrides.domain ?? base.domain, email: overrides.email ?? base.email };
+  const result: Config = { ...base, domain: overrides.domain ?? base.domain, email: overrides.email ?? base.email, domains: overrides.domains ?? base.domains };
   const sites = overrides.siteDomain ?? base.siteDomain;
   if (sites) result.siteDomain = sites;
   return result;

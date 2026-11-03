@@ -22,10 +22,19 @@ const timeZone = z.string().refine((zone) => {
 const email = z.strictObject({ from: z.string().min(1) });
 
 // What a stage can change: dev usually runs on its own subdomains.
+// Custom domains (M4): the Route 53 hosted zones (by ID) Passa may write
+// records in, and how many names share a tenant's certificate (ACM's default
+// limit is 10 names per certificate).
+const domains = z.strictObject({
+  zones: z.array(z.string().regex(/^Z[A-Z0-9]{1,32}$/)).default([]),
+  namesPerTenant: z.number().int().min(1).max(100).default(10),
+});
+
 const stageOverrides = z.strictObject({
   domain: domainName.optional(),
   siteDomain: domainName.optional(),
   email: email.optional(),
+  domains: domains.optional(),
 });
 
 export const configSchema = z.strictObject({
@@ -69,6 +78,7 @@ export const configSchema = z.strictObject({
   nameHoldDays: z.number().int().nonnegative().default(7),
   // Names publishers can't use, besides the built-in ones (www, auth, ...).
   reservedNames: z.array(z.string().min(1)).default([]),
+  domains: domains.default({ zones: [], namesPerTenant: 10 }),
   // How long things are kept. A site keeps every version for versionDays, then
   // the last version of each month (in timeZone) for monthEndMonths; its
   // current version is always kept. Events are kept for eventYears.

@@ -15,6 +15,10 @@ export const ENV = {
   configurationSet: 'PASSA_SES_CONFIGURATION_SET', // optional: reports bounces and complaints
   malwareScan: 'PASSA_MALWARE_SCAN', // "1" when GuardDuty scans the buckets
   cardsFunction: 'PASSA_CARDS_FUNCTION', // optional: draws the social cards a publish had no time for
+  // The admin function's (M4): the multi-tenant distribution custom domains
+  // attach to, and its connection group.
+  domainsDistribution: 'PASSA_DOMAINS_DISTRIBUTION',
+  domainsConnectionGroup: 'PASSA_DOMAINS_CONNECTION_GROUP',
 } as const;
 
 export type RuntimeEnv = {
