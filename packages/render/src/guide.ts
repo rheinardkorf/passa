@@ -164,7 +164,7 @@ When a public page is shared (Slack, Bluesky, LinkedIn, iMessage), the preview s
 
 ### Fonts
 
-Cards can't use web or system fonts: the theme ships its own, in \`_layouts/fonts/\`, named \`Family__weight__style.woff\` (for example \`_layouts/fonts/Space Grotesk__700__normal.woff\`), and \`font-family\` uses the family name. \`.woff\`, \`.ttf\` or \`.otf\`, not \`.woff2\`. A theme card with no fonts refuses the publish, since its text wouldn't render. Open-licence fonts are in npm's \`@fontsource\` packages (\`files/<font>-latin-<weight>-<style>.woff\`).
+Cards can't use web or system fonts: the theme ships its own, in \`_layouts/fonts/\`, named \`Family__weight__style.woff\` (for example \`_layouts/fonts/SpaceGrotesk__700__normal.woff\`), and \`font-family\` uses that family name (\`font-family:SpaceGrotesk\`). File names can't contain spaces, since a publish refuses them, so write a family like Space Grotesk as one word in both places. \`.woff\`, \`.ttf\` or \`.otf\`, not \`.woff2\`. A theme card with no fonts refuses the publish, since its text wouldn't render. Open-licence fonts are in npm's \`@fontsource\` packages (\`files/<font>-latin-<weight>-<style>.woff\`).
 
 ### Good cards
 
