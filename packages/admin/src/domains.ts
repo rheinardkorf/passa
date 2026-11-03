@@ -89,8 +89,12 @@ export class AdminDomains {
     if (input.primary && item.role !== 'primary') item.role = 'primary';
     await store.saveDomain(item);
 
-    // Live: the site switches to it (R115), and a new primary renders again (R124).
-    if (item.step === 'live') await this.#serve(site, item);
+    // Live: the site switches to it (R115), and a new primary renders again
+    // (R124). Until a switch has finished, it's done again in full.
+    if (item.step === 'live') {
+      await this.#serve(site, item, !item.served);
+      if (!item.served) await store.saveDomain({ ...item, served: true, updatedAt: this.#now() });
+    }
     const waiting = item.step === 'certificate' ? await (this.#d.pending ?? pending)(item.records) : [];
     // Reported as things are now, after any switch.
     const now = (await store.getSite(site.id)) ?? site;
@@ -150,14 +154,14 @@ export class AdminDomains {
     return this.#report(item, site, zone ? 'route53' : 'manual', await (this.#d.pending ?? pending)(item.records));
   }
 
-  async #serve(site: Site, item: Domain) {
+  async #serve(site: Site, item: Domain, force: boolean) {
     const current = (await this.#d.store.getSite(site.id)) ?? site;
     const domains = current.domains ?? [];
     const wantPrimary = item.role === 'primary' && current.domain !== item.domain;
-    if (domains.includes(item.domain) && !wantPrimary) return;
+    if (domains.includes(item.domain) && !wantPrimary && !force) return;
     const next = domains.includes(item.domain) ? domains : [...domains, item.domain];
-    const primary = wantPrimary || !current.domain ? item.domain : current.domain;
-    await this.#d.publisher.setDomains(site.id, next, primary);
+    const primary = item.role === 'primary' || !current.domain ? item.domain : current.domain;
+    await this.#d.publisher.setDomains(site.id, next, primary, { force });
     // The domain that was primary is now an alias.
     if (current.domain && primary !== current.domain) await this.#setRole(current.domain, 'alias');
   }

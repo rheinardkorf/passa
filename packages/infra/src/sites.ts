@@ -173,6 +173,8 @@ export class SitesStack extends Stack {
     data.table.grantReadWriteData(admin);
     data.events.grantWriteData(admin);
     data.sites.grantReadWrite(admin);
+    // Re-rendered files are staged in the uploads bucket for scanning, as on publish.
+    data.uploads.grantReadWrite(admin);
     admin.addToRolePolicy(kvsWritePolicy(data.edgeStore));
     props.cards?.grantInvoke(admin);
     const tenants = `arn:${this.partition}:cloudfront::${this.account}:distribution-tenant/*`;

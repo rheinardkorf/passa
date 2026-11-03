@@ -821,23 +821,28 @@ export class Publisher {
   }
 
   // Sets which live custom domains serve a site, and its primary (M4 R114,
-  // R117), then renders its Markdown again for the new address (R124). Not an
-  // MCP tool: the admin function calls it, once a domain serves or before it
-  // goes. New domains reach the edge before the record that redirects to them,
-  // and removed ones leave after it, so a redirect always has somewhere to go.
-  async setDomains(siteId: string, domains: string[], primary: string | undefined) {
+  // R117), rendering its Markdown again for the new address (R124). Not an MCP
+  // tool: the admin function calls it, once a domain serves or before it goes.
+  // Each step can be repeated, so a call that fails part-way is simply made
+  // again: new domains reach the edge first, the render comes before the site
+  // records the change (so a failed render leaves nothing half done), and
+  // removed domains leave the edge last. force renders even when the primary
+  // looks unchanged, to finish a switch an earlier call didn't.
+  async setDomains(siteId: string, domains: string[], primary: string | undefined, options: { force?: boolean } = {}) {
     const site = await this.#d.store.getSite(siteId);
     if (!site || site.status === 'deleting') throw new ToolError(NOT_FOUND);
     if (primary ? !domains.includes(primary) : domains.length > 0) throw new ToolError('The primary domain must be one of the site\'s domains.');
     const before = site.domains ?? [];
     for (const domain of domains) if (!before.includes(domain)) await this.#d.edge.putDomain(domain, siteId);
-    await this.#d.store.setSiteDomains(siteId, domains, primary, this.#now().toISOString());
-    const updated = (await this.#d.store.getSite(siteId)) ?? site;
+    // The site as it will be, for the render's absolute URLs.
+    const target: Site = { ...site, domains, ...(primary ? { domain: primary } : {}) };
+    if (!primary) delete target.domain;
     // The rules haven't changed, so the current version already passed R89.
-    const rendered = primary !== site.domain && updated.status === 'active'
-      ? await this.#rerender({ userId: site.ownerId }, updated, await this.#version(updated), { rules: updated.rules ?? [], confirmPublic: true })
+    const rendered = (primary !== site.domain || options.force) && site.status === 'active'
+      ? await this.#rerender({ userId: site.ownerId }, target, await this.#version(site), { rules: site.rules ?? [], confirmPublic: true })
       : undefined;
-    const synced = (await this.#sync(siteId)) ?? updated;
+    await this.#d.store.setSiteDomains(siteId, domains, primary, this.#now().toISOString());
+    const synced = (await this.#sync(siteId)) ?? site;
     for (const domain of before) if (!domains.includes(domain)) await this.#d.edge.removeDomain(domain);
     return { ...this.#summary(synced), ...(rendered ?? {}) };
   }

@@ -152,6 +152,24 @@ describe('passa admin domain', () => {
     await removeToGone('docs.example.org');
   });
 
+  it('finishes a switch that failed part-way on the next call (found on dev)', async () => {
+    const id = await site('Retry', 'retry-site');
+    // The site was switched in the database once, but the edge never was.
+    await env.store.setSiteDomains(id, ['retry.example.test'], 'retry.example.test', new Date().toISOString());
+    await env.edge.putDomain('retry.example.test', id);
+    // Its domain is live at CloudFront, but its switch never finished.
+    const flaky = new AdminDomains({
+      store: env.store, events: env.events, config: { ...env.config, siteDomain: 'localhost' }, publisher: stack.publisher, dns: route53, manual: new ManualDns(),
+      provider: { attach: async (domain) => ({ domain, step: 'live', records: [] }), detach: async (a) => ({ ...a, step: 'gone' }) },
+      pending: async () => [],
+    });
+    const report = await flaky.add({ domain: 'retry.example.test', site: 'retry-site', tenant: 'new' });
+    expect(report).toMatchObject({ step: 'live', primary: true });
+    expect(JSON.parse(await env.edge.get(`s:${id}`))).toMatchObject({ d: 'retry.example.test' });
+    expect((await get('retry.example.test')).body).toContain(`content="http://retry.example.test:${port}/"`);
+    expect((await env.store.getDomain('retry.example.test'))?.served).toBe(true);
+  });
+
   it('refuses the site domain, a domain another site has, and a site that does not exist', async () => {
     await site('One', 'site-one');
     await site('Two', 'site-two');

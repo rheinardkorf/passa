@@ -61,6 +61,9 @@ export type Domain = Attachment & {
   role: 'primary' | 'alias';
   // Records Passa wrote itself, so remove takes away only those.
   wrote: DnsRecord[];
+  // Set once the site has fully switched to the domain (setDomains finished),
+  // so a switch interrupted part-way is finished on the next call.
+  served?: boolean;
   createdAt: string;
   updatedAt: string;
 };
