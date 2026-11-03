@@ -1,0 +1,11 @@
+<nav class="sidenav">
+{{#nav}}
+  {{#items.length}}
+  <div class="nav-section{{#current}} is-current{{/current}}">
+    <p class="nav-heading"><span class="nav-num">{{indexPadded}}</span>{{title}}</p>
+    <ul>{{#items}}<li><a href="{{url}}"{{#current}} aria-current="page"{{/current}}>{{title}}</a></li>{{/items}}</ul>
+  </div>
+  {{/items.length}}
+  {{^items.length}}<ul class="nav-loose"><li><a href="{{url}}"{{#current}} aria-current="page"{{/current}}>{{title}}</a></li></ul>{{/items.length}}
+{{/nav}}
+</nav>

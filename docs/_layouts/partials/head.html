@@ -1,0 +1,15 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{page.title}}{{^page.isHome}} · {{site.title}}{{/page.isHome}}</title>
+{{#excerpt}}<meta name="description" content="{{excerpt}}">{{/excerpt}}
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="{{page.title}}">
+<meta property="og:url" content="{{absoluteUrl}}">
+{{#excerpt}}<meta property="og:description" content="{{excerpt}}">{{/excerpt}}
+{{#socialImage}}<meta property="og:image" content="{{socialImage}}"><meta name="twitter:card" content="summary_large_image">{{/socialImage}}
+{{#feed}}<link rel="alternate" type="application/rss+xml" href="{{feed}}">{{/feed}}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=JetBrains+Mono:wght@400;600&display=swap">
+{{> style}}
+{{#accent}}<style>:root{--accent: {{accent}};}</style>{{/accent}}

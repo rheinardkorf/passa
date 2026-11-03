@@ -1,48 +1,34 @@
 <!doctype html>
 <html lang="{{lang}}">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{#page.isHome}}{{site.title}} documentation{{/page.isHome}}{{^page.isHome}}{{title}} · {{site.title}} docs{{/page.isHome}}</title>
-{{#description}}<meta name="description" content="{{description}}">{{/description}}
-<meta property="og:title" content="{{title}}">
-<meta property="og:url" content="{{absoluteUrl}}">
-<meta property="og:site_name" content="{{site.title}}">
-{{#description}}<meta property="og:description" content="{{description}}">{{/description}}
-{{#socialImage}}<meta property="og:image" content="{{socialImage}}"><meta name="twitter:card" content="summary_large_image">{{/socialImage}}
-{{> style}}
+{{> head}}
 </head>
-<body>
-<header class="top">
-  <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>{{site.title}} <span class="docs">docs</span></a>
-  {{#site.repo}}<a class="repo" href="{{site.repo}}">GitHub</a>{{/site.repo}}
-  <details class="menu">
-    <summary>Menu</summary>
-    {{> sidebar}}
-  </details>
-</header>
-<div class="layout">
-  <aside class="side">{{> sidebar}}</aside>
-  <main class="main">
-    <article class="doc">
-      {{#isPage}}
+<body class="{{#page.isHome}}is-home{{/page.isHome}}">
+<a class="skip" href="#main">Skip to content</a>
+{{> header}}
+<div class="shell">
+  <aside class="sidebar" aria-label="Documentation">
+    {{> sidenav}}
+  </aside>
+  <main id="main" class="main{{#hasToc}} has-toc{{/hasToc}}">
+    <div class="kicker">
+      {{#nav}}{{#current}}<span class="kicker-kind">{{title}}</span>{{/current}}{{/nav}}
+      {{#readingTime}}<span>{{readingTime}} min read</span>{{/readingTime}}
+    </div>
+    <article class="prose">
       {{#showTitle}}<h1>{{title}}</h1>{{/showTitle}}
-      {{/isPage}}
-      {{^isPage}}<h1>{{title}}</h1>{{/isPage}}
       {{{content}}}
     </article>
-    <nav class="pager" aria-label="Pages">
-      {{#navPrev}}<a class="prev" href="{{url}}"><span>Previous</span>{{title}}</a>{{/navPrev}}
-      {{#navNext}}<a class="next" href="{{url}}"><span>Next</span>{{title}}</a>{{/navNext}}
-    </nav>
+    {{> pager}}
   </main>
   {{#hasToc}}
-  <aside class="toc" aria-label="On this page">
-    <p>On this page</p>
-    <ul>{{#toc}}<li class="l{{level}}"><a href="#{{id}}">{{text}}</a></li>{{/toc}}</ul>
-  </aside>
+  <nav class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <ol>{{#toc}}<li class="toc-l{{level}}"><a href="#{{id}}">{{text}}</a></li>{{/toc}}</ol>
+  </nav>
   {{/hasToc}}
 </div>
-{{#mermaid}}<script type="module">import mermaid from '{{{mermaid}}}'; mermaid.initialize({ startOnLoad: true, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });</script>{{/mermaid}}
+{{> footer}}
+{{#mermaid}}<script type="module">import mermaid from '{{{mermaid}}}'; mermaid.initialize({ startOnLoad: true, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'neutral', fontFamily: 'Archivo' });</script>{{/mermaid}}
 </body>
 </html>
