@@ -5,12 +5,13 @@ Build, preview and check a Markdown site on your own machine, and publish it to 
 > **Early days.** Passa is a personal project, and this package is published so its author can run the CLI on their own machines. It changes without notice, and publishing needs a Passa deployment of your own. You're welcome to try it, but don't depend on it yet.
 
 ```
-npx passa init my-site      # an index.md, _site.yml and a starter theme
-npx passa serve my-site     # preview on localhost, rebuilding on change
-npx passa render my-site    # build it into a folder of HTML
+npm install -g @passajs/cli   # installs the passa command (Node.js 24 or later)
+passa init my-site            # an index.md, _site.yml and a starter theme
+passa serve my-site           # preview on localhost, rebuilding on change
+passa render my-site          # build it into a folder of HTML
 ```
 
-Or install it with `npm install -g passa`. It needs Node.js 24 or later.
+Or run it without installing: `npx @passajs/cli init my-site`.
 
 ## Local commands
 

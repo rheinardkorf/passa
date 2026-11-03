@@ -1,4 +1,6 @@
-// Builds the passa command as the npm package `passa`, in packages/cli/dist/npm.
+// Builds the passa command as the npm package `@passajs/cli`, in
+// packages/cli/dist/npm. (npm refuses the plain name `passa` as too close to
+// `sass`; the command is still `passa`.)
 // Passa's own packages are private, so they're bundled in; the libraries they
 // use stay ordinary dependencies, pinned to the versions the repo tests, so
 // their licenses ship with them and npm audit sees them. npm-shrinkwrap.json
@@ -54,7 +56,7 @@ await build({
 });
 
 writeFileSync(join(out, 'package.json'), `${JSON.stringify({
-  name: 'passa',
+  name: '@passajs/cli',
   version: own.version,
   description: own.description,
   license: own.license,
@@ -65,6 +67,7 @@ writeFileSync(join(out, 'package.json'), `${JSON.stringify({
   keywords: ['markdown', 'static-site', 'publishing', 'mcp', 'cli'],
   type: 'module',
   bin: { passa: 'passa.js' },
+  publishConfig: { access: 'public' },
   files: ['passa.js', 'npm-shrinkwrap.json', 'README.md', 'LICENSE'],
   engines: top.engines,
   dependencies: Object.fromEntries(Object.entries(dependencies).sort(([a], [b]) => a.localeCompare(b))),
