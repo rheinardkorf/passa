@@ -118,17 +118,17 @@ A spike in dev, on 2026-11-03, with a throwaway multi-tenant distribution:
 - Adding a second name to a tenant issued a new certificate in about 20 seconds; the first name served throughout.
 - `@aws-sdk/client-cloudfront` (same release as the Lambda client Passa uses) has every tenant, certificate and DNS-check command; `aws-cdk-lib` defines multi-tenant distributions.
 
-## To check early, in delivery step 1
+## Checked in delivery step 1
 
-- How many names a tenant takes. The API reference says 5 domains per tenant, the quotas page 100 aliases.
-- Swapping a DNS-validated certificate on a tenant that's serving, with the existing names' validation records already in place: no interruption, as with the managed certificate in the spike.
-- A Cloudflare-flattened apex (DNS only) with a DNS-validated certificate, as an alias was.
+- **Names per tenant: 10 by default.** CloudFront allows 100 aliases per tenant, but ACM's default limit is 10 names per certificate (raisable to 100), and a tenant's one certificate lists all its names.
+- **Swapping a DNS-validated certificate on a serving tenant doesn't interrupt it.** The CloudFront provider added a name to a tenant serving an alias-pointed name: only the new name's records were needed (the existing name's validation record was reused); the certificate was issued about 80 seconds after the records were added, and the new name served 46 seconds after the update, while the existing name answered every request (every 5 seconds) and the old certificate was deleted.
+- **Still to check:** a Cloudflare-flattened apex (DNS only) with a DNS-validated certificate, as an alias was, once a domain is on Cloudflare (M5 brings Cloudflare DNS).
 
 ## Starting values
 
 | Setting | Value |
 | --- | --- |
-| Names per tenant | The lower of CloudFront's limit (checked in step 1) and config `domains.namesPerTenant` |
+| Names per tenant | 10 (ACM's default names per certificate); config `domains.namesPerTenant`, if the ACM limit is raised |
 | Route 53 zones Passa may change | config `domains.zones` (none by default) |
 | DNS wait before giving up (per command run) | 10 minutes; `add` resumes |
 | Edge KeyValueStore key | `d:<domain>` |
