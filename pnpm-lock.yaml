@@ -254,6 +254,13 @@ importers:
       yaml:
         specifier: 2.9.1
         version: 2.9.1
+    devDependencies:
+      '@passa/edge':
+        specifier: workspace:*
+        version: link:../edge
+      '@passa/mcp':
+        specifier: workspace:*
+        version: link:../mcp
 
   packages/csp: {}
 

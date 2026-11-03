@@ -6,7 +6,7 @@ import type { Publisher } from '@passa/mcp';
 import { addUser, type TestEnv } from '@passa/mcp/testing';
 import { contentSecurityPolicy, handoffUrl, type Rule, syncEdge } from '@passa/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type Stack, startStack } from './testing.ts';
+import { Browser, sendTo, type Stack, startStack } from './testing.ts';
 
 let env: TestEnv;
 let stack: Stack;
@@ -25,62 +25,9 @@ beforeAll(async () => {
 
 afterAll(() => stack.close());
 
-type Reply = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
-
 // Sends a request with a site's Host header to the proxy on 127.0.0.1.
 const get = (siteId: string, path: string, headers: Record<string, string> = {}) => send(`${siteId}.localhost:${port}`, path, { headers });
-
-function send(host: string, path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<Reply> {
-  return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, method: init.method ?? 'GET', headers: { host, ...init.headers } }, (res) => {
-      let body = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => (body += chunk));
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
-    });
-    req.on('error', reject);
-    req.end(init.body);
-  });
-}
-
-// A browser's view: cookies kept per host, redirects followed by hand.
-class Browser {
-  jar = new Map<string, Map<string, string>>();
-
-  async open(url: string, form?: Record<string, string>): Promise<Reply & { url: URL }> {
-    const u = new URL(url);
-    const cookies = this.jar.get(u.host) ?? new Map<string, string>();
-    this.jar.set(u.host, cookies);
-    const headers: Record<string, string> = { cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join('; ') };
-    let body: string | undefined;
-    if (form) {
-      headers.origin = u.origin;
-      headers['content-type'] = 'application/x-www-form-urlencoded';
-      body = new URLSearchParams({ ...form, csrf: cookies.get('__Host-passa-csrf') ?? '' }).toString();
-    }
-    const r = await send(u.host, u.pathname + u.search, { method: form ? 'POST' : 'GET', headers, ...(body ? { body } : {}) });
-    for (const c of (r.headers['set-cookie'] as string[] | undefined) ?? []) {
-      const pair = c.slice(0, c.indexOf(';'));
-      cookies.set(pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1));
-    }
-    return { ...r, url: u };
-  }
-
-  // Follows redirects and continuing pages while they stay on localhost hosts
-  // the proxy serves; stops at a page, or at a redirect anywhere else.
-  async follow(url: string, form?: Record<string, string>): Promise<Reply & { url: URL }> {
-    let reply = await this.open(url, form);
-    for (let i = 0; i < 12; i++) {
-      const refresh = /content="0;url=([^"]+)"/.exec(reply.body)?.[1]?.replaceAll('&amp;', '&');
-      const next = reply.status >= 300 && reply.status < 400 ? String(reply.headers.location) : refresh;
-      if (!next) break;
-      const to = new URL(next, reply.url);
-      if (!to.host.endsWith(`localhost:${port}`)) return { ...reply, url: to };
-      reply = await this.open(to.href);
-    }
-    return reply;
-  }
-}
+const send = (host: string, path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) => sendTo(port, host, path, init);
 
 const pkce = () => {
   const verifier = randomBytes(32).toString('base64url');
@@ -140,7 +87,7 @@ describe('the M1 demo, locally', () => {
     })}`;
 
     // 3. The user signs in by magic link and allows it (R24).
-    const browser = new Browser();
+    const browser = new Browser(port);
     const signin = await browser.follow(authorize);
     expect(signin.body).toContain('An app wants to publish as you');
     const uid = /name="interaction" value="([^"]+)"/.exec(signin.body)?.[1] ?? '';
@@ -178,7 +125,7 @@ describe('the M1 demo, locally', () => {
 describe('signing in', () => {
   it('takes the owner from a site link to the page by magic link, end to end', async () => {
     const site = await publisher.publish(alice, { title: 'Hello', content: { files: page('<h1>Signed in</h1>') } });
-    const browser = new Browser();
+    const browser = new Browser(port);
     const start = await browser.open(site.url);
     expect(start.status).toBe(302);
 
@@ -206,7 +153,7 @@ describe('signing in', () => {
     const site = await publisher.publish(alice, { title: 'Named', content: { files: page('<h1>By name</h1>') } });
     const named = await publisher.setName(alice, { siteId: site.site_id, name: 'by-name' });
     expect(named.url).toBe(`http://by-name.localhost:${port}/`);
-    const browser = new Browser();
+    const browser = new Browser(port);
 
     const fromId = await browser.open(`${site.url}docs/`);
     expect([fromId.status, fromId.headers.location]).toEqual([302, `http://by-name.localhost:${port}/docs/`]);
@@ -228,7 +175,7 @@ describe('signing in', () => {
   });
 
   it('treats an unknown name exactly like a private site', async () => {
-    const browser = new Browser();
+    const browser = new Browser(port);
     const unknown = await browser.open(`http://no-such-name.localhost:${port}/`);
     expect(unknown.headers.location).toBe(`http://localhost:${port}/site/signin?site=no-such-name&path=%2F`);
     expect((await browser.open(String(unknown.headers.location))).body).toContain('Enter your email');

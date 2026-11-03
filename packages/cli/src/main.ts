@@ -7,16 +7,42 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
-import { buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
+import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl } from './auth.ts';
+import { callTool, ToolRefused } from './mcp.ts';
+import { type Ask, deleteSite, parseRules, publishFolder, rollback, setAccess, setName, syncFolder } from './deploy.ts';
+import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
+import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
 
-const USAGE = `passa: build, preview and check a Markdown site, with no account.
+const USAGE = `passa: build, preview, check and publish a site.
 
+Local, with no account:
   passa render <folder> [--out dist]   build the site into a folder of HTML
   passa serve <folder> [--port 4321]   preview it on localhost, rebuilding on change
   passa check <folder>                 report the problems a publish would (exits 1 if any)
   passa init [folder]                  start a site
   passa theme guide                    print the theme contract, for writing themes
+
+With a Passa deployment:
+  passa login [server]                 sign in through the browser (server: such as mcp.example.com)
+  passa logout [server]                sign out, revoking the CLI's access
+  passa whoami [--server <server>]     show which deployment you're signed in to
+  passa sites [query]                  list your sites
+  passa site <site|folder>             a site's details, access, versions and files
+  passa pull <site> [folder]           write a site's sources and files to a folder, linked to the site
+  passa publish <folder> --title <t>   publish a folder as a new private site, linked to the folder
+  passa sync [folder] [--base]         make the folder's site exactly the folder (asks before removing files);
+                                       draws the social cards for its public pages first (--no-cards to skip)
+  passa access <site|folder>           show who can open what; change it with --public, --private,
+                                       or --rule <path>=<public|private> (repeatable)
+  passa name <site|folder> <name>      give a site a name (its address); --none removes it
+  passa rollback <site|folder> [version]   restore a version (default: the one before the current one)
+  passa delete <site|folder> [--now]   delete a site (after a grace period, or --now)
+
+<site> is a site ID or name; a folder linked to a site (by publish or pull) works too.
+Deployment commands take --server <server> and --json (the server's reply, for scripts).
+Anything that would make something public asks first (--confirm-public to skip in scripts);
+removing files and deleting ask too (--yes).
 
 Options for render, serve and check:
   --site-url <url>      the site's address, for absolute links (default: url in _site.yml)
@@ -34,7 +60,6 @@ const TYPES: Record<string, string> = {
   '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
   '.otf': 'font/otf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
-const MARKER = '.passa-build';
 
 const out = (line = '') => process.stdout.write(`${line}\n`);
 // A path to show: relative when it's under the current folder, else absolute.
@@ -178,9 +203,215 @@ async function serveCommand(args: string[]) {
   return new Promise<number>(() => undefined);
 }
 
+async function loginCommand(args: string[]) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const server = positionals[0] ? serverUrl(positionals[0]) : chooseServer(undefined, readCredentials());
+  out(`Signing in to ${server}. Your browser will open; if it doesn't, open this link:`);
+  await login(server, { show: (url) => out(`\n  ${url}\n`) });
+  out(`Signed in to ${server}.`);
+  return 0;
+}
+
+async function logoutCommand(args: string[]) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const server = chooseServer(positionals[0], readCredentials());
+  const { revoked } = await logout(server);
+  out(revoked ? `Signed out of ${server}, and the CLI's access was revoked.` : `Signed out of ${server} on this computer.`);
+  return 0;
+}
+
+async function whoamiCommand(args: string[]) {
+  const { values } = parseArgs({ args, allowPositionals: false, options: { server: { type: 'string' } } });
+  const server = chooseServer(values.server, readCredentials());
+  const sites = await callTool<{ sites: unknown[]; next_cursor?: string }>(server, 'find_sites', { limit: 100 });
+  const count = `${sites.sites.length}${sites.next_cursor ? '+' : ''}`;
+  out(`Signed in to ${server}, with ${count} site${count === '1' ? '' : 's'}.`);
+  return 0;
+}
+
+const DEPLOY_OPTIONS = { server: { type: 'string' }, json: { type: 'boolean' } } as const;
+const printJson = (value: unknown) => out(JSON.stringify(value, null, 2));
+
+async function sitesCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  const server = chooseServer(values.server, readCredentials());
+  const result = await sitesList(server, positionals[0]);
+  if (values.json) return printJson(result), 0;
+  if (!result.sites.length) return out(positionals[0] ? `No sites match ${positionals[0]}.` : 'No sites yet. Publish one with: passa publish <folder> --title <title>'), 0;
+  for (const s of result.sites) out(`${(s.name ?? s.site_id).padEnd(22)} ${s.access.padEnd(8)} ${s.title}  ${s.url}${s.status === 'active' ? '' : `  (${s.status})`}`);
+  if (result.next_cursor) out('…and more: narrow it with a query.');
+  return 0;
+}
+
+async function siteCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  const target = await resolveTarget(positionals[0], values.server ? { server: values.server } : {});
+  const site = await siteDetails(target);
+  if (values.json) return printJson(site), 0;
+  const sources = site.files.filter((f) => f.role === 'source').length;
+  const rendered = site.files.filter((f) => f.role === 'rendered').length;
+  out(`${site.title}  ${site.url}`);
+  out(`  site ${site.site_id}${site.name ? `, named ${site.name}` : ''}; ${site.status}${site.delete_at ? `, deleted after ${site.delete_at}` : ''}`);
+  out(`  access: ${site.access}${site.rules?.length ? ` (${site.rules.map((r) => `${r.path} ${r.tier}`).join(', ')})` : ''}`);
+  out(`  files: ${site.files.length}${sources ? ` (${sources} sources, ${rendered} rendered by Passa)` : ''}`);
+  out('  versions, newest first:');
+  for (const v of site.versions) out(`    ${v.version_id}  ${v.created_at.slice(0, 16).replace('T', ' ')}  ${v.files} files${v.current ? '  (current)' : ''}`);
+  return 0;
+}
+
+async function pullCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  if (!positionals[0]) throw new Error('Which site? passa pull <site> [folder]');
+  const target = await resolveTarget(positionals[0], values.server ? { server: values.server } : {});
+  const folder = resolve(positionals[1] ?? target.folder ?? target.siteId);
+  const result = await pull(target, folder);
+  if (values.json) return printJson({ site_id: target.siteId, folder, ...result }), 0;
+  out(`Pulled ${result.files} file${result.files === 1 ? '' : 's'} of ${target.siteId} (version ${result.version}) into ${shown(folder) || '.'}.`);
+  out('Pages Passa renders aren\'t included: they\'re rebuilt from the sources (passa serve to preview).');
+  return 0;
+}
+
+// Asks on the terminal; without one, a question can't be answered, so the
+// command stops (scripts pass --yes or --confirm-public).
+const askTerminal = (yes: boolean): Ask => async (question) => {
+  if (yes) return true;
+  if (!process.stdin.isTTY) throw new Error(`${question}\nNo terminal to answer on: pass --yes (or --confirm-public) to go ahead.`);
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^y(es)?$/i.test((await rl.question(`${question} [y/N] `)).trim());
+  } finally {
+    rl.close();
+  }
+};
+
+// The server's notes worth showing after a change.
+function notes(result: Record<string, unknown>) {
+  const list = (key: string) => (Array.isArray(result[key]) ? (result[key] as string[]) : []);
+  for (const p of list('problems')) out(`  warning: ${p}`);
+  for (const p of list('skipped')) out(`  skipped: ${p}`);
+  for (const p of list('cards_skipped')) out(`  card skipped: ${p}`);
+  for (const p of list('card_problems')) out(`  warning: ${p}`);
+  if (typeof result.cards_waiting === 'number') out(`  ${result.cards_waiting} social card${result.cards_waiting === 1 ? '' : 's'} still to draw: ${String(result.cards_note ?? '')}`);
+  if (typeof result.note === 'string') out(`  ${result.note}`);
+}
+
+const targetOf = (arg: string | undefined, server: string | undefined) => resolveTarget(arg, server ? { server } : {});
+
+async function publishCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, title: { type: 'string' } } });
+  if (!positionals[0] || !values.title) throw new Error('passa publish <folder> --title <title>');
+  const server = chooseServer(values.server, readCredentials());
+  const r = await publishFolder(server, positionals[0], values.title, { ask: askTerminal(false) });
+  if (values.json) return printJson(r), 0;
+  out(`Published ${r.site_id}, private: ${r.url}`);
+  notes(r);
+  out(`The folder is linked to it: passa sync ${positionals[0]} updates it, passa access ${positionals[0]} --public makes it public.`);
+  return 0;
+}
+
+async function syncCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
+    ...DEPLOY_OPTIONS, base: { type: 'boolean' }, 'no-cards': { type: 'boolean' }, yes: { type: 'boolean' }, 'confirm-public': { type: 'boolean' },
+  } });
+  const target = await targetOf(positionals[0] ?? '.', values.server);
+  const r = await syncFolder(target, {
+    ask: askTerminal(values.yes === true), base: values.base === true, cards: values['no-cards'] !== true, confirmPublic: values['confirm-public'] === true,
+  });
+  if (values.json) return printJson(r), 0;
+  if (r.up_to_date) return out(`${r.url} is up to date.`), 0;
+  out(`Synced ${target.siteId} (version ${r.current_version}): ${String(r.changed ?? 0)} written, ${String(r.removed ?? 0)} removed.  ${r.url}`);
+  if (r.cards_drawn_locally) out(`  drew ${r.cards_drawn_locally} social card${r.cards_drawn_locally === 1 ? '' : 's'} locally${typeof r.cards_stored === 'number' ? `; ${r.cards_stored} new to the site` : '; the site had them all'}`);
+  notes(r);
+  return 0;
+}
+
+async function accessCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
+    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' },
+  } });
+  const target = await targetOf(positionals[0], values.server);
+  const rules = parseRules(values);
+  if (!rules) {
+    const site = await siteDetails(target);
+    if (values.json) return printJson({ access: site.access, rules: site.rules ?? [] }), 0;
+    out(`${site.url} is ${site.access}.`);
+    for (const r of site.rules ?? []) out(`  ${r.path} ${r.tier}`);
+    if (!site.rules?.length) out('  No rules: only you can open it.');
+    return 0;
+  }
+  const r = await setAccess(target, rules, { ask: askTerminal(false), confirmPublic: values['confirm-public'] === true });
+  if (values.json) return printJson(r), 0;
+  out(`${String(r.url)} is now ${String(r.access)}.`);
+  const made = (key: string) => (Array.isArray(r[key]) ? (r[key] as string[]) : []);
+  if (made('made_public').length) out(`  made public: ${made('made_public').join(', ')}`);
+  if (made('made_private').length) out(`  made private: ${made('made_private').join(', ')}`);
+  notes(r);
+  if (target.folder && target.link && typeof r.current_version === 'string') writeLinkVersion(target, r.current_version);
+  return 0;
+}
+
+// A change that made a new version (on a Markdown site) moves the folder's version along.
+function writeLinkVersion(target: Awaited<ReturnType<typeof targetOf>>, version: string) {
+  if (target.folder && target.link) writeLink(target.folder, { ...target.link, version });
+}
+
+async function nameCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, none: { type: 'boolean' } } });
+  const name = values.none ? null : positionals[1];
+  if (name === undefined) throw new Error('passa name <site|folder> <name>, or --none to remove it');
+  const target = await targetOf(positionals[0], values.server);
+  const r = await setName(target, name);
+  if (values.json) return printJson(r), 0;
+  out(name ? `${target.siteId} is now ${String(r.url)}` : `${target.siteId} has no name now: ${String(r.url)}`);
+  const held = r.held as { name: string; until: string } | undefined;
+  if (held) out(`  ${held.name} redirects here until ${held.until.slice(0, 10)}, and only you can claim it again.`);
+  if (typeof r.current_version === 'string') writeLinkVersion(target, r.current_version);
+  return 0;
+}
+
+async function rollbackCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, 'confirm-public': { type: 'boolean' } } });
+  const target = await targetOf(positionals[0], values.server);
+  const r = await rollback(target, positionals[1], { ask: askTerminal(false), confirmPublic: values['confirm-public'] === true });
+  if (values.json) return printJson(r), 0;
+  out(`Restored ${r.restored}${r.current_version === r.restored ? '' : ` as version ${r.current_version}`}: ${r.url}`);
+  notes(r);
+  return 0;
+}
+
+async function deleteCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, now: { type: 'boolean' }, yes: { type: 'boolean' } } });
+  const target = await targetOf(positionals[0], values.server);
+  if (!values.yes) {
+    if (!process.stdin.isTTY) throw new Error('Deleting needs a terminal to confirm on, or --yes.');
+    const { createInterface } = await import('node:readline/promises');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const typed = (await rl.question(`Type ${target.siteId} to delete it${values.now ? ' now and for good' : ''}: `)).trim();
+    rl.close();
+    if (typed !== target.siteId) throw new Error('That doesn\'t match, so nothing was deleted.');
+  }
+  const r = await deleteSite(target, values.now === true);
+  if (values.json) return printJson(r), 0;
+  out(r.deleted ? `Deleted ${target.siteId} for good.` : `${target.siteId} is no longer served, and is deleted for good after ${String(r.delete_at).slice(0, 10)}.`);
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
+    case 'login': return loginCommand(rest);
+    case 'logout': return logoutCommand(rest);
+    case 'whoami': return whoamiCommand(rest);
+    case 'sites': return sitesCommand(rest);
+    case 'site': return siteCommand(rest);
+    case 'pull': return pullCommand(rest);
+    case 'publish': return publishCommand(rest);
+    case 'sync': return syncCommand(rest);
+    case 'access': return accessCommand(rest);
+    case 'name': return nameCommand(rest);
+    case 'rollback': return rollbackCommand(rest);
+    case 'delete': return deleteCommand(rest);
     case 'render': return renderCommand(rest);
     case 'check': return checkCommand(rest);
     case 'serve': return serveCommand(rest);
@@ -205,6 +436,7 @@ async function main(argv: string[]): Promise<number> {
 }
 
 main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => {
-  err(`passa: ${e instanceof Error ? e.message : String(e)}`);
+  // A refusal or a needed sign-in is meant for the person as it is.
+  err(e instanceof ToolRefused || e instanceof LoginNeeded ? e.message : `passa: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
 });

@@ -20,6 +20,17 @@ pnpm passa theme guide       # the theme contract, for writing themes
 
 Nothing outside Passa protects private pages, so only public pages are built: those marked `access: public` in their front matter, or, in a folder published with Passa, the ones its access rules make public. `--include-private` builds everything for local preview.
 
+The same command publishes to a Passa deployment, with no agent involved. It signs in through the browser as agents do, and calls the same tools, so the server checks everything the same way:
+
+```
+pnpm passa login mcp.example.com            # sign in (tokens in ~/.config/passa, readable only by you)
+pnpm passa publish my-site --title "Notes"  # a new private site; the folder remembers it
+pnpm passa access my-site --public          # asks before anything goes public
+pnpm passa sync my-site                     # only changed files go up, with the social cards drawn locally
+pnpm passa pull <site> other-folder         # a site's sources, on another machine
+pnpm passa sites                            # also: site, name, rollback, delete, logout, whoami
+```
+
 ## Development
 
 Needs Node 24, pnpm and Docker.

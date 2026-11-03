@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseRules } from './deploy.ts';
 import { initSite } from './init.ts';
 import { buildSite } from './site.ts';
 
@@ -135,5 +136,15 @@ describe('the passa command', () => {
 
   it('theme guide prints the contract', () => {
     expect(run('theme', 'guide').stdout).toContain('# Passa theme guide');
+  });
+});
+
+describe('access options', () => {
+  it('turn --public, --private and --rule into rules', () => {
+    expect(parseRules({ public: true })).toEqual([{ path: '/', tier: 'public' }]);
+    expect(parseRules({ private: true })).toEqual([]);
+    expect(parseRules({ rule: ['/=public', '/notes/=private'] })).toEqual([{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }]);
+    expect(parseRules({})).toBeUndefined();
+    expect(() => parseRules({ rule: ['public'] })).toThrow(/<path>=<tier>/);
   });
 });
