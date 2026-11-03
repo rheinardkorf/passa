@@ -20,5 +20,11 @@ nav:
   - title: Self-hosting
     items:
       - { title: Deploying Passa, url: /deploying/ }
-      - { title: Custom domains, url: /custom-domains/ }
       - { title: Security, url: /security/ }
+  - title: Custom domains
+    items:
+      - { title: Overview, url: /custom-domains/ }
+      - { title: Route 53, url: /domains/route-53/ }
+      - { title: Cloudflare, url: /domains/cloudflare/ }
+      - { title: Other DNS hosts, url: /domains/other-dns-hosts/ }
+      - { title: Troubleshooting, url: /domains/troubleshooting/ }
