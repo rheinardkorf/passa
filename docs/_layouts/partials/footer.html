@@ -1,0 +1,15 @@
+<footer class="footer">
+  <div class="footer-inner">
+    <p class="footer-big"><a href="/">{{site.title}}</a></p>
+    <div class="footer-cols">
+      {{#site.description}}<p class="footer-desc">{{site.description}}</p>{{/site.description}}
+      <ul class="footer-nav">
+        {{#nav}}<li>{{#items}}{{#isFirst}}<a href="{{url}}">{{/isFirst}}{{/items}}{{title}}{{#items}}{{#isFirst}}</a>{{/isFirst}}{{/items}}</li>{{/nav}}
+      </ul>
+      <ul class="footer-links">
+        {{#site.repo}}<li><a href="{{site.repo}}">Source on GitHub</a></li>{{/site.repo}}
+        {{#site.author}}<li>By {{site.author}}</li>{{/site.author}}
+      </ul>
+    </div>
+  </div>
+</footer>

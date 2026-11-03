@@ -28,6 +28,7 @@ jobs:
       - run: pnpm check:licenses
       - run: pnpm audit --audit-level critical
       - run: pnpm smoke:cli
+      - run: pnpm passa check docs
 
   integration:
     runs-on: ubuntu-latest

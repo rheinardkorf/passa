@@ -8,3 +8,5 @@ config.yml
 .DS_Store
 # Personal values the leak check looks for (never committed)
 .leaks.local
+# Folders linked to a Passa site (passa publish, pull)
+.passa/

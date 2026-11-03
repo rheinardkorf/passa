@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+{{> head}}
+</head>
+<body class="{{#page.isHome}}is-home{{/page.isHome}}">
+<a class="skip" href="#main">Skip to content</a>
+{{> header}}
+<div class="shell">
+  <aside class="sidebar" aria-label="Documentation">
+    {{> sidenav}}
+  </aside>
+  <main id="main" class="main{{#hasToc}} has-toc{{/hasToc}}">
+    <div class="kicker">
+      {{#nav}}{{#current}}<span class="kicker-kind">{{title}}</span>{{/current}}{{/nav}}
+      {{#readingTime}}<span>{{readingTime}} min read</span>{{/readingTime}}
+    </div>
+    <article class="prose">
+      {{#showTitle}}<h1>{{title}}</h1>{{/showTitle}}
+      {{{content}}}
+    </article>
+    {{> pager}}
+  </main>
+  {{#hasToc}}
+  <nav class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <ol>{{#toc}}<li class="toc-l{{level}}"><a href="#{{id}}">{{text}}</a></li>{{/toc}}</ol>
+  </nav>
+  {{/hasToc}}
+</div>
+{{> footer}}
+{{#mermaid}}<script type="module">import mermaid from '{{{mermaid}}}'; mermaid.initialize({ startOnLoad: true, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'neutral', fontFamily: 'Archivo' });</script>{{/mermaid}}
+</body>
+</html>

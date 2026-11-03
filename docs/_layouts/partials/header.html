@@ -1,0 +1,10 @@
+<header class="masthead">
+  <a class="sitename" href="/"><span class="dot" aria-hidden="true"></span>{{site.title}}</a>
+  <div class="masthead-end">
+    {{#site.repo}}<a class="btn" href="{{site.repo}}">GitHub</a>{{/site.repo}}
+    <details class="menu">
+      <summary class="btn">Menu</summary>
+      <div class="menu-panel">{{> sidenav}}</div>
+    </details>
+  </div>
+</header>
