@@ -31,6 +31,8 @@ pnpm passa pull <site> other-folder         # a site's sources, on another machi
 pnpm passa sites                            # also: site, name, rollback, delete, logout, whoami
 ```
 
+Sign in to more than one deployment and switch with `passa use <server>` (no sign-in needed), pass `--server <server>` to one command, or set `PASSA_SERVER` for a shell. A linked folder always uses the server it came from, unless `--server` is given.
+
 ## Development
 
 Needs Node 24, pnpm and Docker.
