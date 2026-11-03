@@ -19,7 +19,9 @@
     "local:up": "docker compose up -d --wait",
     "local:down": "docker compose down",
     "local": "node scripts/local.ts",
-    "passa": "node packages/cli/src/main.ts"
+    "passa": "node packages/cli/src/main.ts",
+    "build:cli": "node scripts/build-cli.ts",
+    "smoke:cli": "node scripts/smoke-cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

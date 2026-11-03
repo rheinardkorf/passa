@@ -8,7 +8,7 @@ Say "publish this" to any MCP-capable agent and get back a link like `https://k3
 
 ## Markdown sites, locally
 
-The `passa` command builds and previews a folder of Markdown with the same renderer Passa publishes with, offline and with no account (M3, in progress):
+The `passa` command builds and previews a folder of Markdown with the same renderer Passa publishes with, offline and with no account. It's on npm as [`@passajs/cli`](https://www.npmjs.com/package/@passajs/cli) (`npm install -g @passajs/cli`, Node.js 24 or later); from a clone, run it with `pnpm passa`:
 
 ```
 pnpm passa init my-site      # start a site
@@ -107,6 +107,14 @@ Passa deploys with CDK into your own AWS account: one stage for dev and one for 
    ```
 
    Then run `/mcp`, sign in with an admin email and allow access.
+
+## Releasing the CLI
+
+The npm package `@passajs/cli`, which installs the `passa` command, is built from `packages/cli`: Passa's own packages are bundled in, the libraries they use stay dependencies, and `npm-shrinkwrap.json` pins the whole tree at versions at least 14 days old.
+
+1. Raise `version` in `packages/cli/package.json`.
+2. `pnpm smoke:cli` builds the package, installs it into an empty folder and runs it (CI runs this too).
+3. `npm publish packages/cli/dist/npm`
 
 ## License
 

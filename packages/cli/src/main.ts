@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The passa command. These commands work on a local folder, with no account
-// and no network (R92); commands that talk to a deployment come later.
+// The passa command: local commands that need no account or network (R92),
+// and commands that work with a Passa deployment after passa login (R99–R112).
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
@@ -22,6 +22,7 @@ Local, with no account:
   passa check <folder>                 report the problems a publish would (exits 1 if any)
   passa init [folder]                  start a site
   passa theme guide                    print the theme contract, for writing themes
+  passa --version                      print the version
 
 With a Passa deployment:
   passa login [server]                 sign in through the browser (server: such as mcp.example.com)
@@ -62,6 +63,10 @@ const TYPES: Record<string, string> = {
   '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
   '.otf': 'font/otf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
+
+// Set by scripts/build-cli.ts in the npm package; running from the repo, it's dev.
+declare const PASSA_VERSION: string | undefined;
+const VERSION = typeof PASSA_VERSION === 'string' ? PASSA_VERSION : 'dev';
 
 const out = (line = '') => process.stdout.write(`${line}\n`);
 // A path to show: relative when it's under the current folder, else absolute.
@@ -451,6 +456,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       break;
+    case 'version': case '--version': case '-v':
+      out(VERSION);
+      return 0;
     case undefined: case 'help': case '--help': case '-h':
       out(USAGE);
       return 0;
