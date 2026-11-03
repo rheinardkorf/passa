@@ -61,11 +61,20 @@ export function writeCredentials(credentials: Credentials, dir = configDir()): v
   renameSync(temp, file);
 }
 
-// The server to use: the one given, else the last one signed in to.
-export function chooseServer(given: string | undefined, credentials: Credentials): string {
+// The server to use: the one given, else $PASSA_SERVER, else the current one
+// (the last signed in to, or chosen with passa use).
+export function chooseServer(given: string | undefined, credentials: Credentials, env = process.env): string {
   if (given) return serverUrl(given);
+  if (env.PASSA_SERVER) return serverUrl(env.PASSA_SERVER);
   if (credentials.current) return credentials.current;
   throw new Error('No Passa server yet. Run: passa login <server>, such as passa login mcp.example.com');
+}
+
+// Makes a server already signed in to the current one, with no sign-in.
+export function useServer(server: string, dir = configDir()): void {
+  const credentials = readCredentials(dir);
+  if (!credentials.servers[server]) throw new LoginNeeded(server);
+  writeCredentials({ ...credentials, current: server }, dir);
 }
 
 // The MCP server's authorization server, from its metadata (RFC 9728, RFC 8414).

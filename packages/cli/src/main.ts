@@ -7,7 +7,7 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
-import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl } from './auth.ts';
+import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl, useServer } from './auth.ts';
 import { callTool, ToolRefused } from './mcp.ts';
 import { type Ask, deleteSite, parseRules, publishFolder, rollback, setAccess, setName, syncFolder } from './deploy.ts';
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
@@ -27,6 +27,7 @@ With a Passa deployment:
   passa login [server]                 sign in through the browser (server: such as mcp.example.com)
   passa logout [server]                sign out, revoking the CLI's access
   passa whoami [--server <server>]     show which deployment you're signed in to
+  passa use [server]                   switch to a deployment you've signed in to; lists them with no server
   passa sites [query]                  list your sites
   passa site <site|folder>             a site's details, access, versions and files
   passa pull <site> [folder]           write a site's sources and files to a folder, linked to the site
@@ -41,6 +42,7 @@ With a Passa deployment:
 
 <site> is a site ID or name; a folder linked to a site (by publish or pull) works too.
 Deployment commands take --server <server> and --json (the server's reply, for scripts).
+The server is: --server if given, else a linked folder's, else $PASSA_SERVER, else the current one.
 Anything that would make something public asks first (--confirm-public to skip in scripts);
 removing files and deleting ask too (--yes).
 
@@ -225,7 +227,28 @@ async function whoamiCommand(args: string[]) {
   const server = chooseServer(values.server, readCredentials());
   const sites = await callTool<{ sites: unknown[]; next_cursor?: string }>(server, 'find_sites', { limit: 100 });
   const count = `${sites.sites.length}${sites.next_cursor ? '+' : ''}`;
-  out(`Signed in to ${server}, with ${count} site${count === '1' ? '' : 's'}.`);
+  const from = !values.server && process.env.PASSA_SERVER ? ' (from PASSA_SERVER)' : '';
+  out(`Signed in to ${server}${from}, with ${count} site${count === '1' ? '' : 's'}.`);
+  return 0;
+}
+
+async function useCommand(args: string[]) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals[0]) {
+    const server = serverUrl(positionals[0]);
+    useServer(server);
+    out(`Now using ${server}.`);
+    if (process.env.PASSA_SERVER) out(`PASSA_SERVER is set (${serverUrl(process.env.PASSA_SERVER)}), and it takes precedence.`);
+    return 0;
+  }
+  const credentials = readCredentials();
+  const servers = Object.keys(credentials.servers);
+  if (!servers.length) {
+    out('Not signed in anywhere yet. Run: passa login <server>');
+    return 0;
+  }
+  for (const server of servers) out(`${server === credentials.current ? '*' : ' '} ${server}`);
+  if (process.env.PASSA_SERVER) out(`PASSA_SERVER is set, so commands use ${serverUrl(process.env.PASSA_SERVER)}.`);
   return 0;
 }
 
@@ -403,6 +426,7 @@ async function main(argv: string[]): Promise<number> {
     case 'login': return loginCommand(rest);
     case 'logout': return logoutCommand(rest);
     case 'whoami': return whoamiCommand(rest);
+    case 'use': return useCommand(rest);
     case 'sites': return sitesCommand(rest);
     case 'site': return siteCommand(rest);
     case 'pull': return pullCommand(rest);

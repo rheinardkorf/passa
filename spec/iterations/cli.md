@@ -42,6 +42,7 @@ The local commands from M3 (`render`, `serve`, `check`, `init`, `theme guide`) s
 - **R100** The CLI asks only for the publishing scope and the MCP resource, as agents do, and gets the same short-lived access token and rotating refresh token. It refreshes the access token when it expires; when the refresh token is gone or revoked, commands say to run `passa login` again.
 - **R101** Tokens are stored in the user's config folder (`~/.config/passa/credentials.json`, or `$XDG_CONFIG_HOME`), readable only by the user (mode 0600, in a 0700 folder); the CLI refuses to use the file if anyone else can read it. Tokens are never printed, logged or put in a URL.
 - **R102** `passa logout [server]` revokes the refresh token at the server (RFC 7009) and deletes it locally. `passa whoami` shows the server and that the sign-in works, by calling a read-only tool. The CLI is listed with other connected apps at `auth.`'s apps page, where it can be revoked too.
+- **R112** Commands use the server given with `--server`; else, for a linked folder, the folder's server; else `$PASSA_SERVER`; else the current server, which is the last one signed in to. `passa use <server>` makes a server already signed in to the current one, with no sign-in; with no server it lists the servers signed in to, marking the current one. A sign-in to each server is kept separately, so switching never signs out of the other.
 
 ### Sites and folders
 
