@@ -51,8 +51,10 @@ function wiring() {
   const edge = new TableEdgeStore(db, tables.edge);
   const events = new Events(db, tables.events, config.retention.eventYears);
   const origin = (siteId: string) => `http://${siteId}.localhost:${PORT}`;
-  const deps = { store, edge, config, events, files: new SiteFiles(s3, buckets), siteUrl: (id: string) => `${origin(id)}/` };
-  return { config, client, db, s3, ses, kms, secrets, store, edge, events, deps, origin };
+  // A custom domain locally needs a hosts-file entry pointing it at 127.0.0.1.
+  const domainOrigin = (domain: string) => `http://${domain}:${PORT}`;
+  const deps = { store, edge, config, events, files: new SiteFiles(s3, buckets), siteUrl: (id: string) => `${origin(id)}/`, domainUrl: (d: string) => `${domainOrigin(d)}/` };
+  return { config, client, db, s3, ses, kms, secrets, store, edge, events, deps, origin, domainOrigin };
 }
 
 async function authApp(w: ReturnType<typeof wiring>) {
@@ -72,7 +74,7 @@ async function authApp(w: ReturnType<typeof wiring>) {
       },
     },
     siteKey: async () => siteKey,
-    urls: { auth: `http://localhost:${PORT}`, mcp: `http://mcp.localhost:${PORT}`, site: w.origin },
+    urls: { auth: `http://localhost:${PORT}`, mcp: `http://mcp.localhost:${PORT}`, site: w.origin, domain: w.domainOrigin },
     oidc: new OidcStore(w.db, tables.main),
     tokenSigner: await KmsSigningKey.load(w.kms, TOKEN_KEY),
     cookieKeys,

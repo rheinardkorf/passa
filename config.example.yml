@@ -34,6 +34,8 @@ email:
 #     siteDomain: dev.example-sites.com
 #     email:
 #       from: Passa <no-reply@dev.example.com>
+#     domains:
+#       zones: [Z0000000000000000000]
 
 # Lifetimes, in seconds.
 lifetimes:
@@ -83,6 +85,13 @@ retention:
 # After a site is renamed, its old name redirects to the new one and only its
 # owner can claim it, for this many days.
 nameHoldDays: 7
+
+# Custom domains (M4): Route 53 hosted zones, by ID, in which passa admin domain
+# add may write a domain's records itself (others are printed for you to add),
+# and how many names share a tenant's certificate (ACM allows 10 by default).
+domains:
+  zones: []
+  namesPerTenant: 10
 
 # Site names publishers can't use, on top of www, mail, auth, mcp, api, dev,
 # admin and status. Add labels you use for other things on the site domain.

@@ -60,7 +60,7 @@ DNS only gets a browser to the right server. Before any request reaches Passa, t
 ### Serving
 
 - **R121** The sites stack has a multi-tenant distribution beside the current one, with the same edge functions, KeyValueStore, response headers and S3 origin; the bucket allows both distributions.
-- **R122** The edge finds a site from a custom domain through the KeyValueStore (`d:<domain>` to a site ID), and a site's edge record carries its primary domain. A site's one address is its primary domain, else its name, else its ID: requests for any other (an alias, the name, the ID) redirect there, keeping the path, as names do now (M2 R45). A domain no site has gets the same not-found as a missing site (R12).
+- **R122** The edge finds a site from a custom domain through the KeyValueStore (`d:<domain>` to a site ID), and a site's edge record carries its primary domain. A site's one address is its primary domain, else its name, else its ID: requests for any other (an alias, the name, the ID) redirect there, keeping the path, as names do now (M2 R45). A domain no site has gets not-found (CloudFront only routes attached domains, so only a slip reaches the edge); a site's ID and name keep R12's rule.
 - **R123** Sign-in hands back to the site's current address from the database, its primary domain when it has one, never from the request; the site cookie is set for that host only. Signing in on an old address redirects first, so the cookie lands on the address that serves the site.
 - **R124** Absolute URLs in rendered pages (Open Graph, feeds, social cards that show the address) use the site's address. Changing a site's primary domain renders its Markdown again, as changing its name does (M3).
 - **R125** A site with a custom domain follows the named-site indexing rule: its public pages can be indexed at the primary domain; redirecting addresses (aliases, the name, the ID) aren't indexed.
@@ -93,7 +93,7 @@ browser ─► docs.example.com ─(CNAME or alias)─► connection group endpo
 ```
 
 - **Where the work runs:** in the admin function, a Lambda in the services stack, so the providers run server-side with their own narrow permissions, and the CLI only needs permission to invoke it. Long steps (validation, deployment) are resumable: the function records each domain's state, and the CLI calls it until the domain is live, showing progress.
-- **Data:** each domain is an item keyed by the domain (site, role, state, tenant, certificate, records written), written with a condition so a domain can't belong to two sites. The site item lists its domains and its primary. The edge record gains `d`, and the stream writes `d:<domain>` keys as it writes `n:<name>` keys today.
+- **Data:** each domain is an item keyed by the domain (site, role, state, tenant, certificate, records written), written with a condition so a domain can't belong to two sites. The site item lists its domains and its primary. The edge record gains `d`, and `d:<domain>` keys are written by the publisher's `setDomains`, which the admin function calls, as it writes `n:<name>` keys today: new domains before the record that redirects to them, removed ones after.
 - **CloudFront:** the multi-tenant distribution has no address of its own; domains point at its connection group's routing endpoint, one address for every domain. Tenants carry the certificate; the distribution carries everything else, defined in CDK. Tenants are created at runtime.
 - **Packages:** `packages/shared` gets the provider interfaces and domain records; `packages/infra` the distribution, the admin function and its permissions; `packages/edge` the `d:` lookup; `packages/auth` the domain-aware handoff; `packages/cli` `passa admin domain`.
 
@@ -118,17 +118,17 @@ A spike in dev, on 2026-11-03, with a throwaway multi-tenant distribution:
 - Adding a second name to a tenant issued a new certificate in about 20 seconds; the first name served throughout.
 - `@aws-sdk/client-cloudfront` (same release as the Lambda client Passa uses) has every tenant, certificate and DNS-check command; `aws-cdk-lib` defines multi-tenant distributions.
 
-## To check early, in delivery step 1
+## Checked in delivery step 1
 
-- How many names a tenant takes. The API reference says 5 domains per tenant, the quotas page 100 aliases.
-- Swapping a DNS-validated certificate on a tenant that's serving, with the existing names' validation records already in place: no interruption, as with the managed certificate in the spike.
-- A Cloudflare-flattened apex (DNS only) with a DNS-validated certificate, as an alias was.
+- **Names per tenant: 10 by default.** CloudFront allows 100 aliases per tenant, but ACM's default limit is 10 names per certificate (raisable to 100), and a tenant's one certificate lists all its names.
+- **Swapping a DNS-validated certificate on a serving tenant doesn't interrupt it.** The CloudFront provider added a name to a tenant serving an alias-pointed name: only the new name's records were needed (the existing name's validation record was reused); the certificate was issued about 80 seconds after the records were added, and the new name served 46 seconds after the update, while the existing name answered every request (every 5 seconds) and the old certificate was deleted.
+- **Still to check:** a Cloudflare-flattened apex (DNS only) with a DNS-validated certificate, as an alias was, once a domain is on Cloudflare (M5 brings Cloudflare DNS).
 
 ## Starting values
 
 | Setting | Value |
 | --- | --- |
-| Names per tenant | The lower of CloudFront's limit (checked in step 1) and config `domains.namesPerTenant` |
+| Names per tenant | 10 (ACM's default names per certificate); config `domains.namesPerTenant`, if the ACM limit is raised |
 | Route 53 zones Passa may change | config `domains.zones` (none by default) |
 | DNS wait before giving up (per command run) | 10 minutes; `add` resumes |
 | Edge KeyValueStore key | `d:<domain>` |

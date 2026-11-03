@@ -13,6 +13,7 @@ import { type Ask, deleteSite, parseRules, publishFolder, rollback, setAccess, s
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
 import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
+import { AdminRefused, addDomain, adminFunctionName, type DomainList, type DomainReport, formatList, formatStatus, lambdaInvoker, removeDomain } from './admin.ts';
 
 const USAGE = `passa: build, preview, check and publish a site.
 
@@ -46,6 +47,15 @@ Deployment commands take --server <server> and --json (the server's reply, for s
 The server is: --server if given, else a linked folder's, else $PASSA_SERVER, else the current one.
 Anything that would make something public asks first (--confirm-public to skip in scripts);
 removing files and deleting ask too (--yes).
+
+Admin, with the deployment's AWS credentials (AWS_PROFILE, aws sso login), never through MCP:
+  passa admin domain add <domain> <site> --fill-tenant|--new-tenant [--primary]
+                                       attach a custom domain; --fill-tenant shares a tenant with room
+                                       (CloudFront's first 10 are free), --new-tenant gives it its own
+  passa admin domain list              every custom domain, its site, role and tenant
+  passa admin domain status <domain>   a domain's DNS records and state
+  passa admin domain remove <domain>   detach it; the site moves to its next address first
+  Admin commands take --stage <dev|prod> (required), --region and --json.
 
 Options for render, serve and check:
   --site-url <url>      the site's address, for absolute links (default: url in _site.yml)
@@ -408,6 +418,48 @@ async function rollbackCommand(args: string[]) {
   return 0;
 }
 
+// passa admin domain …: invokes passa-<stage>-admin with AWS credentials (M4).
+async function adminCommand(args: string[]) {
+  const [group, action, ...rest] = args;
+  if (group !== 'domain' || !action || !['add', 'list', 'status', 'remove'].includes(action)) {
+    throw new Error('Usage: passa admin domain add|list|status|remove … --stage <stage> (see passa --help)');
+  }
+  const { values, positionals } = parseArgs({
+    args: rest, allowPositionals: true,
+    options: { stage: { type: 'string' }, region: { type: 'string' }, json: { type: 'boolean' }, 'fill-tenant': { type: 'boolean' }, 'new-tenant': { type: 'boolean' }, primary: { type: 'boolean' } },
+  });
+  if (!values.stage) throw new Error('Which deployment? Add --stage, such as --stage prod.');
+  const invoke = await lambdaInvoker(adminFunctionName(values.stage), values.region);
+  const { userInfo, hostname } = await import('node:os');
+  const actor = `${userInfo().username}@${hostname()}`;
+  const progress = { out: values.json ? () => undefined : out };
+  if (action === 'list') {
+    const list = await invoke({ action: 'domain.list' }) as DomainList;
+    if (values.json) return printJson(list), 0;
+    for (const line of formatList(list)) out(line);
+    return 0;
+  }
+  const domain = positionals[0];
+  if (!domain) throw new Error(`passa admin domain ${action} needs a domain.`);
+  if (action === 'status') {
+    const report = await invoke({ action: 'domain.status', domain }) as DomainReport;
+    if (values.json) return printJson(report), 0;
+    for (const line of formatStatus(report)) out(line);
+    return 0;
+  }
+  if (action === 'remove') {
+    const report = await removeDomain(invoke, { domain, actor }, progress);
+    if (values.json) printJson(report);
+    return report.step === 'gone' ? 0 : 1;
+  }
+  const site = positionals[1];
+  if (!site) throw new Error('passa admin domain add needs a domain and a site: passa admin domain add docs.example.com my-site --new-tenant');
+  if (values['fill-tenant'] === values['new-tenant']) throw new Error('Choose one: --fill-tenant (share a tenant with room; the first 10 are free) or --new-tenant (its own tenant and certificate).');
+  const report = await addDomain(invoke, { domain, site, tenant: values['new-tenant'] ? 'new' : 'fill', ...(values.primary ? { primary: true } : {}), actor }, progress);
+  if (values.json) printJson(report);
+  return report.step === 'live' ? 0 : 1;
+}
+
 async function deleteCommand(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, now: { type: 'boolean' }, yes: { type: 'boolean' } } });
   const target = await targetOf(positionals[0], values.server);
@@ -432,6 +484,7 @@ async function main(argv: string[]): Promise<number> {
     case 'logout': return logoutCommand(rest);
     case 'whoami': return whoamiCommand(rest);
     case 'use': return useCommand(rest);
+    case 'admin': return adminCommand(rest);
     case 'sites': return sitesCommand(rest);
     case 'site': return siteCommand(rest);
     case 'pull': return pullCommand(rest);
@@ -469,6 +522,6 @@ async function main(argv: string[]): Promise<number> {
 
 main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => {
   // A refusal or a needed sign-in is meant for the person as it is.
-  err(e instanceof ToolRefused || e instanceof LoginNeeded ? e.message : `passa: ${e instanceof Error ? e.message : String(e)}`);
+  err(e instanceof ToolRefused || e instanceof LoginNeeded || e instanceof AdminRefused ? e.message : `passa: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
 });

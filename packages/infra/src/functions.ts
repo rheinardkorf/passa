@@ -10,7 +10,7 @@ import type { Construct } from 'constructs';
 
 export const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 
-export type FunctionProps = Pick<NodejsFunctionProps, 'environment' | 'memorySize' | 'timeout' | 'description'> & {
+export type FunctionProps = Pick<NodejsFunctionProps, 'environment' | 'memorySize' | 'timeout' | 'description' | 'functionName'> & {
   entry: string; // relative to the repo root
   removalPolicy: RemovalPolicy;
   // Draws social cards: resvg's WebAssembly goes beside the bundle, where

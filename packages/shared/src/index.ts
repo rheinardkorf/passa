@@ -1,5 +1,6 @@
 export * from './config.ts';
 export * from './db.ts';
+export * from './domains.ts';
 export * from './edge.ts';
 export * from './events.ts';
 export * from './ids.ts';

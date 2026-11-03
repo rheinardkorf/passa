@@ -11,6 +11,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import type { Domain } from './domains.ts';
 import type { Rule } from './rules.ts';
 
 export type Role = 'admin' | 'publisher';
@@ -38,6 +39,10 @@ export type Site = {
   rules?: Rule[];
   // Its address when set (M2 R44, R45); otherwise the site ID is.
   name?: string;
+  // Custom domains that serve it (M4), and the primary one, which is then its
+  // address. Only domains already live are listed: attaching ones aren't yet.
+  domains?: string[];
+  domain?: string;
   purgeAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -111,12 +116,17 @@ export class NotFoundOrConflict extends Error {}
 // The name is someone else's, or held for its owner (M2 R46).
 export class NameTaken extends Error {}
 
+// The domain is already attached to a site (M4 R114).
+export class DomainTaken extends Error {}
+
 const userKey = (id: string) => ({ pk: `USER#${id}`, sk: 'PROFILE' });
 const siteKey = (id: string) => ({ pk: `SITE#${id}`, sk: 'META' });
 const versionKey = (siteId: string, id: string) => ({ pk: `SITE#${siteId}`, sk: `VER#${id}` });
 const uploadKey = (id: string) => ({ pk: `UPLOAD#${id}`, sk: 'META' });
 const purgeKey = (siteId: string) => ({ pk: `PURGE#${siteId}`, sk: 'META' });
 const nameKey = (name: string) => ({ pk: `NAME#${name}`, sk: 'META' });
+// Every custom domain is also listed under one index key, for admins (M4 R116).
+const domainKey = (domain: string) => ({ pk: `DOMAIN#${domain}`, sk: 'META' });
 // One per name a site has claimed, so a purge can find its current and held names.
 const siteNameKey = (siteId: string, name: string) => ({ pk: `SITE#${siteId}`, sk: `NAME#${name}` });
 const tokenKey = (hash: string) => ({ pk: `TOKEN#${hash}`, sk: 'META' });
@@ -490,6 +500,83 @@ export class Store {
 
   // Starts the grace period. The PURGE item's TTL fires the hard delete.
   // Blocked sites can be deleted too.
+  // Claims a domain for a site; it can only belong to one (M4 R114).
+  async claimDomain(domain: Domain): Promise<void> {
+    try {
+      await this.#db.send(new PutCommand({
+        TableName: this.#table,
+        Item: { ...domainKey(domain.domain), gsi1pk: 'DOMAINS', gsi1sk: domain.domain, ...domain },
+        ConditionExpression: 'attribute_not_exists(pk)',
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new DomainTaken(domain.domain, { cause: err });
+      throw err;
+    }
+  }
+
+  async getDomain(domain: string): Promise<Domain | undefined> {
+    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: domainKey(domain), ConsistentRead: true }));
+    return entity<Domain>(Item);
+  }
+
+  // Saves a domain's progress; only while it still belongs to the same site.
+  async saveDomain(domain: Domain): Promise<void> {
+    try {
+      await this.#db.send(new PutCommand({
+        TableName: this.#table,
+        Item: { ...domainKey(domain.domain), gsi1pk: 'DOMAINS', gsi1sk: domain.domain, ...domain },
+        ConditionExpression: 'siteId = :site',
+        ExpressionAttributeValues: { ':site': domain.siteId },
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new NotFoundOrConflict(domain.domain, { cause: err });
+      throw err;
+    }
+  }
+
+  async deleteDomain(domain: string, siteId: string): Promise<void> {
+    try {
+      await this.#db.send(new DeleteCommand({
+        TableName: this.#table, Key: domainKey(domain), ConditionExpression: 'siteId = :site', ExpressionAttributeValues: { ':site': siteId },
+      }));
+    } catch (err) {
+      if (!isConditionFailure(err)) throw err;
+    }
+  }
+
+  async listDomains(): Promise<Domain[]> {
+    const out: Domain[] = [];
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const page = await this.#db.send(new QueryCommand({
+        TableName: this.#table, IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': 'DOMAINS' },
+        ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}),
+      }));
+      out.push(...(page.Items ?? []).map((item) => strip<Domain>(item)));
+      ExclusiveStartKey = page.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return out;
+  }
+
+  // Sets which live domains serve a site, and its primary (M4 R114, R117).
+  async setSiteDomains(siteId: string, domains: string[], primary: string | undefined, now: string): Promise<void> {
+    const set = ['updatedAt = :now', ...(domains.length ? ['domains = :domains'] : []), ...(primary ? ['#domain = :primary'] : [])];
+    const remove = [...(domains.length ? [] : ['domains']), ...(primary ? [] : ['#domain'])];
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: siteKey(siteId),
+        UpdateExpression: `SET ${set.join(', ')}${remove.length ? ` REMOVE ${remove.join(', ')}` : ''}`,
+        ConditionExpression: 'attribute_exists(pk)',
+        ExpressionAttributeNames: { '#domain': 'domain' },
+        ExpressionAttributeValues: { ':now': now, ...(domains.length ? { ':domains': domains } : {}), ...(primary ? { ':primary': primary } : {}) },
+      }));
+    } catch (err) {
+      if (isConditionFailure(err)) throw new NotFoundOrConflict(siteId, { cause: err });
+      throw err;
+    }
+  }
+
   async markDeleting(ownerId: string, siteId: string, purgeAt: string, now: string): Promise<void> {
     try {
       await this.#db.send(new TransactWriteCommand({

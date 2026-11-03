@@ -9,7 +9,7 @@ import {
   GetKeyCommand,
   PutKeyCommand,
 } from '@aws-sdk/client-cloudfront-keyvaluestore';
-import { type EdgeReader, type EdgeRecord, type EdgeRecords, nameKey, siteKey } from './edge.ts';
+import { domainKey, type EdgeReader, type EdgeRecord, type EdgeRecords, nameKey, siteKey } from './edge.ts';
 
 const ATTEMPTS = 5;
 const errorName = (err: unknown) => (err as { name?: string }).name;
@@ -47,6 +47,14 @@ export class KvsEdgeStore implements EdgeRecords, EdgeReader {
 
   removeName(name: string): Promise<void> {
     return this.#delete(nameKey(name));
+  }
+
+  putDomain(domain: string, siteId: string): Promise<void> {
+    return this.set(domainKey(domain), siteId);
+  }
+
+  removeDomain(domain: string): Promise<void> {
+    return this.#delete(domainKey(domain));
   }
 
   async #delete(key: string): Promise<void> {

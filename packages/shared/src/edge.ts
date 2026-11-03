@@ -6,19 +6,25 @@ import type { Site } from './db.ts';
 import { type EdgeRule, edgeRules } from './rules.ts';
 
 // cur: current version. v: access version (cookies must match it). r: path
-// rules, longest first; empty when nothing is public. n: the site's name, its
-// one address, when it has one (M2 R45).
-export type EdgeRecord = { cur: string; v: number; r: EdgeRule[]; n?: string };
+// rules, longest first; empty when nothing is public. n: the site's name (M2
+// R45). d: its primary custom domain (M4 R122). Its one address is d, else n,
+// else its ID.
+export type EdgeRecord = { cur: string; v: number; r: EdgeRule[]; n?: string; d?: string };
 
 export const siteKey = (siteId: string) => `s:${siteId}`;
 // A name, current or held, and the site it points at.
 export const nameKey = (name: string) => `n:${name}`;
+// A custom domain, primary or alias, and the site it serves (M4 R122).
+export const domainKey = (domain: string) => `d:${domain}`;
 export const signingKeyKey = (kid: string) => `k:${kid}`;
 
 // Only active sites are served; a site being deleted has no record.
 export function edgeRecord(site: Site): EdgeRecord | undefined {
   if (site.status !== 'active') return undefined;
-  return { cur: site.current, v: site.accessVersion, r: edgeRules(site.rules ?? []), ...(site.name ? { n: site.name } : {}) };
+  return {
+    cur: site.current, v: site.accessVersion, r: edgeRules(site.rules ?? []),
+    ...(site.name ? { n: site.name } : {}), ...(site.domain ? { d: site.domain } : {}),
+  };
 }
 
 export interface EdgeRecords {
@@ -26,6 +32,8 @@ export interface EdgeRecords {
   remove(siteId: string): Promise<void>;
   putName(name: string, siteId: string): Promise<void>;
   removeName(name: string): Promise<void>;
+  putDomain(domain: string, siteId: string): Promise<void>;
+  removeDomain(domain: string): Promise<void>;
 }
 
 // Writes the record for a site's current state, or removes it.
@@ -75,6 +83,14 @@ export class TableEdgeStore implements EdgeRecords, EdgeReader {
   async removeName(name: string): Promise<void> {
     await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: { key: nameKey(name) } }));
   }
+
+  putDomain(domain: string, siteId: string): Promise<void> {
+    return this.set(domainKey(domain), siteId);
+  }
+
+  async removeDomain(domain: string): Promise<void> {
+    await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: { key: domainKey(domain) } }));
+  }
 }
 
 export class MemoryEdgeStore implements EdgeRecords, EdgeReader {
@@ -100,5 +116,13 @@ export class MemoryEdgeStore implements EdgeRecords, EdgeReader {
 
   async removeName(name: string): Promise<void> {
     this.values.delete(nameKey(name));
+  }
+
+  async putDomain(domain: string, siteId: string): Promise<void> {
+    this.values.set(domainKey(domain), siteId);
+  }
+
+  async removeDomain(domain: string): Promise<void> {
+    this.values.delete(domainKey(domain));
   }
 }

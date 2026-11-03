@@ -5,6 +5,8 @@ import {
   type Config,
   type Events,
   handoffUrl,
+  isDomain,
+  isName,
   isSiteId,
   type SigningKey,
   type Site,
@@ -19,6 +21,7 @@ export type Urls = {
   auth: string; // the auth. origin
   mcp: string; // the mcp. origin; the MCP endpoint is <mcp>/mcp
   site: (label: string) => string; // a site's origin, by its ID or name
+  domain?: (domain: string) => string; // a site's origin at its custom domain (M4)
 };
 
 export type SignInDeps = {
@@ -70,9 +73,13 @@ export class SignIn {
   // Only a site's owner may view it, and only while it's active. A name counts
   // only while it's the site's current one; held names redirect at the edge.
   async #viewableSite(user: User, label: string): Promise<Site | undefined> {
-    const siteId = isSiteId(label) ? label : (await this.#d.store.getName(label))?.siteId;
+    const siteId = isSiteId(label) ? label
+      : isName(label) ? (await this.#d.store.getName(label))?.siteId
+      : isDomain(label) ? (await this.#d.store.getDomain(label))?.siteId : undefined;
     const site = siteId ? await this.#d.store.getSite(siteId) : undefined;
-    if (!isSiteId(label) && site?.name !== label) return undefined;
+    // A name or domain counts only while it's the site's (a domain once live: M4).
+    if (isName(label) && site?.name !== label) return undefined;
+    if (isDomain(label) && !site?.domains?.includes(label)) return undefined;
     return site && site.status === 'active' && site.ownerId === user.id ? site : undefined;
   }
 
@@ -181,8 +188,9 @@ export class SignIn {
       key: await this.#d.siteKey(),
       siteId: site.id,
       accessVersion: site.accessVersion,
-      // The site's current address, from the database, never from the request (M2 R45).
-      origin: this.urls.site(site.name ?? site.id),
+      // The site's current address, from the database, never from the request
+      // (M2 R45): its primary domain, else its name, else its ID (M4 R123).
+      origin: site.domain ? (this.urls.domain ?? ((d: string) => `https://${d}`))(site.domain) : this.urls.site(site.name ?? site.id),
       path: target.path,
       cookieLifetime: this.#d.config.lifetimes.siteCookie,
       now: this.#now(),

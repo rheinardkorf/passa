@@ -26,7 +26,7 @@ import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { FilterCriteria, FilterRule, FunctionUrlAuthType, StartingPosition } from 'aws-cdk-lib/aws-lambda';
+import { FilterCriteria, FilterRule, FunctionUrlAuthType, type IFunction, StartingPosition } from 'aws-cdk-lib/aws-lambda';
 import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { AaaaRecord, ARecord, type IHostedZone, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { ApiGatewayv2DomainProperties, CloudFrontTarget } from 'aws-cdk-lib/aws-route53-targets';
@@ -54,6 +54,7 @@ const FORWARD_HOST = "function handler(event){var r=event.request;r.headers['x-p
 export class ServicesStack extends Stack {
   readonly authDistribution: Distribution;
   readonly mcpApi: HttpApi;
+  readonly cards: IFunction;
 
   constructor(scope: Construct, id: string, props: ServicesProps) {
     super(scope, id, props);
@@ -145,6 +146,7 @@ export class ServicesStack extends Stack {
     // It reads versions, and writes cards only: never a version's files.
     data.sites.grantRead(cards);
     data.sites.grantPut(cards, '*/cards/*');
+    this.cards = cards;
 
     // mcp.<domain>
     const mcp = nodeFunction(this, 'McpFunction', {

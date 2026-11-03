@@ -22,6 +22,7 @@ export const testConfig: Config = {
   deleteGraceDays: 7,
   nameHoldDays: 7,
   reservedNames: ['blog'],
+  domains: { zones: [], namesPerTenant: 10 },
   retention: { versionDays: 30, monthEndMonths: 24, timeZone: 'UTC', eventYears: 7 },
   cdnAllowlist: ['cdn.jsdelivr.net'],
 };

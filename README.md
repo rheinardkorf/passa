@@ -31,6 +31,8 @@ pnpm passa pull <site> other-folder         # a site's sources, on another machi
 pnpm passa sites                            # also: site, name, rollback, delete, logout, whoami
 ```
 
+Admins give sites custom domains with the deployment's AWS credentials, never through MCP: `pnpm passa admin domain add docs.example.com my-site --new-tenant --stage prod` (also `list`, `status`, `remove`). See `docs/custom-domains.md`.
+
 Sign in to more than one deployment and switch with `passa use <server>` (no sign-in needed), pass `--server <server>` to one command, or set `PASSA_SERVER` for a shell. A linked folder always uses the server it came from, unless `--server` is given.
 
 ## Development

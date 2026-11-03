@@ -4,6 +4,8 @@
 // a response on an ID host carries noindex, and one on a name host doesn't.
 // A name host only serves a named site (anything else redirects first), and
 // crawlers have no site cookie, so all they can get there is public pages.
+// A custom domain is indexed like a name (M4 R125): the handler serves a site
+// only at its primary domain, so an alias has already redirected.
 //
 // Files are only for the site's own pages (cross-origin-resource-policy:
 // same-origin, from the headers policy), except public files, which anyone
@@ -23,7 +25,8 @@ function viewerResponse(event, options) {
   const host = event.request.headers.host ? event.request.headers.host.value.toLowerCase() : '';
   const suffix = '.' + options.sites;
   const label = host.endsWith(suffix) ? host.slice(0, -suffix.length) : '';
-  if (!label || SITE_ID.test(label)) response.headers['x-robots-tag'] = { value: 'noindex' };
+  const custom = !label && host !== options.sites && host.indexOf('.') > 0;
+  if (!custom && (!label || SITE_ID.test(label))) response.headers['x-robots-tag'] = { value: 'noindex' };
   const tier = event.request.headers[TIER];
   if (tier && tier.value === 'public') response.headers['cross-origin-resource-policy'] = { value: 'cross-origin' };
   return response;
