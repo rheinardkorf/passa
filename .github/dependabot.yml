@@ -8,6 +8,10 @@ updates:
       default-days: 14
     versioning-strategy: increase
     groups:
+      # The AWS SDK's packages move together: mixed versions break their types
+      # (a lone client-s3 bump did) and the SigV4a signer needs one copy.
+      aws-sdk:
+        patterns: ["@aws-sdk/*", "@smithy/*"]
       dev-tools:
         dependency-type: development
     ignore:
@@ -23,3 +27,7 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      # CodeQL's init and analyze must be the same version, so one PR for both.
+      actions:
+        patterns: ["*"]
