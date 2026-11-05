@@ -126,7 +126,7 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
     skippedPages = sources.filter((s) => {
       if (!markdown(s)) return false;
       const { data, problem } = splitFrontMatter(s.content);
-      if (problem) unreadable.push({ kind: 'front-matter', source: s.path, message: `${s.path}: ${problem}, so it can't say access: public and is left out` });
+      if (problem) unreadable.push({ kind: 'front-matter', source: s.path, message: `${s.path}: ${problem}. It's left out, since it can't say access: public.` });
       return String(data.access ?? '').toLowerCase() !== 'public';
     }).map((s) => s.path);
     sources = sources.filter((s) => !skippedPages.includes(s.path));
