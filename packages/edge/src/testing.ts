@@ -14,7 +14,7 @@ export type Stack = {
   server: Server;
   port: number;
   publisher: Publisher;
-  sent: Email[]; // every email the auth app sent, newest last
+  sent: Email[]; // every email sent (sign-in links and invites), newest last
   close: () => Promise<void>;
 };
 
@@ -43,6 +43,7 @@ export async function startStack(): Promise<Stack> {
     ...env,
     siteUrl,
     domainUrl,
+    mailer: deps.mailer,
     oidc: new OidcStore(env.db, env.tables.main),
     tokenKeys: [await loadTokenKey(deps.kms, deps.tokenKeyId)],
     issuer: `http://localhost:${port}`,
@@ -53,7 +54,7 @@ export async function startStack(): Promise<Stack> {
     env,
     server,
     port,
-    publisher: new Publisher({ ...env, siteUrl, domainUrl }),
+    publisher: new Publisher({ ...env, siteUrl, domainUrl, mailer: deps.mailer }),
     sent: deps.sent,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };

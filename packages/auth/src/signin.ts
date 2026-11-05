@@ -10,11 +10,13 @@ import {
   isName,
   isSiteId,
   newUserId,
+  servedPath,
   type SigningKey,
   type SiteTiers,
   type Site,
   siteDomain,
   type Store,
+  tierFor,
   type User,
 } from '@passa/shared';
 import type { Mailer } from './mailer.ts';
@@ -206,7 +208,10 @@ export class SignIn {
   // URL, which sets the site cookie. Undefined when they may not view it.
   async siteRedirect(user: User, target: Target, ip: string): Promise<string | undefined> {
     const viewable = await this.#viewableSite(user, target.siteId);
-    if (!viewable) {
+    // Someone the site is shared with is refused its private paths here: a
+    // cookie without them would only send them back (M5 R136).
+    const opens = viewable && (viewable.tiers === 'o' || tierFor(viewable.site.rules ?? [], servedPath(target.path)) !== 'private');
+    if (!viewable || !opens) {
       await this.#d.events.record({ action: 'site.view', result: 'refused', userId: user.id, siteId: target.siteId, ip });
       return undefined;
     }

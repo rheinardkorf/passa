@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, tierFor } from './rules.ts';
+import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, servedPath, tierFor } from './rules.ts';
 
 const pub = (path: string): Rule => ({ path, tier: 'public' });
 const priv = (path: string): Rule => ({ path, tier: 'private' });
@@ -127,5 +127,14 @@ describe('accessChanges', () => {
   it('sees no change when rules are rewritten without changing access', () => {
     expect(accessChanges([pub('/')], [pub('/'), pub('/docs/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: [] });
     expect(accessChanges([], [priv('/'), priv('/a/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: [] });
+  });
+});
+
+describe('served paths', () => {
+  it('match the edge: folders get index.html, and so do paths without an extension', () => {
+    expect(servedPath('/')).toBe('/index.html');
+    expect(servedPath('/plans/')).toBe('/plans/index.html');
+    expect(servedPath('/plans')).toBe('/plans/index.html');
+    expect(servedPath('/plans/q1.pdf')).toBe('/plans/q1.pdf');
   });
 });

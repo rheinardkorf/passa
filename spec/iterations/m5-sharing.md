@@ -56,8 +56,8 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 
 ### Viewers
 
-- **R135** Anyone a site is shared with signs in the way the owner does (R15–R18): enter the email, open the magic link, Continue. The sign-in screen still never reveals whether the email has access. A viewer has no publisher account: they're identified only by the verified email of their `auth.` session, and can never publish.
-- **R136** A site cookie carries the viewer's tiers on that site: the owner's cookie has every tier, a viewer's has `shared`. The edge serves a path when the cookie's tiers include the path's tier, as well as everything public. The cookie stays host-only, short-lived and signed as now (R11, R18, R19).
+- **R135** Anyone a site is shared with signs in the way the owner does (R15–R18): enter the email, open the magic link, Continue. The sign-in screen still never reveals whether the email has access. A viewer's first sign-in gives them a user record with no roles, so they can sign in to view but never publish; what they can open comes from the shares for their verified email.
+- **R136** A site cookie carries the viewer's tiers on that site: the owner's cookie has every tier, a viewer's has `shared`. The edge serves a path when the cookie's tiers include the path's tier, as well as everything public. A viewer who opens a private path is refused at `auth.`, which shows who they're signed in as and offers another email. The cookie stays host-only, short-lived and signed as now (R11, R18, R19).
 - **R137** On a Markdown site, a `shared` page's lists, backlinks, tag pages and feed include only `shared` and public pages (M3 R82), so a viewer never sees a private page's title. `shared` pages get no social cards, since the services that fetch link previews can't sign in.
 
 ### Rules
@@ -89,17 +89,17 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 - **No email enumeration:** sign-in still answers the same whether or not an email has access.
 - **No bulk email:** shares per site and invites per day are capped (R134); invites carry no title or token.
 - **Revocation is complete:** unshare and expiry bump the access version; site cookies last an hour at most anyway.
-- **Viewers never publish:** they have no publisher record, and MCP consent and tool calls still require an active publisher (R8, R24).
+- **Viewers never publish:** their user record has no roles, and MCP consent and tool calls still require an active publisher (R8, R24).
 - **A share is per site:** one site's `shared` tier says nothing about another's, and a cookie is for one site's host only.
 - **Mail credentials** stay out of config: in a Parameter Store `SecureString` on AWS, encrypted with KMS.
 - **The last admin can't be locked out** (R143).
 
 ## Design
 
-- **Grants:** each share is an item keyed by site and email (`GRANT#<site>`, `EMAIL#<email>`), with its tier, source (`share`), expiry and invite time, plus an index by email for sign-in. A TTL removes it at expiry; the table stream bumps the site's access version, as unshare does directly.
+- **Grants:** each share is an item in the site's partition (`SITE#<site>`, `GRANT#<email>`), with its tier, source (`share`), expiry and invite time. Sign-in always knows the site, so it reads the one item and needs no index by email. A TTL removes it at expiry; the table stream bumps the site's access version, as unshare does directly. Until DynamoDB removes it, sign-in and cookie refresh treat it as gone.
 - **Cookies:** `kid.site.v.exp.tiers.sig`, where `tiers` is a short code (`o` for the owner, `s` for shared), covered by the signature. The handoff token carries the tiers too, so the edge sets them without a lookup.
 - **Edge:** edge rules gain `s` beside `p` (public) and `x` (private). A path's tier comes from its rule as now; a `shared` path is served when the cookie has `s` or `o`. The function stays within CloudFront's 10 KB limit (checked early).
-- **Sign-in:** `auth.` looks up grants by email when there's no publisher record, and sends a link only when the email is the site's owner or has a live share.
+- **Sign-in:** `auth.` reads the site's grant for the email, and sends a link only when the email is the site's owner or has a live share. Someone with a share and no user record gets one with no roles.
 - **Mail:** `packages/shared` gets the `MailProvider` interface; `SesMailer` moves behind it; `SmtpMailer` uses Nodemailer (MIT-0, no dependencies). A small mail function sends; `auth.` and the MCP server hand it the message asynchronously (R145), as they hand cards to the cards function.
 - **Admin users:** new admin-function actions (`users.add`, `users.list`, `users.disable`, `users.enable`) and `passa admin users`.
 

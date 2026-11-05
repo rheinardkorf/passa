@@ -12,7 +12,7 @@ let env: TestEnv;
 let stack: Stack;
 let port: number;
 let publisher: Publisher;
-let sent: { text: string }[] = [];
+let sent: { to: string; text: string }[] = [];
 const key = { kid: 'k1', secret: 'c'.repeat(64) };
 const alice = { userId: 'alice' };
 
@@ -179,6 +179,58 @@ describe('signing in', () => {
     const unknown = await browser.open(`http://no-such-name.localhost:${port}/`);
     expect(unknown.headers.location).toBe(`http://localhost:${port}/site/signin?site=no-such-name&path=%2F`);
     expect((await browser.open(String(unknown.headers.location))).body).toContain('Enter your email');
+  });
+});
+
+describe('sharing (M5)', () => {
+  // Follows a magic link the way the page's script does, then the handoff.
+  async function openLink(browser: Browser, to: string) {
+    const link = /(http:\/\/localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.filter((e) => e.to === to).at(-1)?.text ?? '');
+    expect(link).not.toBeNull();
+    await browser.open(link?.[1] ?? '');
+    return browser.follow(link?.[1] ?? '', { token: link?.[2] ?? '' });
+  }
+
+  it('lets someone a site is shared with sign in and open its shared paths, until unshared (R128–R136)', async () => {
+    const site = await publisher.publish(alice, { title: 'Plans', content: { files: [...page('<h1>Home</h1>'), { path: 'plans/index.html', content: new TextEncoder().encode('<h1>Plans</h1>') }] } });
+    const shared = await publisher.share(alice, { siteId: site.site_id, email: 'sam@example.com', path: '/plans/', confirmShare: true });
+    expect(shared.invite_sent).toBe(true);
+    const invite = sent.at(-1);
+    expect(invite?.to).toBe('sam@example.com');
+    expect(invite?.text).toContain(`${site.url}plans/`);
+
+    // From the invite: sign in with the email it went to.
+    const browser = new Browser(port);
+    const start = await browser.follow(`${site.url}plans/`);
+    expect(start.body).toContain('Enter your email');
+    await browser.open(`http://localhost:${port}/signin`, { email: 'sam@example.com', site: site.site_id, path: '/plans/' });
+    const landed = await openLink(browser, 'sam@example.com');
+    expect(landed.status).toBe(200);
+    expect(landed.body).toContain('<h1>Plans</h1>');
+
+    // The private root is refused, without a loop, and a viewer can't publish.
+    const root = await browser.follow(site.url);
+    expect(root.status).toBe(403);
+    expect(root.body).toContain('doesn\'t have access to this page');
+    const viewer = await env.store.findUserByEmail('sam@example.com');
+    expect(viewer?.roles).toEqual([]);
+    await expect(publisher.assertPublisher({ userId: viewer?.id ?? '' })).rejects.toThrow('This account cannot publish.');
+
+    // Unshared: the next request goes back to auth., which refuses it.
+    await publisher.unshare(alice, { siteId: site.site_id, email: 'sam@example.com' });
+    const after = await browser.follow(`${site.url}plans/`);
+    expect(after.status).toBe(403);
+  });
+
+  it('sends no sign-in link to an email a site isn\'t shared with, answering the same (R135)', async () => {
+    const site = await publisher.publish(alice, { title: 'Not shared', content: { files: page('x') } });
+    const browser = new Browser(port);
+    await browser.follow(site.url);
+    const before = sent.length;
+    const r = await browser.open(`http://localhost:${port}/signin`, { email: 'stranger@example.com', site: site.site_id, path: '/' });
+    expect(r.status).toBeLessThan(400);
+    expect(sent.length).toBe(before);
+    expect(await env.store.findUserByEmail('stranger@example.com')).toBeUndefined();
   });
 });
 

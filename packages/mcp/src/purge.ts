@@ -1,8 +1,9 @@
 // Hard deletes at the end of the grace period. Deleting a site writes a PURGE
 // item whose TTL is the purge time; when DynamoDB expires it, the table stream
-// delivers the removed item here (filtered to TTL removals of PURGE and NAME
-// items). A site that's no longer being deleted is left alone. An expired
+// delivers the removed item here (filtered to TTL removals of PURGE, NAME and
+// GRANT items). A site that's no longer being deleted is left alone. An expired
 // held name (M2 R46) has its edge record removed, unless it's been claimed again.
+// An expired share (M5 R133) takes access away as an unshare does.
 import { CloudFrontKeyValueStoreClient } from '@aws-sdk/client-cloudfront-keyvaluestore';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
@@ -23,17 +24,19 @@ export async function purgeExpired(deps: Deps, siteIds: string[]): Promise<void>
 }
 
 // The items of one kind in a batch of stream records: only TTL removals.
-function expired(event: DynamoDBStreamEvent, prefix: string, field: string): string[] {
+function expired(event: DynamoDBStreamEvent, prefix: string, field: string, sk = ''): string[] {
   return event.Records.flatMap((record) => {
     const image = record.dynamodb?.OldImage;
     const ttlRemoval = record.eventName === 'REMOVE' && record.userIdentity?.principalId === 'dynamodb.amazonaws.com';
     const value = image?.[field]?.S;
-    return ttlRemoval && image?.pk?.S?.startsWith(prefix) && value ? [value] : [];
+    return ttlRemoval && image?.pk?.S?.startsWith(prefix) && image.sk?.S?.startsWith(sk) && value ? [value] : [];
   });
 }
 
 export const expiredPurges = (event: DynamoDBStreamEvent): string[] => expired(event, 'PURGE#', 'siteId');
 export const expiredNames = (event: DynamoDBStreamEvent): string[] => expired(event, 'NAME#', 'name');
+// The sites whose shares expired, once each.
+export const expiredShares = (event: DynamoDBStreamEvent): string[] => [...new Set(expired(event, 'SITE#', 'siteId', 'GRANT#'))];
 
 let deps: Deps | undefined;
 
@@ -52,4 +55,8 @@ export async function handler(event: DynamoDBStreamEvent): Promise<void> {
   await purgeExpired(deps, expiredPurges(event));
   const publisher = new Publisher(deps);
   for (const name of expiredNames(event)) await publisher.expireName(name);
+  for (const siteId of expiredShares(event)) {
+    await publisher.expireShare(siteId);
+    await deps.events.record({ action: 'site.share.expire', result: 'ok', siteId });
+  }
 }

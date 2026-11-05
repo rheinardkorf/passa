@@ -53,6 +53,8 @@ limits:
   site: 104857600
   file: 26214400
   files: 1000
+  # Emails one site can be shared with.
+  sharesPerSite: 100
 
 # Sign-in requests (magic-link emails asked for) allowed per email address and
 # per IP address in each window of seconds. Requests over the limit get the
@@ -68,6 +70,8 @@ rateLimits:
   # API Gateway throttling on mcp.: requests per second, and the burst allowed.
   mcpPerSecond: 20
   mcpBurst: 40
+  # Sharing invites each publisher may send in a day, so Passa can't send bulk email.
+  invitesPerDay: 50
 
 deleteGraceDays: 7
 

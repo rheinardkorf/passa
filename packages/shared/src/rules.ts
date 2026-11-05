@@ -50,6 +50,13 @@ export function edgeRules(rules: Rule[]): EdgeRule[] {
 }
 
 // The tier for a served path, as the edge decides it.
+// The file the edge serves for a request path, which rules match: a folder's
+// index.html, and /docs as /docs/index.html (the edge's indexPath).
+export function servedPath(path: string): string {
+  if (path.endsWith('/')) return `${path}index.html`;
+  return path.slice(path.lastIndexOf('/') + 1).includes('.') ? path : `${path}/index.html`;
+}
+
 export function tierFor(rules: Rule[], servedPath: string): Tier {
   return [...rules].sort(byLength).find((r) => servedPath.startsWith(r.path))?.tier ?? 'private';
 }

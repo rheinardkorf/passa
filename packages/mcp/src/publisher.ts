@@ -9,9 +9,12 @@ import {
   type EdgeRecords,
   type Events,
   type FileEntry,
+  type Grant,
+  grantIsLive,
   isSiteId,
   isUploadId,
   isVersionId,
+  type MailProvider,
   NameTaken,
   nameProblem,
   newSiteId,
@@ -29,11 +32,14 @@ import {
   storedPath,
   syncEdge,
   THREATS,
+  tierFor,
+  TooManyShares,
   type UploadSync,
   type Version,
 } from '@passa/shared';
 import { type Card, CARD_HEIGHT, CARD_WIDTH, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, rulesFile } from '@passa/render';
 import { cardHash, type CheckedFile, checkContent, checkManifest, type InputFile, PublishRefused } from './checks.ts';
+import { inviteEmail } from './invite.ts';
 
 export type Caller = { userId: string; ip?: string };
 
@@ -57,6 +63,8 @@ export type Deps = {
   // they're drawn by the next change to the site.
   cardBudgetMs?: number;
   drawCardsLater?: (siteId: string, versionId: string) => Promise<void>;
+  // Sends sharing invites (M5 R130), in the background in AWS (R145).
+  mailer?: MailProvider;
 };
 
 // The social cards a version's pages name, and the fonts they're drawn with
@@ -74,6 +82,8 @@ export const CARDS_LATER_MS = 240_000;
 export class ToolError extends Error {}
 
 const NOT_FOUND = 'No site with that ID.';
+const HOUR_MS = 3_600_000;
+const DAY_S = 86_400;
 const BAD_CURSOR = 'That cursor doesn\'t match this list. Call again without it to start from the beginning.';
 const PARALLEL = 16;
 // Copies within S3 move no data through the function, so more run at once,
@@ -100,7 +110,11 @@ export type SiteSummary = {
 };
 
 // What a change of rules did, for the response and the event (R48).
-export type AccessChange = { made_public: string[]; made_private: string[] };
+export type AccessChange = { made_public: string[]; made_shared: string[]; made_private: string[] };
+
+// A share as list_access shows it (M5 R132).
+export type Share = { email: string; shared_at: string; expires_at?: string; invited_at?: string };
+const shareOf = (g: Grant): Share => ({ email: g.email, shared_at: g.createdAt, ...(g.expiresAt ? { expires_at: g.expiresAt } : {}), ...(g.invitedAt ? { invited_at: g.invitedAt } : {}) });
 
 export type SiteFile = {
   path: string; size: number; content_type: string; sha256: string; role?: FileEntry['role']; rendered_from?: string; content?: string; download_url?: string;
@@ -188,26 +202,29 @@ export class Publisher {
   }
 
   // Checks new rules against the current ones. Anything that would become
-  // public needs confirmPublic (R37), whichever way it happens.
+  // public needs confirmPublic (R37), whichever way it happens. Private and
+  // shared need no confirmation either way (M5 R138).
   #checkAccess(before: Rule[], after: Rule[], confirmPublic: boolean): AccessChange {
     const problems = checkRules(after);
     if (problems.length) throw new PublishRefused(problems);
-    const { madePublic, madePrivate } = accessChanges(before, after);
+    const { madePublic, madeShared, madePrivate } = accessChanges(before, after);
     if (madePublic.length && !confirmPublic) {
       throw new ToolError(`This would make ${madePublic.join(', ')} public: anyone with the link could open ${madePublic.length > 1 ? 'them' : 'it'} without signing in. `
         + 'Check with the person first, then call again with confirm_public set to true.');
     }
-    return { made_public: madePublic, made_private: madePrivate };
+    return { made_public: madePublic, made_shared: madeShared, made_private: madePrivate };
   }
 
-  // The public URLs, and a reminder when something was made private, since the
-  // edge can take up to a minute everywhere (R40).
+  // The public and shared URLs, and a reminder when access was narrowed, since
+  // the edge can take up to a minute everywhere (R40).
   #accessResult(site: Site, change: AccessChange) {
-    const open = regions(site.rules ?? []).public;
+    const { public: open, shared } = regions(site.rules ?? []);
+    const narrowed = change.made_private.length || change.made_shared.length;
     return {
       ...change,
       public_urls: open.map((p) => this.#url(site) + p.slice(1)),
-      ...(change.made_private.length ? { note: 'Paths made private can stay public at some edge locations for up to a minute.' } : {}),
+      ...(shared.length ? { shared_urls: shared.map((p) => this.#url(site) + p.slice(1)) } : {}),
+      ...(narrowed ? { note: 'Paths made private or shared can stay open as before at some edge locations for up to a minute.' } : {}),
     };
   }
 
@@ -739,19 +756,125 @@ export class Publisher {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
     const change = this.#checkAccess(site.rules ?? [], input.rules, input.confirmPublic);
-    // A Markdown site gets a new version with the rules, in the same change (M3 R85).
-    const rendered = await this.#rerender(caller, site, await this.#version(site), { rules: input.rules, confirmPublic: input.confirmPublic, setRules: true });
+    const rendered = await this.#saveRules(caller, site, input.rules, input.confirmPublic);
+    const updated = (await this.#sync(site.id)) ?? site;
+    return { ...this.#summary(updated), ...this.#accessResult(updated, change), ...(rendered ?? {}) };
+  }
+
+  // Stores new rules, already checked. A Markdown site gets a new version with
+  // them, in the same change (M3 R85); its render result is returned.
+  async #saveRules(caller: Caller, site: Site, rules: Rule[], confirmPublic: boolean) {
+    const rendered = await this.#rerender(caller, site, await this.#version(site), { rules, confirmPublic, setRules: true });
     if (!rendered) {
       try {
-        await this.#d.store.setRules(caller.userId, site.id, input.rules, this.#now().toISOString(), site.updatedAt);
+        await this.#d.store.setRules(caller.userId, site.id, rules, this.#now().toISOString(), site.updatedAt);
       } catch (err) {
         if (!(err instanceof NotFoundOrConflict)) throw err;
         const now = await this.#d.store.getSite(site.id);
         throw new ToolError(now?.ownerId === caller.userId && now.status === 'active' ? 'The site changed while this was running. Get the site again and retry.' : NOT_FOUND);
       }
     }
+    return rendered;
+  }
+
+  // Shares a site with an email (M5 R128–R130, R133, R134): the email gets the
+  // site's shared tier, the path becomes shared if it was private, and an
+  // invite goes to the email, at most hourly per site and email.
+  async share(caller: Caller, input: { siteId: string; email: string; path: string; expiresAt?: string; confirmShare: boolean }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    this.#assertChangeable(site);
+    const email = input.email.trim().toLowerCase();
+    const owner = await this.#d.store.getUser(caller.userId);
+    if (email === owner?.email) throw new ToolError('That\'s your own email: you can open every part of the site already.');
+    if (!input.confirmShare) {
+      throw new ToolError(`This would share the site's shared paths with ${email}, and email them an invite. Read the address back to the person exactly as written here, `
+        + 'since a typo shares private pages with a stranger, then call again with confirm_share set to true.');
+    }
+    const now = this.#now();
+    if (input.expiresAt) {
+      const at = Date.parse(input.expiresAt);
+      if (!(at >= now.getTime() + HOUR_MS && at <= now.getTime() + 366 * DAY_S * 1000)) throw new ToolError('expires_at must be at least an hour and at most a year from now.');
+    }
+    const { mailer, config, store } = this.#d;
+    if (!mailer) throw new ToolError('This deployment can\'t send email, so it can\'t send the invite.');
+
+    // The rules first: a path that's private becomes shared; shared or public stays.
+    const before = site.rules ?? [];
+    const rules = tierFor(before, `${input.path}index.html`) === 'private'
+      ? [...before.filter((r) => r.path !== input.path), { path: input.path, tier: 'shared' as const }]
+      : before;
+    const change = this.#checkAccess(before, rules, false);
+
+    const existing = await store.getGrant(site.id, email);
+    const resend = !existing?.invitedAt || Date.parse(existing.invitedAt) <= now.getTime() - HOUR_MS;
+    if (resend) {
+      const dayStart = Math.floor(now.getTime() / 1000 / DAY_S) * DAY_S;
+      if ((await store.countRequest(`invites:${caller.userId}`, dayStart, DAY_S)) > config.rateLimits.invitesPerDay) {
+        throw new ToolError(`You've sent ${config.rateLimits.invitesPerDay} invites today, the most allowed. Try again tomorrow.`);
+      }
+    }
+    const grant: Grant = {
+      siteId: site.id, email, tier: 'shared', source: 'share',
+      createdAt: existing?.createdAt ?? now.toISOString(),
+      ...(input.expiresAt ? { expiresAt: new Date(input.expiresAt).toISOString() } : {}),
+      ...(resend ? { invitedAt: now.toISOString() } : existing?.invitedAt ? { invitedAt: existing.invitedAt } : {}),
+    };
+    try {
+      await store.putGrant(grant, config.limits.sharesPerSite);
+    } catch (err) {
+      if (!(err instanceof TooManyShares)) throw err;
+      throw new ToolError(`This site is shared with ${config.limits.sharesPerSite} emails, the most allowed. Unshare one first.`);
+    }
+    const rendered = rules === before ? undefined : await this.#saveRules(caller, site, rules, false);
     const updated = (await this.#sync(site.id)) ?? site;
-    return { ...this.#summary(updated), ...this.#accessResult(updated, change), ...(rendered ?? {}) };
+    if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(updated) + input.path.slice(1), ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}) }));
+    return {
+      ...this.#summary(updated),
+      ...this.#accessResult(updated, change),
+      share: shareOf(grant),
+      invite_sent: resend,
+      ...(resend ? {} : { invite_note: 'An invite went to this email less than an hour ago, so another wasn\'t sent.' }),
+      ...(rendered ?? {}),
+    };
+  }
+
+  // Removes a share, and makes every cookie for the site check again, so the
+  // email's next request is refused (M5 R131). The rules stay as they are.
+  async unshare(caller: Caller, input: { siteId: string; email: string }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    const email = input.email.trim().toLowerCase();
+    if (!(await this.#d.store.deleteGrant(site.id, email))) throw new ToolError('The site isn\'t shared with that email.');
+    await this.#revoke(site.id);
+    return { site_id: site.id, email, unshared: true };
+  }
+
+  // After DynamoDB removes an expired share (M5 R133): as an unshare.
+  async expireShare(siteId: string): Promise<void> {
+    await this.#revoke(siteId);
+  }
+
+  async #revoke(siteId: string) {
+    await this.#d.store.bumpAccessVersion(siteId, this.#now().toISOString());
+    await this.#sync(siteId);
+  }
+
+  // The site's rules and who it's shared with (M5 R132). Expired shares
+  // DynamoDB hasn't removed yet are left out: they no longer open anything.
+  async listAccess(caller: Caller, input: { siteId: string }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    const now = this.#now();
+    const grants = (await this.#d.store.listGrants(site.id)).filter((g) => grantIsLive(g, now));
+    const { public: open, shared } = regions(site.rules ?? []);
+    return {
+      site_id: site.id,
+      url: this.#url(site),
+      access: accessOf(site.rules ?? []),
+      rules: site.rules ?? [],
+      public_urls: open.map((p) => this.#url(site) + p.slice(1)),
+      shared_urls: shared.map((p) => this.#url(site) + p.slice(1)),
+      shares: grants.map(shareOf),
+      ...(grants.length && !shared.length ? { note: 'No path is shared, so the people listed can\'t open anything yet. Make a path shared with set_access or share.' } : {}),
+    };
   }
 
   async delete(caller: Caller, input: { siteId: string; now: boolean }) {

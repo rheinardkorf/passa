@@ -72,6 +72,8 @@ export const configSchema = z.strictObject({
     site: bytes,
     file: bytes,
     files: z.number().int().positive(),
+    // Emails one site can be shared with (M5 R134).
+    sharesPerSite: z.number().int().positive().default(100),
   }),
   // Sign-in requests allowed per email and per IP in each window (R20).
   rateLimits: z.strictObject({
@@ -85,6 +87,8 @@ export const configSchema = z.strictObject({
     // API Gateway throttling on mcp., for the whole endpoint.
     mcpPerSecond: z.number().int().positive(),
     mcpBurst: z.number().int().positive(),
+    // Sharing invites each publisher may send in a day (M5 R134).
+    invitesPerDay: z.number().int().positive().default(50),
   }),
   deleteGraceDays: z.number().int().nonnegative(),
   // How long a site's old name is held for its owner after a rename (M2 R46).
