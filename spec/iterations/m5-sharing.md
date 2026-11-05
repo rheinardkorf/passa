@@ -66,7 +66,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 
 ### CLI
 
-- **R139** `passa share <site|folder> <email> [--path /plans/] [--expires 2026-12-31] [--yes]`, `passa unshare <site|folder> <email>`, and `passa access <site|folder>` (which now lists shares too).
+- **R139** The CLI does everything the MCP tools do (cli.md): `passa share <site|folder> <email> [--path /plans/] [--expires 2026-12-31] [--yes]` (asking in the terminal to confirm the email, as R129), `passa unshare <site|folder> <email>`, and `passa access <site|folder>`, which now lists shares too (`list_access`), takes `--shared` beside `--public` and `--private`, and says what a change made shared.
 
 ### Mail providers
 
@@ -139,4 +139,5 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 ## Done when
 
 - The demo works in production.
+- Every MCP tool, old and new, has a CLI command (R139).
 - Tested: sharing a private path (made `shared`) and a path already shared; `confirm_share` refused and read back; the invite (no title, no token, resend limit); a viewer's sign-in and what they see (shared paths, not private; lists without private titles; no cards on shared pages); unshare and expiry (refused on the next request, others unaffected); the share and invite limits; a viewer can't publish; SES and SMTP sending, and switching between them in config; `passa admin users` add, disable (MCP refused) and the last-admin guard.
