@@ -71,7 +71,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 ### Mail providers
 
 - **R140** A mail provider has `send(email)` and `kind`; its bounce and complaint handling, where it has any, records them through the same events, and notifies admins, as SES bounces do today, whichever provider sends. Config `email.provider` chooses `ses` (the default) or `smtp`.
-- **R141** The SMTP provider sends over TLS (port 465, or 587 with STARTTLS), with a host, port and user in config and the password in Secrets Manager (on AWS), never in config. It works with any SMTP service. Bounces are left to the service's own suppression, which the docs say.
+- **R141** The SMTP provider sends over TLS (port 465, or 587 with STARTTLS), with a host, port and user in config and the password in a Parameter Store `SecureString` (on AWS), never in config. It works with any SMTP service. Bounces are left to the service's own suppression, which the docs say. Some services only send from the account's own address or verified aliases (Gmail rewrites any other `From`), which the docs say too.
 - **R142** Every email has the same content whichever provider sends it, and none includes a site's title (R12, R15). Tracking stays off.
 
 ### Admin users
@@ -90,7 +90,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 - **Revocation is complete:** unshare and expiry bump the access version; site cookies last an hour at most anyway.
 - **Viewers never publish:** they have no publisher record, and MCP consent and tool calls still require an active publisher (R8, R24).
 - **A share is per site:** one site's `shared` tier says nothing about another's, and a cookie is for one site's host only.
-- **Mail credentials** stay out of config: in Secrets Manager on AWS.
+- **Mail credentials** stay out of config: in a Parameter Store `SecureString` on AWS, encrypted with KMS.
 - **The last admin can't be locked out** (R143).
 
 ## Design
@@ -114,7 +114,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 ## To check early
 
 - The edge function's size with tiers in cookies and rules, against CloudFront's 10 KB limit.
-- SMTP from Lambda: port 465 or 587 to a real service, Nodemailer's bundle size and cold start, and the password from Secrets Manager.
+- SMTP from Lambda: port 465 or 587 to a real service, Nodemailer's bundle size and cold start, and the password from Parameter Store.
 - A second SES-verified address for the demo while in sandbox.
 
 ## Starting values
