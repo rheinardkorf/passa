@@ -33,6 +33,7 @@ export async function authTestDeps(env: TestEnv, urls: Urls, extra: { mailer?: M
     tokenKeyId,
     sent,
     mailer: {
+      kind: 'memory',
       async send(email) {
         await mailer?.send(email);
         sent.push(email);

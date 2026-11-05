@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Draft |
+| **Status** | Approved 2026-11-05 (PR #44) |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: viewers other than the owner for the first time, a new tier at the edge, cookies that carry tiers, email to people who aren't publishers, and a mail provider chosen in config |
 | **Security-relevant** | Yes: decides who besides the owner can open private pages, sends email on a publisher's behalf, and adds publisher management |

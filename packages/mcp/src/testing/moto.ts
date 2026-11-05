@@ -15,7 +15,7 @@ export const testConfig: Config = {
   region: 'ap-southeast-2',
   accounts: { dev: '000000000000', prod: '111111111111' },
   admins: ['admin@example.com'],
-  email: { from: 'Passa <no-reply@example.com>' },
+  email: { from: 'Passa <no-reply@example.com>', provider: 'ses' },
   lifetimes: { accessToken: 3600, refreshToken: 2592000, siteCookie: 3600, sessionIdle: 604800, sessionMax: 2592000, magicLink: 900, uploadUrl: 900 },
   limits: { inlinePublish: 64 * 1024, site: 256 * 1024, file: 128 * 1024, files: 20 },
   rateLimits: { window: 3600, signinPerEmail: 3, signinPerIp: 100, authPerIp: 600, authFormsPerIp: 30, mcpPerSecond: 20, mcpBurst: 40 },

@@ -15,6 +15,7 @@ export const ENV = {
   configurationSet: 'PASSA_SES_CONFIGURATION_SET', // optional: reports bounces and complaints
   malwareScan: 'PASSA_MALWARE_SCAN', // "1" when GuardDuty scans the buckets
   cardsFunction: 'PASSA_CARDS_FUNCTION', // optional: draws the social cards a publish had no time for
+  mailFunction: 'PASSA_MAIL_FUNCTION', // optional: sends email in the background (M5 R145)
   // The admin function's (M4): the multi-tenant distribution custom domains
   // attach to, and its connection group.
   domainsDistribution: 'PASSA_DOMAINS_DISTRIBUTION',
@@ -31,6 +32,7 @@ export type RuntimeEnv = {
   configurationSet?: string;
   malwareScan: boolean;
   cardsFunction?: string;
+  mailFunction?: string;
 };
 
 // The config the CDK stacks wrote, already validated against the schema at
@@ -51,6 +53,7 @@ export function runtimeEnv(env: Record<string, string | undefined> = process.env
   };
   const configurationSet = env[ENV.configurationSet];
   const cardsFunction = env[ENV.cardsFunction];
+  const mailFunction = env[ENV.mailFunction];
   return {
     config: readConfig(get(ENV.config)),
     tables: { main: get(ENV.table), events: get(ENV.eventsTable) },
@@ -61,6 +64,7 @@ export function runtimeEnv(env: Record<string, string | undefined> = process.env
     ...(configurationSet ? { configurationSet } : {}),
     malwareScan: env[ENV.malwareScan] === '1',
     ...(cardsFunction ? { cardsFunction } : {}),
+    ...(mailFunction ? { mailFunction } : {}),
   };
 }
 

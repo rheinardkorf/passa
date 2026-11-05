@@ -1,3 +1,4 @@
+import { parseConfig } from '@passa/shared/config-file';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 import { addStage } from './stacks.ts';
@@ -47,11 +48,11 @@ describe('services stack', () => {
     services.hasResourceProperties('AWS::ApiGatewayV2::DomainName', { DomainName: 'mcp.example.com' });
   });
 
-  it('lets only auth. sign tokens and send email, only mcp. write site files and edge records, and the cards function write cards', () => {
+  it('lets only auth. sign tokens, only the mail function send email, only mcp. write site files and edge records, and the cards function write cards', () => {
     const policies = Object.entries(services.findResources('AWS::IAM::Policy')).map(([id, p]) => ({ id, text: JSON.stringify(p) }));
     const holders = (action: string) => policies.filter((p) => p.text.includes(action)).map((p) => p.id.replace(/ServiceRole.*/, ''));
     expect(holders('kms:Sign')).toEqual(['AuthFunction']);
-    expect(holders('ses:SendEmail')).toEqual(['AuthFunction']);
+    expect(holders('ses:SendEmail')).toEqual(['MailFunction']);
     expect(holders('cloudfront-keyvaluestore:PutKey')).toEqual(['McpFunction']);
     // Purge and malware findings can only take sites down.
     expect(holders('cloudfront-keyvaluestore:DeleteKey')).toEqual(['McpFunction', 'PurgeFunction', 'ScansFunction']);
@@ -61,9 +62,24 @@ describe('services stack', () => {
     expect(cards).not.toContain('s3:DeleteObject');
   });
 
-  it('lets auth. send only as Passa’s sender', () => {
+  it('lets the mail function send only as Passa’s sender', () => {
     const policies = JSON.stringify(services.findResources('AWS::IAM::Policy'));
     expect(policies).toContain('"ses:FromAddress":"no-reply@example.com"');
+  });
+
+  it('hands auth.’s mail to the mail function in the background, and reads an SMTP password only when config uses SMTP (M5 R141, R145)', () => {
+    const fns = services.findResources('AWS::Lambda::Function');
+    const auth = Object.entries(fns).find(([id]) => id.startsWith('AuthFunction'))?.[1];
+    expect(auth?.Properties.Environment.Variables.PASSA_MAIL_FUNCTION).toEqual({ Ref: expect.stringMatching(/^MailFunction/) });
+    const policies = Object.entries(services.findResources('AWS::IAM::Policy')).map(([id, p]) => ({ id, text: JSON.stringify(p) }));
+    expect(policies.find((p) => p.id.startsWith('AuthFunction'))?.text).toContain('lambda:InvokeFunction');
+    expect(JSON.stringify(policies)).not.toContain('ssm:GetParameter');
+    const smtp = Template.fromStack(addStage(testApp(), parseConfig({ ...exampleConfig(), email: { from: 'Passa <passa@example.com>', provider: 'smtp', smtp: { host: 'smtp.example.com', port: 465, user: 'passa@example.com', passwordParameter: '/passa/prod/smtp-password' } } }), 'prod').services);
+    const smtpPolicies = Object.entries(smtp.findResources('AWS::IAM::Policy')).map(([id, p]) => ({ id, text: JSON.stringify(p) }));
+    const reading = smtpPolicies.filter((p) => p.text.includes('ssm:GetParameter')).map((p) => p.id.replace(/ServiceRole.*/, ''));
+    expect(reading).toEqual(['MailFunction']);
+    expect(smtpPolicies.find((p) => p.id.startsWith('MailFunction'))?.text).toContain('parameter/passa/prod/smtp-password');
+    expect(smtpPolicies.find((p) => p.id.startsWith('MailFunction'))?.text).not.toContain('ses:SendEmail');
   });
 
   it('sends mail through a configuration set that reports bounces and complaints', () => {

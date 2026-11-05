@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/csp" },
     { "path": "packages/shared" },
+    { "path": "packages/mail" },
     { "path": "packages/admin" },
     { "path": "packages/render" },
     { "path": "packages/cli" },

@@ -5,6 +5,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { KMSClient } from '@aws-sdk/client-kms';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { LambdaClient } from '@aws-sdk/client-lambda';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
@@ -14,7 +15,7 @@ import type { Context, Handler } from 'aws-lambda';
 import express from 'express';
 import { createAuthApp } from './app.ts';
 import { KmsSigningKey } from './kms-key.ts';
-import { SesMailer } from './mailer.ts';
+import { LambdaMailer, SesMailer } from './mailer.ts';
 import { loadAuthSecrets } from './secrets.ts';
 
 const log = (message: string, data?: Record<string, unknown>) => console.log(JSON.stringify({ message, ...data })); // eslint-disable-line no-console
@@ -42,7 +43,9 @@ async function build(): Promise<Handler> {
     store,
     events: new Events(db, env.tables.events, env.config.retention.eventYears),
     config: env.config,
-    mailer: new SesMailer(new SESv2Client({}), env.config.email.from, env.configurationSet),
+    // Mail goes out in the background through the mail function (M5 R145), so
+    // sign-in answers as quickly whichever provider sends; SES directly otherwise.
+    mailer: env.mailFunction ? new LambdaMailer(new LambdaClient({}), env.mailFunction) : new SesMailer(new SESv2Client({}), env.config.email.from, env.configurationSet),
     siteKey: async () => siteKey,
     oidc: new OidcStore(db, env.tables.main),
     tokenSigner: await KmsSigningKey.load(kms, env.tokenKey),
