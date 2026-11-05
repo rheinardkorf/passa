@@ -3,11 +3,12 @@
 // covers is private. Rules are matched against the path the edge serves, after
 // index.html is added.
 
-export type Tier = 'private' | 'public';
+// shared (M5): the owner and everyone the site is shared with.
+export type Tier = 'private' | 'public' | 'shared';
 export type Rule = { path: string; tier: Tier };
 
-// The edge form: [prefix, tier] pairs, longest first. p: public, x: private.
-export type EdgeRule = [string, 'p' | 'x'];
+// The edge form: [prefix, tier] pairs, longest first. p: public, s: shared, x: private.
+export type EdgeRule = [string, 'p' | 's' | 'x'];
 
 export const MAX_RULES = 20;
 export const MAX_RULE_PATH = 200;
@@ -41,11 +42,11 @@ export function checkRules(rules: Rule[]): string[] {
   return problems;
 }
 
-// Only rules that can make something public are worth sending to the edge:
-// without a public rule, everything is private anyway.
+// Only rules that open something beyond the owner are worth sending to the
+// edge: without a public or shared rule, everything is private anyway.
 export function edgeRules(rules: Rule[]): EdgeRule[] {
-  if (!rules.some((r) => r.tier === 'public')) return [];
-  return [...rules].sort(byLength).map((r) => [r.path, r.tier === 'public' ? 'p' : 'x']);
+  if (!rules.some((r) => r.tier !== 'private')) return [];
+  return [...rules].sort(byLength).map((r) => [r.path, r.tier === 'public' ? 'p' : r.tier === 'shared' ? 's' : 'x']);
 }
 
 // The tier for a served path, as the edge decides it.
@@ -59,30 +60,30 @@ export function tierFor(rules: Rule[], servedPath: string): Tier {
 const under = (prefix: string) => `${prefix}\0`;
 const prefixes = (...sets: Rule[][]) => [...new Set(['/', ...sets.flat().map((r) => r.path)])].sort();
 
-export type Access = 'private' | 'public' | 'mixed';
+export type Access = 'private' | 'public' | 'shared' | 'mixed';
 
-// Which regions are public and which private.
-export function regions(rules: Rule[]): { public: string[]; private: string[] } {
-  const result = { public: [] as string[], private: [] as string[] };
+// Which regions are public, shared and private.
+export function regions(rules: Rule[]): { public: string[]; shared: string[]; private: string[] } {
+  const result = { public: [] as string[], shared: [] as string[], private: [] as string[] };
   for (const p of prefixes(rules)) result[tierFor(rules, under(p))].push(p);
   return result;
 }
 
+// One word for the site: its only tier, or mixed.
 export function accessOf(rules: Rule[]): Access {
-  const { public: open, private: closed } = regions(rules);
-  return !open.length ? 'private' : closed.length ? 'mixed' : 'public';
+  const r = regions(rules);
+  const tiers = (['public', 'shared', 'private'] as const).filter((t) => r[t].length);
+  return tiers.length === 1 ? tiers[0] ?? 'private' : 'mixed';
 }
 
 // What a change of rules makes public or private. Checking regions, not
 // rules, catches every way to expose a path, such as removing a private rule
 // inside a public folder.
-export function accessChanges(before: Rule[], after: Rule[]): { madePublic: string[]; madePrivate: string[] } {
-  const madePublic: string[] = [];
-  const madePrivate: string[] = [];
+export function accessChanges(before: Rule[], after: Rule[]): { madePublic: string[]; madeShared: string[]; madePrivate: string[] } {
+  const made = { public: [] as string[], shared: [] as string[], private: [] as string[] };
   for (const p of prefixes(before, after)) {
-    const was = tierFor(before, under(p));
     const now = tierFor(after, under(p));
-    if (was !== now) (now === 'public' ? madePublic : madePrivate).push(p);
+    if (tierFor(before, under(p)) !== now) made[now].push(p);
   }
-  return { madePublic, madePrivate };
+  return { madePublic: made.public, madeShared: made.shared, madePrivate: made.private };
 }

@@ -119,6 +119,23 @@ export class NameTaken extends Error {}
 // The domain is already attached to a site (M4 R114).
 export class DomainTaken extends Error {}
 
+// A site is shared with as many emails as it may be (M5 R134).
+export class TooManyShares extends Error {}
+
+// A site shared with an email (M5 R128): it gives that email the site's tier
+// (shared), until expiresAt if set. invitedAt: when the last invite went (R130).
+export type Grant = {
+  siteId: string;
+  email: string;
+  tier: 'shared';
+  source: 'share';
+  createdAt: string;
+  expiresAt?: string;
+  invitedAt?: string;
+};
+
+export const grantIsLive = (grant: Grant, now: Date) => !grant.expiresAt || grant.expiresAt > now.toISOString();
+
 const userKey = (id: string) => ({ pk: `USER#${id}`, sk: 'PROFILE' });
 const siteKey = (id: string) => ({ pk: `SITE#${id}`, sk: 'META' });
 const versionKey = (siteId: string, id: string) => ({ pk: `SITE#${siteId}`, sk: `VER#${id}` });
@@ -127,6 +144,8 @@ const purgeKey = (siteId: string) => ({ pk: `PURGE#${siteId}`, sk: 'META' });
 const nameKey = (name: string) => ({ pk: `NAME#${name}`, sk: 'META' });
 // Every custom domain is also listed under one index key, for admins (M4 R116).
 const domainKey = (domain: string) => ({ pk: `DOMAIN#${domain}`, sk: 'META' });
+// A share sits with its site, so the site's shares are one query (M5 R132).
+const grantKey = (siteId: string, email: string) => ({ pk: `SITE#${siteId}`, sk: `GRANT#${email}` });
 // One per name a site has claimed, so a purge can find its current and held names.
 const siteNameKey = (siteId: string, name: string) => ({ pk: `SITE#${siteId}`, sk: `NAME#${name}` });
 const tokenKey = (hash: string) => ({ pk: `TOKEN#${hash}`, sk: 'META' });
@@ -574,6 +593,53 @@ export class Store {
     } catch (err) {
       if (isConditionFailure(err)) throw new NotFoundOrConflict(siteId, { cause: err });
       throw err;
+    }
+  }
+
+  // Shares a site with an email, or updates the share (M5 R128, R133). Refused
+  // when the site already has max shares and this email isn't one of them.
+  async putGrant(grant: Grant, max: number): Promise<void> {
+    if (!(await this.getGrant(grant.siteId, grant.email)) && (await this.listGrants(grant.siteId)).length >= max) throw new TooManyShares(grant.siteId);
+    await this.#db.send(new PutCommand({
+      TableName: this.#table,
+      Item: { ...grantKey(grant.siteId, grant.email), ...grant, ...(grant.expiresAt ? { ttl: epochSeconds(grant.expiresAt) } : {}) },
+    }));
+  }
+
+  async getGrant(siteId: string, email: string): Promise<Grant | undefined> {
+    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: grantKey(siteId, email), ConsistentRead: true }));
+    return entity<Grant>(Item);
+  }
+
+  async listGrants(siteId: string): Promise<Grant[]> {
+    const { Items } = await this.#db.send(new QueryCommand({
+      TableName: this.#table,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
+      ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': 'GRANT#' },
+      ConsistentRead: true,
+    }));
+    return (Items ?? []).map((item) => strip<Grant>(item));
+  }
+
+  // Removes a share; true when there was one (M5 R131).
+  async deleteGrant(siteId: string, email: string): Promise<boolean> {
+    const { Attributes } = await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: grantKey(siteId, email), ReturnValues: 'ALL_OLD' }));
+    return !!Attributes;
+  }
+
+  // Who may view the site has changed (an unshare, an expiry): every cookie
+  // for it then re-checks through auth. (M5 R131).
+  async bumpAccessVersion(siteId: string, now: string): Promise<void> {
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: siteKey(siteId),
+        UpdateExpression: 'ADD accessVersion :one SET updatedAt = :now',
+        ConditionExpression: 'attribute_exists(pk)',
+        ExpressionAttributeValues: { ':one': 1, ':now': now },
+      }));
+    } catch (err) {
+      if (!isConditionFailure(err)) throw err;
     }
   }
 

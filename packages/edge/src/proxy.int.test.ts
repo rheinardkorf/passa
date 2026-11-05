@@ -53,7 +53,7 @@ async function call(url: string, init: { body?: unknown; form?: Record<string, s
 
 // Follows the sign-in handoff the way a browser would, and returns the cookie.
 async function signIn(siteId: string, accessVersion = 1): Promise<string> {
-  const url = new URL(handoffUrl({ key, siteId, accessVersion, origin: `http://${siteId}.localhost:${port}`, path: '/', cookieLifetime: 3600 }));
+  const url = new URL(handoffUrl({ key, tiers: 'o', siteId, accessVersion, origin: `http://${siteId}.localhost:${port}`, path: '/', cookieLifetime: 3600 }));
   const r = await get(siteId, url.pathname + url.search);
   expect(r.status).toBe(302);
   const set = (r.headers['set-cookie'] as string[])[0] ?? '';

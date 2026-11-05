@@ -71,8 +71,8 @@ function sign(crypto, key, purpose, fields) {
 // Parses "<kid>.<site-id>.<access-version>.<expiry>.<signature>".
 function parseSigned(value) {
   const parts = typeof value === 'string' ? value.split('.') : [];
-  if (parts.length !== 5 || !/^[A-Za-z0-9_-]{1,32}$/.test(parts[0]) || !/^\d{1,12}$/.test(parts[2]) || !/^\d{1,12}$/.test(parts[3])) return null;
-  return { kid: parts[0], site: parts[1], v: Number(parts[2]), exp: Number(parts[3]), sig: parts[4] };
+  if (parts.length !== 6 || !/^[A-Za-z0-9_-]{1,32}$/.test(parts[0]) || !/^\d{1,12}$/.test(parts[2]) || !/^\d{1,12}$/.test(parts[3]) || !/^[os]{1,4}$/.test(parts[4])) return null;
+  return { kid: parts[0], site: parts[1], v: Number(parts[2]), exp: Number(parts[3]), tiers: parts[4], sig: parts[5] };
 }
 
 async function readJson(kvs, key) {
@@ -114,13 +114,18 @@ function indexPath(path) {
 
 // rules: the record's [prefix, tier] pairs, longest first, so the first match
 // decides; "p" is public. Anything unmatched, or malformed, is private.
-function isPublic(rules, served) {
-  if (!Array.isArray(rules)) return false;
+function tierOf(rules, served) {
+  if (!Array.isArray(rules)) return 'x';
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i];
-    if (Array.isArray(rule) && typeof rule[0] === 'string' && served.indexOf(rule[0]) === 0) return rule[1] === 'p';
+    if (Array.isArray(rule) && typeof rule[0] === 'string' && served.indexOf(rule[0]) === 0) return rule[1] === 'p' || rule[1] === 's' ? rule[1] : 'x';
   }
-  return false;
+  return 'x';
+}
+
+// Whether a cookie's tiers open a path's tier: the owner opens everything.
+function opens(tiers, tier) {
+  return tiers.indexOf('o') >= 0 || (tier === 's' && tiers.indexOf('s') >= 0);
 }
 
 // The tier header tells the viewer-response function (response.js) whether
@@ -171,11 +176,11 @@ async function handle(event, options) {
     // a signed token then waits for it, which grants nothing on its own.
     const signed = token && key && (siteId === null || token.site === siteId) && token.exp > now
       && life > 0 && life <= 86400 && to.charAt(0) === '/' && PATH.test(to)
-      && sameHex(token.sig, sign(options.crypto, key, 'handoff', [token.kid, token.site, token.v, token.exp, life, to]));
+      && sameHex(token.sig, sign(options.crypto, key, 'handoff', [token.kid, token.site, token.v, token.exp, token.tiers, life, to]));
     if (!signed) return notFound();
     if (!siteId || !record || token.v > record.v) return notReady();
     if (token.v !== record.v) return notFound();
-    const fields = [token.kid, siteId, record.v, now + life];
+    const fields = [token.kid, siteId, record.v, now + life, token.tiers];
     const cookies = {};
     cookies[COOKIE] = {
       value: fields.join('.') + '.' + sign(options.crypto, key, 'cookie', fields),
@@ -197,12 +202,13 @@ async function handle(event, options) {
   // Public paths need no cookie (M2 R39). Rules match the path as served, so
   // /docs and /docs/ are both covered by /docs/.
   const served = indexPath(path);
-  if (record && isPublic(record.r, served)) return serve(request, siteId, record.cur, served, true);
+  const tier = record ? tierOf(record.r, served) : 'x';
+  if (tier === 'p') return serve(request, siteId, record.cur, served, true);
 
   const cookie = parseSigned(request.cookies[COOKIE] ? request.cookies[COOKIE].value : null);
   const key = cookie ? await readKey(options.kvs, cookie.kid) : null;
   const allowed = cookie && key && record && cookie.site === siteId && cookie.v === record.v && cookie.exp > now
-    && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', [cookie.kid, cookie.site, cookie.v, cookie.exp]));
+    && opens(cookie.tiers, tier) && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', [cookie.kid, cookie.site, cookie.v, cookie.exp, cookie.tiers]));
 
   // A missing site, or a name no site has, looks exactly like a private one, so
   // the redirect reveals nothing (R12). auth. resolves names itself.
