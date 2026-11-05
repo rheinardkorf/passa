@@ -9,8 +9,9 @@ export async function bootstrapAdmins(store: Store, emails: string[], now: Date 
     const email = raw.trim().toLowerCase();
     const existing = await store.findUserByEmail(email);
     if (existing) {
+      // Written every time, which also keeps them in the users index (gsi2).
       const roles = [...new Set([...existing.roles, 'admin', 'publisher'] as const)];
-      if (roles.length !== existing.roles.length) await store.putUser({ ...existing, roles });
+      await store.putUser({ ...existing, roles });
       users.push({ ...existing, roles });
       continue;
     }

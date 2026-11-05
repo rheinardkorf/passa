@@ -1,7 +1,8 @@
-// passa admin (M4 R113–R117): commands over the admin's AWS credentials, never
-// MCP. They invoke the deployment's admin function, passa-<stage>-admin, and
-// repeat a step until the domain is live or gone, showing progress. The
-// function decides everything; this only asks and reports.
+// passa admin (M4 R113–R117, M5 R143): commands over the admin's AWS
+// credentials, never MCP. They invoke the deployment's admin function,
+// passa-<stage>-admin: for domains, repeating a step until the domain is live
+// or gone, showing progress; for users, once. The function decides everything;
+// this only asks and reports.
 
 export type DnsRecord = { name: string; type: string; value: string; purpose: 'pointer' | 'validation'; alias?: boolean };
 export type DomainReport = {
@@ -169,4 +170,17 @@ export function formatStatus(r: DomainReport): string[] {
   }
   if (r.problem) lines.push(`  problem: ${r.problem}`);
   return lines;
+}
+
+export type UserReport = { email: string; roles: string[]; status: 'active' | 'disabled'; created_at: string; in_config: boolean };
+
+// Publishers and admins first, then people sites are shared with (no roles).
+export function formatUsers(users: UserReport[]): string[] {
+  if (!users.length) return ['No users yet.'];
+  const role = (u: UserReport) => (u.roles.includes('admin') ? 'admin' : u.roles.includes('publisher') ? 'publisher' : 'viewer') + (u.in_config ? ' (config)' : '');
+  const sorted = [...users].sort((a, b) => Number(!a.roles.length) - Number(!b.roles.length) || a.email.localeCompare(b.email));
+  const rows = sorted.map((u) => [u.email, role(u), u.status, u.created_at.slice(0, 10)]);
+  const widths = [0, 1, 2].map((i) => Math.max(...rows.map((r) => r[i]?.length ?? 0), ['EMAIL', 'ROLE', 'STATUS'][i]?.length ?? 0));
+  const line = (r: string[]) => r.map((c, i) => (i < 3 ? c.padEnd(widths[i] ?? 0) : c)).join('  ');
+  return [line(['EMAIL', 'ROLE', 'STATUS', 'SINCE']), ...rows.map(line)];
 }

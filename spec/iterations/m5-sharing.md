@@ -101,7 +101,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 - **Edge:** edge rules gain `s` beside `p` (public) and `x` (private). A path's tier comes from its rule as now; a `shared` path is served when the cookie has `s` or `o`. The function stays within CloudFront's 10 KB limit (checked early).
 - **Sign-in:** `auth.` reads the site's grant for the email, and sends a link only when the email is the site's owner or has a live share. Someone with a share and no user record gets one with no roles.
 - **Mail:** `packages/shared` gets the `MailProvider` interface; `SesMailer` moves behind it; `SmtpMailer` uses Nodemailer (MIT-0, no dependencies). A small mail function sends; `auth.` and the MCP server hand it the message asynchronously (R145), as they hand cards to the cards function.
-- **Admin users:** new admin-function actions (`users.add`, `users.list`, `users.disable`, `users.enable`) and `passa admin users`.
+- **Admin users:** new admin-function actions (`users.add`, `users.list`, `users.disable`, `users.enable`) and `passa admin users`. Users are listed through a second index, `gsi2`, overloaded and sparse: only items that set `gsi2pk` are in it, and every user record sets `USERS`, sorted by email. Passa never scans the table to list things. Users written before the index are added by `passa admin users reindex`, a one-off migration (and the one scan, to be removed once every deployment has run it); admins in config are rewritten whenever `auth.` starts.
 
 ## Decisions
 

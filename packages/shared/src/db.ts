@@ -8,6 +8,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
@@ -154,7 +155,7 @@ const rateKey = (name: string, windowStart: number) => ({ pk: `RATE#${name}`, sk
 
 const epochSeconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 
-const KEY_ATTRIBUTES = new Set(['pk', 'sk', 'gsi1pk', 'gsi1sk', 'ttl']);
+const KEY_ATTRIBUTES = new Set(['pk', 'sk', 'gsi1pk', 'gsi1sk', 'gsi2pk', 'gsi2sk', 'ttl']);
 
 // Strips the key attributes so callers only see the entity.
 function strip<T>(item: Record<string, unknown>): T {
@@ -197,8 +198,49 @@ export class Store {
   async putUser(user: User): Promise<void> {
     await this.#db.send(new PutCommand({
       TableName: this.#table,
-      Item: { ...userKey(user.id), gsi1pk: `EMAIL#${user.email.toLowerCase()}`, gsi1sk: 'USER', ...user },
+      // gsi1 finds a user by email; gsi2 lists them all (USERS, by email).
+      Item: { ...userKey(user.id), gsi1pk: `EMAIL#${user.email.toLowerCase()}`, gsi1sk: 'USER', gsi2pk: 'USERS', gsi2sk: `EMAIL#${user.email.toLowerCase()}`, ...user },
     }));
+  }
+
+  // Every user, by email, for passa admin users list (M5 R143).
+  async listUsers(): Promise<User[]> {
+    const users: User[] = [];
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const page = await this.#db.send(new QueryCommand({
+        TableName: this.#table,
+        IndexName: 'gsi2',
+        KeyConditionExpression: 'gsi2pk = :pk AND begins_with(gsi2sk, :sk)',
+        ExpressionAttributeValues: { ':pk': 'USERS', ':sk': 'EMAIL#' },
+        ExclusiveStartKey,
+      }));
+      for (const item of page.Items ?? []) users.push(strip<User>(item));
+      ExclusiveStartKey = page.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return users;
+  }
+
+  // Users written before gsi2 existed aren't in it until written again. A
+  // one-off migration (passa admin users reindex), and the only scan Passa
+  // runs: remove it once every deployment has run it.
+  async reindexUsers(): Promise<number> {
+    let count = 0;
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const page = await this.#db.send(new ScanCommand({
+        TableName: this.#table,
+        FilterExpression: 'begins_with(pk, :pk) AND sk = :sk AND attribute_not_exists(gsi2pk)',
+        ExpressionAttributeValues: { ':pk': 'USER#', ':sk': 'PROFILE' },
+        ExclusiveStartKey,
+      }));
+      for (const item of page.Items ?? []) {
+        await this.putUser(strip<User>(item));
+        count++;
+      }
+      ExclusiveStartKey = page.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return count;
   }
 
   async getSite(id: string): Promise<Site | undefined> {

@@ -11,7 +11,7 @@ describe('data stack', () => {
     synth('prod').hasResourceProperties('AWS::DynamoDB::GlobalTable', {
       TableName: 'passa-prod',
       KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }, { AttributeName: 'sk', KeyType: 'RANGE' }],
-      GlobalSecondaryIndexes: [Match.objectLike({ IndexName: 'gsi1' })],
+      GlobalSecondaryIndexes: [Match.objectLike({ IndexName: 'gsi1' }), Match.objectLike({ IndexName: 'gsi2' })],
       TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
       StreamSpecification: { StreamViewType: 'OLD_IMAGE' },
       Replicas: [Match.objectLike({ PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }, DeletionProtectionEnabled: true })],

@@ -13,7 +13,7 @@ import { type Ask, deleteSite, listAccess, parseRules, publishFolder, rollback, 
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
 import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
-import { AdminRefused, addDomain, adminFunctionName, type DomainList, type DomainReport, formatList, formatStatus, lambdaInvoker, removeDomain } from './admin.ts';
+import { AdminRefused, addDomain, adminFunctionName, type DomainList, type DomainReport, formatList, formatStatus, formatUsers, lambdaInvoker, removeDomain, type UserReport } from './admin.ts';
 
 const USAGE = `passa: build, preview, check and publish a site.
 
@@ -59,6 +59,12 @@ Admin, with the deployment's AWS credentials (AWS_PROFILE, aws sso login), never
   passa admin domain list              every custom domain, its site, role and tenant
   passa admin domain status <domain>   a domain's DNS records and state
   passa admin domain remove <domain>   detach it; the site moves to its next address first
+  passa admin users list               every user: admins, publishers, and viewers (people sites are shared with)
+  passa admin users add <email> [--admin]   let an email publish (and run Passa, with --admin)
+  passa admin users disable <email>    stop them, from their next call; admins in config, and the last
+                                       active admin, can't be disabled
+  passa admin users enable <email>     let them back in
+  passa admin users reindex            once, after upgrading to M5: lists users created before it
   Admin commands take --stage <dev|prod> (required), --region and --json.
 
 Options for render, serve and check:
@@ -461,20 +467,48 @@ async function rollbackCommand(args: string[]) {
   return 0;
 }
 
-// passa admin domain …: invokes passa-<stage>-admin with AWS credentials (M4).
+// passa admin domain|users …: invokes passa-<stage>-admin with AWS credentials (M4, M5).
 async function adminCommand(args: string[]) {
   const [group, action, ...rest] = args;
-  if (group !== 'domain' || !action || !['add', 'list', 'status', 'remove'].includes(action)) {
-    throw new Error('Usage: passa admin domain add|list|status|remove … --stage <stage> (see passa --help)');
-  }
+  const usage = 'Usage: passa admin domain add|list|status|remove … or passa admin users add|list|disable|enable … --stage <stage> (see passa --help)';
+  const actions: Record<string, string[]> = { domain: ['add', 'list', 'status', 'remove'], users: ['add', 'list', 'disable', 'enable', 'reindex'] };
+  if (!group || !action || !actions[group]?.includes(action)) throw new Error(usage);
   const { values, positionals } = parseArgs({
     args: rest, allowPositionals: true,
-    options: { stage: { type: 'string' }, region: { type: 'string' }, json: { type: 'boolean' }, 'fill-tenant': { type: 'boolean' }, 'new-tenant': { type: 'boolean' }, primary: { type: 'boolean' } },
+    options: {
+      stage: { type: 'string' }, region: { type: 'string' }, json: { type: 'boolean' },
+      'fill-tenant': { type: 'boolean' }, 'new-tenant': { type: 'boolean' }, primary: { type: 'boolean' }, admin: { type: 'boolean' },
+    },
   });
   if (!values.stage) throw new Error('Which deployment? Add --stage, such as --stage prod.');
   const invoke = await lambdaInvoker(adminFunctionName(values.stage), values.region);
   const { userInfo, hostname } = await import('node:os');
   const actor = `${userInfo().username}@${hostname()}`;
+  if (group === 'users') {
+    if (action === 'list') {
+      const users = await invoke({ action: 'users.list' }) as UserReport[];
+      if (values.json) return printJson(users), 0;
+      for (const line of formatUsers(users)) out(line);
+      return 0;
+    }
+    if (action === 'reindex') {
+      const r = await invoke({ action: 'users.reindex' }) as { reindexed: number };
+      if (values.json) return printJson(r), 0;
+      out(r.reindexed ? `Added ${r.reindexed} user${r.reindexed === 1 ? '' : 's'} to the users index.` : 'Every user is in the users index already.');
+      return 0;
+    }
+    const email = positionals[0];
+    if (!email) throw new Error(`passa admin users ${action} needs an email.`);
+    const user = await invoke({ action: `users.${action}`, email, actor, ...(action === 'add' && values.admin ? { admin: true } : {}) }) as UserReport;
+    if (values.json) return printJson(user), 0;
+    const said: Record<string, string> = {
+      add: `${user.email} is ${user.roles.includes('admin') ? 'an admin' : 'a publisher'} now: they can sign in to MCP and the CLI with that email.`,
+      disable: `${user.email} is disabled: refused from their next MCP call or sign-in.`,
+      enable: `${user.email} is active again.`,
+    };
+    out(said[action] ?? '');
+    return 0;
+  }
   const progress = { out: values.json ? () => undefined : out };
   if (action === 'list') {
     const list = await invoke({ action: 'domain.list' }) as DomainList;
