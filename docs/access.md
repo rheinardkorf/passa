@@ -1,6 +1,6 @@
 ---
 title: Access
-description: Private by default; rules make folders or whole sites public.
+description: Private by default; rules make folders or whole sites public, or share them with people you name.
 access: public
 ---
 
@@ -15,6 +15,7 @@ A site's access is a list of rules. Each rule is a path — `/` for the whole si
 | Tier | Who can open it |
 | --- | --- |
 | `public` | Anyone with the link, without signing in |
+| `shared` | You, and the people the site is shared with, after signing in (see [[Sharing]]) |
 | `private` | Only you |
 
 The longest matching rule decides, and anything no rule covers is private. So:
@@ -30,11 +31,11 @@ Changes take effect within seconds, and everywhere within about a minute.
 
 ## Making things public needs a yes
 
-Passa refuses any change that would make something public unless the request says the person agreed (`confirm_public`). An agent has to check with you first; the `passa` command asks you in the terminal, or takes `--confirm-public` in scripts.
+Passa refuses any change that would make something public unless the request says the person agreed (`confirm_public`). An agent has to check with you first; the `passa` command asks you in the terminal, or takes `--confirm-public` in scripts. Changes between private and shared need no confirmation, but sharing a site with someone does: see [[Sharing]].
 
 ## Markdown sites and private pages
 
-On a Markdown site, the rules decide which pages are public, and the pages are rendered again whenever the rules change. Lists of pages, tag pages and the feed only ever name pages the visitor can see, so a public page never leaks the title of a private one.
+On a Markdown site, the rules decide which pages are public, and the pages are rendered again whenever the rules change. Lists of pages, tag pages and the feed only ever name pages the visitor can see, so a public page never leaks the title of a private one, and a shared page shows only shared and public pages. The feed lists public pages only.
 
 Front matter can't make a page public. A page marked `access: private` that a rule would make public is refused until you fix one or the other, or confirm it.
 
@@ -52,4 +53,4 @@ Names are first come, first served. When a name changes or is removed, the old n
 
 ## Social cards
 
-Public pages get a social card: the image shown when a link is shared. Private pages don't, since the services that fetch previews can't sign in. See [[Social cards]].
+Public pages get a social card: the image shown when a link is shared. Private and shared pages don't, since the services that fetch previews can't sign in. See [[Social cards]].

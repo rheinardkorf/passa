@@ -16,7 +16,7 @@ Passa is self-hosted: it runs in your own AWS account, and there's no hosted ser
 | Sign-in and OAuth (`auth.`) | Lambda behind CloudFront, with WAF |
 | MCP server (`mcp.`) | Lambda behind API Gateway, with throttling |
 | Data | DynamoDB |
-| Email | SES, for magic links |
+| Email | SES, or any SMTP service, for sign-in links and invites (see [[Email]]) |
 | Malware scanning | GuardDuty, for uploads |
 
 It's all defined with CDK, in stacks named `passa-<stage>-<part>` and tagged `project=passa`, so the account can be shared with other projects. A dev stage and a production stage can live in separate accounts (recommended) or one.
@@ -49,7 +49,7 @@ You need Node.js 24, pnpm and the AWS CLI, signed in to your accounts.
 
    Set those name servers at your registrar, or add NS records for them in the parent zone.
 
-4. **Ask AWS for SES production access** in that account and region. Until it's granted, SES only sends to addresses you've verified, which is enough to get going: verify your own.
+4. **Ask AWS for SES production access** in that account and region. Until it's granted, SES only sends to addresses you've verified, which is enough to get going: verify your own. Or send through an SMTP service instead: see [[Email]].
 
 5. **Deploy everything:**
 
@@ -59,7 +59,7 @@ You need Node.js 24, pnpm and the AWS CLI, signed in to your accounts.
 
    Each admin gets an email to confirm alarm notifications.
 
-6. **Connect an agent** to `https://mcp.<domain>/mcp`, and sign in with an admin email. See [[Get started]].
+6. **Connect an agent** to `https://mcp.<domain>/mcp`, and sign in with an admin email. See [[Get started]]. To let others publish, see [[Publishers and admins]].
 
 ## Cost
 

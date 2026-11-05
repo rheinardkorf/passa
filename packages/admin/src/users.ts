@@ -38,7 +38,15 @@ export class AdminUsers {
   // Everyone with a user record: publishers, admins, and people sites are
   // shared with (no roles), who can only view.
   async list(): Promise<UserReport[]> {
-    return (await this.#d.store.listUsers()).map((u) => this.#report(u));
+    try {
+      return (await this.#d.store.listUsers()).map((u) => this.#report(u));
+    } catch (err) {
+      // Right after an upgrade, DynamoDB is still building the users index.
+      if (/backfilling global secondary index/i.test(String((err as Error).message))) {
+        throw new UserRefused('The users index is still being built after the upgrade. Try again in a few minutes.', { cause: err });
+      }
+      throw err;
+    }
   }
 
   // Makes an email a publisher (and an admin with admin: true). Someone a

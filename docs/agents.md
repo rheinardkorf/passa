@@ -27,6 +27,8 @@ Connected apps are listed at `auth.` on your deployment's domain, where you can 
 | `get_files` | The contents of a site's files |
 | `find_sites` | Lists your sites, optionally matching a title or name |
 | `set_access` | Replaces a site's access rules |
+| `share`, `unshare` | Shares a site with an email, sending an invite, or stops sharing it |
+| `list_access` | A site's rules, and who it's shared with |
 | `set_name` | Gives a site a name, which becomes its address |
 | `rollback` | Makes an earlier version current again |
 | `delete` | Deletes a site |
@@ -39,6 +41,7 @@ Each tool's description tells the agent what it needs to know: limits, how Markd
 The server enforces these, whatever the agent does:
 
 - Making anything public needs `confirm_public`, which the agent should only send after you agree.
+- Sharing needs `confirm_share`, after the agent reads the email back to you; invites are limited per site and per day.
 - Uploads are scanned for malware before they're used.
 - File types, sizes and paths are checked, and a site's limits apply (by default 1,000 files, 25 MB per file and 100 MB per site).
 - Every change is recorded with who made it.

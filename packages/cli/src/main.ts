@@ -321,9 +321,10 @@ async function pullCommand(args: string[]) {
 
 // Asks on the terminal; without one, a question can't be answered, so the
 // command stops (scripts pass --yes or --confirm-public).
-const askTerminal = (yes: boolean): Ask => async (question) => {
+// skip: the options that answer yes in scripts.
+const askTerminal = (yes: boolean, skip = '--yes (or --confirm-public)'): Ask => async (question) => {
   if (yes) return true;
-  if (!process.stdin.isTTY) throw new Error(`${question}\nNo terminal to answer on: pass --yes (or --confirm-public) to go ahead.`);
+  if (!process.stdin.isTTY) throw new Error(`${question}\nNo terminal to answer on: pass ${skip} to go ahead.`);
   const { createInterface } = await import('node:readline/promises');
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -414,7 +415,7 @@ async function shareCommand(args: string[]) {
   const email = positionals[1];
   if (!email) throw new Error('passa share <site|folder> <email> [--path /plans/] [--expires 2026-12-31] [--yes]');
   const target = await targetOf(positionals[0], values.server);
-  const r = await share(target, email, { ask: askTerminal(values.yes === true), ...(values.path ? { path: values.path } : {}), ...(values.expires ? { expires: values.expires } : {}) });
+  const r = await share(target, email, { ask: askTerminal(values.yes === true, '--yes'), ...(values.path ? { path: values.path } : {}), ...(values.expires ? { expires: values.expires } : {}) });
   if (values.json) return printJson(r), 0;
   const shared = r.share as { email: string; expires_at?: string };
   out(`Shared ${target.siteId} with ${shared.email}${shared.expires_at ? ` until ${shared.expires_at.slice(0, 16).replace('T', ' ')} UTC` : ''}.`);

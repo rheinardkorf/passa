@@ -62,7 +62,9 @@ There's no default server: you always name the deployment you sign in to.
 | `passa publish <folder> --title <title>` | Publishes a folder as a new private site, and links the folder to it |
 | `passa sync [folder]` | Makes the folder's site exactly the folder; asks before removing files |
 | `passa pull <site> [folder]` | Writes a site's sources into a folder, linked to the site |
-| `passa access <site>` | Shows who can open what; change it with `--public`, `--private` or `--rule /docs/=public` |
+| `passa access <site>` | Shows who can open what, and who it's shared with; change it with `--public`, `--shared`, `--private` or `--rule /docs/=public` |
+| `passa share <site> <email>` | Shares the site with an email, and sends them an invite; `--path /plans/` makes that folder shared if it's private, `--expires 2026-12-31` ends it then. See [[Sharing]] |
+| `passa unshare <site> <email>` | Stops sharing the site with an email, from their next request |
 | `passa name <site> <name>` | Gives a site a name; `--none` removes it |
 | `passa rollback <site> [version]` | Restores a version; by default, the one before the current one |
 | `passa delete <site> [--now]` | Deletes a site, after a grace period or at once |
@@ -71,7 +73,7 @@ There's no default server: you always name the deployment you sign in to.
 
 `sync` only uploads files that changed, and draws the social cards for the site's public pages first, so Passa needn't. `--base` refuses the sync if the site has changed since the folder was last synced or pulled; `--no-cards` skips drawing cards.
 
-Anything that would make something public asks first, as do removing files and deleting. In scripts, `--confirm-public` and `--yes` answer for you. `--json` prints the server's reply as it is.
+Anything that would make something public asks first, as do sharing, removing files and deleting. In scripts, `--confirm-public` and `--yes` answer for you. `--json` prints the server's reply as it is.
 
 ## More than one deployment
 
@@ -86,4 +88,7 @@ So a folder published to one deployment always syncs back to it, whatever else i
 
 ## Admin commands
 
-Admins of a deployment manage custom domains with `passa admin domain`, using the deployment's AWS credentials rather than a Passa sign-in: `add`, `list`, `status` and `remove`, each with `--stage`. See [[Custom domains]].
+Admins of a deployment use its AWS credentials rather than a Passa sign-in, and every command takes `--stage`:
+
+- `passa admin domain add | list | status | remove` manage custom domains. See [[Custom domains]].
+- `passa admin users add | list | disable | enable` manage who can publish. See [[Publishers and admins]].
