@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { accessToken, LoginNeeded, login, logout, readCredentials } from './auth.ts';
 import { request } from './http.ts';
 import { callTool } from './mcp.ts';
-import { deleteSite, publishFolder, rollback, setAccess, setName, syncFolder, waitUntilServed } from './deploy.ts';
+import { deleteSite, listAccess, parseRules, publishFolder, rollback, setAccess, setName, share, syncFolder, unshare, waitUntilServed } from './deploy.ts';
 import { pull, readLink, resolveTarget } from './sites.ts';
 
 let stack: Stack;
@@ -222,6 +222,28 @@ describe('changing sites (R106–R110)', () => {
     const { dir } = await signedIn();
     const published = await publishFolder(server, folderWith({ 'index.md': '# Home' }), 'Private', { dir, ask: answering(true).ask });
     expect(await waitUntilServed(published.url, published.current_version, { waitMs: 50 })).toBe('unknown');
+  });
+
+  it('shares only once the email is confirmed, lists the share, and unshares (M5 R139)', async () => {
+    const { dir } = await signedIn();
+    const folder = folderWith({ 'index.html': '<p>home</p>', 'plans/index.html': '<p>plans</p>' });
+    await publishFolder(server, folder, 'Sharing', { dir, ask: answering(true).ask });
+    const target = await resolveTarget(folder, { dir });
+
+    const no = answering(false);
+    await expect(share(target, 'Sam@Example.com', { dir, ask: no.ask, path: '/plans/' })).rejects.toThrow('Nothing was shared.');
+    expect(no.asked[0]).toContain('with sam@example.com?');
+    expect((await listAccess(target, { dir })).shares).toEqual([]);
+
+    const r = await share(target, 'sam@example.com', { dir, ask: answering(true).ask, path: '/plans/', expires: '2027-01-31' });
+    expect(r).toMatchObject({ made_shared: ['/plans/'], invite_sent: true, share: { email: 'sam@example.com', expires_at: '2027-01-31T23:59:59.000Z' } });
+    expect(stack.sent.at(-1)?.to).toBe('sam@example.com');
+    const listed = await listAccess(target, { dir });
+    expect(listed).toMatchObject({ access: 'mixed', rules: [{ path: '/plans/', tier: 'shared' }], shares: [{ email: 'sam@example.com' }] });
+
+    expect(await unshare(target, 'sam@example.com', { dir })).toMatchObject({ unshared: true });
+    expect((await listAccess(target, { dir })).shares).toEqual([]);
+    expect(await setAccess(target, parseRules({ shared: true }) ?? [], { dir, ask: answering(false).ask })).toMatchObject({ access: 'shared' });
   });
 
   it('names, rolls back and deletes', async () => {

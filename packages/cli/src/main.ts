@@ -9,7 +9,7 @@ import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
 import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl, useServer } from './auth.ts';
 import { callTool, ToolRefused } from './mcp.ts';
-import { type Ask, deleteSite, parseRules, publishFolder, rollback, setAccess, setName, syncFolder, waitUntilServed } from './deploy.ts';
+import { type Ask, deleteSite, listAccess, parseRules, publishFolder, rollback, setAccess, setName, share, syncFolder, unshare, waitUntilServed } from './deploy.ts';
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
 import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
@@ -36,8 +36,12 @@ With a Passa deployment:
   passa publish <folder> --title <t>   publish a folder as a new private site, linked to the folder
   passa sync [folder] [--base]         make the folder's site exactly the folder (asks before removing files);
                                        draws the social cards for its public pages first (--no-cards to skip)
-  passa access <site|folder>           show who can open what; change it with --public, --private,
-                                       or --rule <path>=<public|private> (repeatable)
+  passa access <site|folder>           show who can open what, and who it's shared with; change it with
+                                       --public, --shared, --private, or --rule <path>=<tier> (repeatable)
+  passa share <site|folder> <email>    share it: <email> can open its shared paths after signing in, and
+                                       gets an invite; --path /plans/ makes that folder shared if it's
+                                       private (default /), --expires 2026-12-31 ends it then, --yes skips asking
+  passa unshare <site|folder> <email>  stop sharing it with <email>, from their next request
   passa name <site|folder> <name>      give a site a name (its address); --none removes it
   passa rollback <site|folder> [version]   restore a version (default: the one before the current one)
   passa delete <site|folder> [--now]   delete a site (after a grace period, or --now)
@@ -370,16 +374,19 @@ async function syncCommand(args: string[]) {
 
 async function accessCommand(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' },
+    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, shared: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' },
   } });
   const target = await targetOf(positionals[0], values.server);
   const rules = parseRules(values);
   if (!rules) {
-    const site = await siteDetails(target);
-    if (values.json) return printJson({ access: site.access, rules: site.rules ?? [] }), 0;
+    const site = await listAccess(target);
+    if (values.json) return printJson(site), 0;
     out(`${site.url} is ${site.access}.`);
-    for (const r of site.rules ?? []) out(`  ${r.path} ${r.tier}`);
-    if (!site.rules?.length) out('  No rules: only you can open it.');
+    for (const r of site.rules) out(`  ${r.path} ${r.tier}`);
+    if (!site.rules.length) out('  No rules: only you can open it.');
+    if (site.shares.length) out(`Shared with:`);
+    for (const s of site.shares) out(`  ${s.email}  since ${s.shared_at.slice(0, 10)}${s.expires_at ? `, until ${s.expires_at.slice(0, 16).replace('T', ' ')} UTC` : ''}${s.invited_at ? '' : ', not invited'}`);
+    if (site.note) out(`  ${site.note}`);
     return 0;
   }
   const r = await setAccess(target, rules, { ask: askTerminal(false), confirmPublic: values['confirm-public'] === true });
@@ -387,9 +394,41 @@ async function accessCommand(args: string[]) {
   out(`${String(r.url)} is now ${String(r.access)}.`);
   const made = (key: string) => (Array.isArray(r[key]) ? (r[key] as string[]) : []);
   if (made('made_public').length) out(`  made public: ${made('made_public').join(', ')}`);
+  if (made('made_shared').length) out(`  made shared: ${made('made_shared').join(', ')}`);
   if (made('made_private').length) out(`  made private: ${made('made_private').join(', ')}`);
   notes(r);
   if (target.folder && target.link && typeof r.current_version === 'string') writeLinkVersion(target, r.current_version);
+  return 0;
+}
+
+async function shareCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
+    ...DEPLOY_OPTIONS, path: { type: 'string' }, expires: { type: 'string' }, yes: { type: 'boolean' },
+  } });
+  const email = positionals[1];
+  if (!email) throw new Error('passa share <site|folder> <email> [--path /plans/] [--expires 2026-12-31] [--yes]');
+  const target = await targetOf(positionals[0], values.server);
+  const r = await share(target, email, { ask: askTerminal(values.yes === true), ...(values.path ? { path: values.path } : {}), ...(values.expires ? { expires: values.expires } : {}) });
+  if (values.json) return printJson(r), 0;
+  const shared = r.share as { email: string; expires_at?: string };
+  out(`Shared ${target.siteId} with ${shared.email}${shared.expires_at ? ` until ${shared.expires_at.slice(0, 16).replace('T', ' ')} UTC` : ''}.`);
+  const made = Array.isArray(r.made_shared) ? (r.made_shared as string[]) : [];
+  if (made.length) out(`  made shared: ${made.join(', ')}`);
+  for (const u of Array.isArray(r.shared_urls) ? (r.shared_urls as string[]) : []) out(`  they can open ${u}`);
+  out(r.invite_sent ? '  invite sent' : `  ${String(r.invite_note ?? 'no invite sent')}`);
+  notes(r);
+  if (target.folder && target.link && typeof r.current_version === 'string') writeLinkVersion(target, r.current_version);
+  return 0;
+}
+
+async function unshareCommand(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: DEPLOY_OPTIONS });
+  const email = positionals[1];
+  if (!email) throw new Error('passa unshare <site|folder> <email>');
+  const target = await targetOf(positionals[0], values.server);
+  const r = await unshare(target, email);
+  if (values.json) return printJson(r), 0;
+  out(`${String(r.email)} can no longer open ${target.siteId}, from their next request.`);
   return 0;
 }
 
@@ -495,6 +534,8 @@ async function main(argv: string[]): Promise<number> {
     case 'publish': return publishCommand(rest);
     case 'sync': return syncCommand(rest);
     case 'access': return accessCommand(rest);
+    case 'share': return shareCommand(rest);
+    case 'unshare': return unshareCommand(rest);
     case 'name': return nameCommand(rest);
     case 'rollback': return rollbackCommand(rest);
     case 'delete': return deleteCommand(rest);
