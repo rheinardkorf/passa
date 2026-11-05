@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Draft |
+| **Status** | Done 2026-11-02, in production (PRs #19, #20, #22, #23); approved 2026-11-02 (PR #18) |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: a renderer in the publishing path, a new kind of file (sources), site-wide pages that must respect access rules, and a first command-line tool |
 | **Security-relevant** | Yes: generates HTML from publishers' input, combines content from many pages into each page (where private titles could leak), and builds sites outside Passa where nothing enforces access |

@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Draft |
+| **Status** | Done 2026-11-03 (PRs #24–#26); on npm as `@passajs/cli`; approved 2026-11-03 |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Medium: a new client of the existing MCP server and OAuth, with no new server features except where noted |
 | **Security-relevant** | Yes: stores long-lived credentials on the publisher's machine, and can make things public |

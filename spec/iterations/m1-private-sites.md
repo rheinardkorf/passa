@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Approved 2026-10-28 |
+| **Status** | Done 2026-10-30, in production (PRs #4–#9); approved 2026-10-28 |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: new architecture, new auth model, new data stores |
 | **Security-relevant** | Yes: new entry points, data stores, secrets, logging and authentication |

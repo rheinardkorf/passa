@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Approved 2026-10-31 |
+| **Status** | Draft: approved 2026-10-31 for an earlier roadmap, and to be revised before work starts, for what M3 (Markdown, social cards) and M4 (custom domains, the admin function) added |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: a second deployment target, with new stores, packaging and a new way in from the internet |
 | **Security-relevant** | Yes: new data stores, new entry points, secrets on disk, email through SMTP, and a third party (Cloudflare) in front of everything |
