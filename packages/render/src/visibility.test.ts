@@ -121,3 +121,30 @@ describe('a site with no rules', () => {
     expect(site.feed).toBeUndefined();
   });
 });
+
+describe('shared pages (M5 R137)', () => {
+  const site = build([
+    { path: 'index.md', content: '---\ntitle: Home\n---\nSee [[Plans]].' },
+    { path: 'plans/index.md', content: '---\ntitle: Plans\ndate: 2026-11-01\n---\nBack to [[Home]].' },
+    page('plans/q1.md', 'Q1 plan', 'access: private\n'),
+    page('notes/secret.md', 'Secret notes'),
+    listLayout,
+  ], [{ path: '/plans/', tier: 'shared' }]);
+
+  it('lists shared and public pages only, and leaves shared pages out of the feed', () => {
+    expect(site.html('plans/index.html')).toContain('Q1 plan');
+    expect(site.html('plans/index.html')).not.toContain('Secret notes');
+    expect(site.feed ?? '').not.toMatch(/Plans|Q1 plan/);
+  });
+
+  it('reports links readers can\'t follow once for the site, and keeps them', () => {
+    const hidden = site.problems.filter((p) => p.kind === 'link-hidden');
+    expect(hidden).toEqual([{ kind: 'link-hidden', source: 'plans/index.md', message: 'A link goes to pages some of their readers can\'t open: plans/index.md → index.md (private). It stays, for those who can.' }]);
+    expect(site.html('plans/index.html')).toContain('href="/"');
+  });
+
+  it('warns when a page that says private is shared, without refusing', () => {
+    expect(site.problems.find((p) => p.kind === 'access-private-made-shared')?.message)
+      .toBe('plans/q1.md says access: private, but the site\'s rules make /plans/q1/ shared, so everyone the site is shared with can open it');
+  });
+});

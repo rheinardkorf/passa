@@ -40,6 +40,8 @@ export type ProblemKind =
   | 'layout' // R79: a page names a layout that doesn't exist
   | 'access-private-made-public' // R89: front matter says private, the rules make it public
   | 'access-public-kept-private' // R89: front matter says public, the rules keep it private
+  | 'access-private-made-shared' // M5 R137: front matter says private, the rules share it
+  | 'link-hidden' // M5 R137: a page links to pages its own visitors can't open
   | 'missing-link' // R73
   | 'widget' // R76: invalid widget data
   | 'front-matter'
@@ -244,6 +246,7 @@ export function render(input: RenderInput): RenderResult {
   for (const p of pages) {
     const said = typeof p.data.access === 'string' ? p.data.access.toLowerCase() : undefined;
     if (said === 'private' && p.tier === 'public') problem('access-private-made-public', p.source, `${p.source} says access: private, but the site's rules make ${p.url} public`);
+    if (said === 'private' && p.tier === 'shared') problem('access-private-made-shared', p.source, `${p.source} says access: private, but the site's rules make ${p.url} shared, so everyone the site is shared with can open it`);
     if (said === 'public' && p.tier !== 'public') keptPrivate.push(p);
   }
   const [only] = keptPrivate;
@@ -251,7 +254,8 @@ export function render(input: RenderInput): RenderResult {
   else if (keptPrivate.length > 1) {
     const named = keptPrivate.slice(0, 5).map((p) => p.source).join(', ');
     const more = keptPrivate.length > 5 ? ` and ${keptPrivate.length - 5} more` : '';
-    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them private (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
+    const tiers = [...new Set(keptPrivate.map((p) => p.tier))];
+    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them ${tiers.length === 1 ? tiers[0] : 'private or shared'} (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
   }
 
   // Link resolution: by path, by file name, or by title, ignoring case and punctuation (R73).
@@ -285,6 +289,19 @@ export function render(input: RenderInput): RenderResult {
   // Backlinks.
   const bySource = new Map(pages.map((p) => [p.source, p]));
   for (const p of pages) for (const target of p.state.links) bySource.get(target)?.backlinks.push(p);
+
+  // Links the page's own visitors can't follow, such as a shared page's link
+  // home to a private page: kept, since the owner can follow them, but
+  // reported once for the site (M5 R137).
+  const hidden = pages.flatMap((p) => [...p.state.links].flatMap((target) => {
+    const to = bySource.get(target);
+    return to && !sees(p.tier, to) ? [`${p.source} → ${to.source} (${to.tier})`] : [];
+  }));
+  if (hidden.length) {
+    const more = hidden.length > 5 ? ` and ${hidden.length - 5} more` : '';
+    problem('link-hidden', hidden.length === 1 ? hidden[0]?.split(' → ')[0] ?? null : null,
+      `${hidden.length === 1 ? 'A link goes' : `${hidden.length} links go`} to pages some of their readers can't open: ${hidden.slice(0, 5).join(', ')}${more}. ${hidden.length === 1 ? 'It stays' : 'They stay'}, for those who can.`);
+  }
 
   // Listed pages, newest first. The home page is never in a list (R82).
   const sorted = pages.filter((q) => !q.unlisted && q.url !== '/').sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || a.title.localeCompare(b.title));

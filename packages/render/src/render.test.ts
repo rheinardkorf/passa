@@ -377,6 +377,12 @@ describe('social cards (R94–R97)', () => {
     expect(r.pages.find((p) => p.path === 'own/index.html')?.html).toContain('content="https://demo.example/logo.png"');
   });
 
+  it('draws no card for shared pages, which link previews can\'t sign in to see (M5 R137)', () => {
+    const r = cards([post('Team only')], { rules: [{ path: '/', tier: 'public' }, { path: '/post/', tier: 'shared' }] });
+    expect(r.cards?.map((c) => c.path).filter((p) => p.startsWith('post/'))).toEqual([]);
+    expect(r.pages.find((p) => p.path === 'post/index.html')?.html).not.toContain('og:image');
+  });
+
   it('uses a theme card with its fonts, and its images by path, in the hash', () => {
     const theme = { path: '_layouts/card.html', content: '<div style="display:flex;font-family:Serif"><img src="/logo.png" width="60" height="60">{{title}}</div>' };
     const r = cards([post('Hi'), theme]);

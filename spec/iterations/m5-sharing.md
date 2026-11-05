@@ -58,7 +58,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 
 - **R135** Anyone a site is shared with signs in the way the owner does (R15–R18): enter the email, open the magic link, Continue. The sign-in screen still never reveals whether the email has access. A viewer's first sign-in gives them a user record with no roles, so they can sign in to view but never publish; what they can open comes from the shares for their verified email.
 - **R136** A site cookie carries the viewer's tiers on that site: the owner's cookie has every tier, a viewer's has `shared`. The edge serves a path when the cookie's tiers include the path's tier, as well as everything public. A viewer who opens a private path is refused at `auth.`, which shows who they're signed in as and offers another email. The cookie stays host-only, short-lived and signed as now (R11, R18, R19).
-- **R137** On a Markdown site, a `shared` page's lists, backlinks, tag pages and feed include only `shared` and public pages (M3 R82), so a viewer never sees a private page's title. `shared` pages get no social cards, since the services that fetch link previews can't sign in.
+- **R137** On a Markdown site, a `shared` page's lists, backlinks, tag pages and feed include only `shared` and public pages (M3 R82), so a viewer never sees a private page's title. `shared` pages get no social cards, since the services that fetch link previews can't sign in. A link on a page to one its readers can't open (a shared page's link home to a private page) stays, for those who can follow it, and is reported once for the site; so is a page whose front matter says `access: private` that the rules make shared.
 
 ### Rules
 
