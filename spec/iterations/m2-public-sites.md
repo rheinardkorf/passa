@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Approved 2026-10-30 |
+| **Status** | Done 2026-10-31, in production (PR #12); approved 2026-10-30 |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Light: extends M1's access check and tools; no new services or data stores |
 | **Security-relevant** | Yes: changes who can view sites, and serves content to anyone |

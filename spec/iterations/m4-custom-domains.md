@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Draft |
+| **Status** | Done 2026-11-03, in production (PR #31; docs #33); approved 2026-11-03 (PR #30) |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: a second CloudFront distribution, certificates and DNS for domains Passa doesn't own, a change to how the edge finds a site, and the first admin commands |
 | **Security-relevant** | Yes: decides which hostnames serve which site, issues certificates, writes DNS records, and moves the sign-in handoff to new origins |
