@@ -106,6 +106,12 @@ describe('passa init', () => {
 describe('the passa command', () => {
   const run = (...args: string[]) => spawnSync(process.execPath, [main, ...args], { encoding: 'utf8' });
 
+  it('check reports a page whose front matter can\'t be read, rather than quietly leaving it out', () => {
+    const r = run('check', site({ 'a.md': '---\naccess: public\n---\nFine.', 'b.md': '---\ndescription: One: two\naccess: public\n---\nLost.' }));
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/b\.md: front matter isn't valid YAML .*needs quotes.*so it can't say access: public and is left out/);
+  });
+
   it('check exits 1 when there are problems, 0 when there are none', () => {
     expect(run('check', site({ 'a.md': '---\naccess: public\n---\n[[Nowhere]]' })).status).toBe(1);
     expect(run('check', site({ 'a.md': '---\naccess: public\n---\nFine.' })).status).toBe(0);

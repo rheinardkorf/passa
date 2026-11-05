@@ -137,6 +137,21 @@ export function setAccess(target: Target, rules: Rule[], options: CallOptions & 
 export const setName = (target: Target, name: string | null, options: CallOptions = {}) =>
   callTool<Record<string, unknown>>(target.server, 'set_name', { site_id: target.siteId, name }, options);
 
+// The edge takes a few seconds (sometimes a minute) to see a new version
+// everywhere. Public responses say which version they serve, so this checks
+// the site's home page until it's the new one. A private home page doesn't
+// say, so there's nothing to wait for: 'unknown'.
+export async function waitUntilServed(url: string, version: string, options: { tries?: number; waitMs?: number } = {}): Promise<'live' | 'unknown' | 'slow'> {
+  for (let i = 0; i < (options.tries ?? 20); i++) {
+    const reply = await request(url).catch(() => undefined);
+    const served = reply?.headers['x-passa-version'];
+    if (served === version) return 'live';
+    if (reply && !served && reply.status !== 404) return 'unknown';
+    await new Promise((r) => setTimeout(r, options.waitMs ?? 3000));
+  }
+  return 'slow';
+}
+
 // R110: the given version, or the one before the current one.
 export async function rollback(target: Target, version: string | undefined, options: CallOptions & { ask: Ask; confirmPublic?: boolean }) {
   let to = version;

@@ -416,6 +416,17 @@ describe('indexing (response.js, M2 R42)', () => {
     expect(corp()).toBeUndefined();
   });
 
+  it('shows the version served on public responses only, so passa sync can tell when a change is live', async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/docs/', 'p']] });
+    const served = async (uri: string, cookie?: string) => {
+      const result = await run(request(uri, cookie ? { cookie } : {}));
+      if (isResponse(result)) throw new Error('expected a rewrite');
+      return robots({ request: { headers: { ...result.headers, host: { value: `${SITE}.example.com` } } }, response: { statusCode: 200, headers: {} } }, { sites: 'example.com' }).headers['x-passa-version']?.value;
+    };
+    expect(await served('/docs/')).toBe(VERSION);
+    expect(await served('/', cookie())).toBeUndefined();
+  });
+
   it('uses the same site ID pattern as the publisher', () => {
     const source = readFileSync(new URL('./response.js', import.meta.url), 'utf8');
     expect(/const SITE_ID = \/(.+)\/;/.exec(source)?.[1]).toBe(SITE_ID_PATTERN.source);

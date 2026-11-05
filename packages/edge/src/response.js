@@ -18,6 +18,7 @@
 // Site IDs (shared/ids.ts, SITE_ID_PATTERN), as in handler.js.
 const SITE_ID = /^[a-z]{3,6}-[a-z]{3,6}-[b-df-hj-km-np-tv-z2-9]{6}$/;
 const TIER = 'x-passa-tier';
+const VERSION = 'x-passa-version';
 
 // options: { sites (the site domain) }
 function viewerResponse(event, options) {
@@ -28,6 +29,11 @@ function viewerResponse(event, options) {
   const custom = !label && host !== options.sites && host.indexOf('.') > 0;
   if (!custom && (!label || SITE_ID.test(label))) response.headers['x-robots-tag'] = { value: 'noindex' };
   const tier = event.request.headers[TIER];
-  if (tier && tier.value === 'public') response.headers['cross-origin-resource-policy'] = { value: 'cross-origin' };
+  if (tier && tier.value === 'public') {
+    response.headers['cross-origin-resource-policy'] = { value: 'cross-origin' };
+    // Only on public responses: a private site's version isn't anyone's business.
+    const version = event.request.headers[VERSION];
+    if (version) response.headers[VERSION] = { value: version.value };
+  }
   return response;
 }
