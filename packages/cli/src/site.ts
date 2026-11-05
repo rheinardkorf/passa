@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, relative, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { type Card, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, slugify, type Problem, type Rule, type Source } from '@passa/render';
+import { type Card, cardFont, DEFAULT_CARD_FONTS, drawCard, isSource, REFUSING, render, RULES_FILE, slugify, splitFrontMatter, type Problem, type Rule, type Source } from '@passa/render';
 
 export type BuildOptions = {
   siteUrl?: string;
@@ -118,9 +118,17 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
   const access: Build['access'] = options.includePrivate ? 'everything' : hasRules || options.rules ? 'rules' : 'front-matter';
   let rules: Rule[] = [{ path: '/', tier: 'public' }];
   let skippedPages: string[] = [];
+  // A page whose front matter can't be read can't say it's public, so it's
+  // left out: said as a problem, not hidden among the pages that aren't public.
+  const unreadable: Problem[] = [];
   if (access === 'rules') rules = options.rules ?? readRules(read(RULES_FILE));
   if (access === 'front-matter') {
-    skippedPages = sources.filter((s) => markdown(s) && String(frontMatter(s.content).access ?? '').toLowerCase() !== 'public').map((s) => s.path);
+    skippedPages = sources.filter((s) => {
+      if (!markdown(s)) return false;
+      const { data, problem } = splitFrontMatter(s.content);
+      if (problem) unreadable.push({ kind: 'front-matter', source: s.path, message: `${s.path}: ${problem}, so it can't say access: public and is left out` });
+      return String(data.access ?? '').toLowerCase() !== 'public';
+    }).map((s) => s.path);
     sources = sources.filter((s) => !skippedPages.includes(s.path));
   }
 
@@ -147,7 +155,7 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
     return [key(path), key(path.slice(path.lastIndexOf('/') + 1)), ...(typeof title === 'string' ? [key(title)] : [])];
   }));
   let linksToSkipped = 0;
-  const problems = result.problems.filter((p) => {
+  const problems = [...unreadable, ...result.problems.filter((p) => {
     const target = p.kind === 'missing-link' ? /^\[\[(.+)\]\] doesn't match/.exec(p.message)?.[1] : undefined;
     if (target && skippedKeys.has(key(target))) {
       linksToSkipped++;
@@ -155,7 +163,7 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
     }
     // Problems on pages that weren't built don't matter here.
     return !(p.source && skippedPages.includes(p.source));
-  });
+  })];
   const refusing = problems.filter((p) => REFUSING.has(p.kind) && !(p.kind === 'access-private-made-public' && options.confirmPublic));
 
   // Keep only the plain files built pages use, following stylesheets and HTML

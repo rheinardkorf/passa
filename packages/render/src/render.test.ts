@@ -76,6 +76,9 @@ describe('rendering (R67–R71)', () => {
 
   it('reports front matter that isn\'t YAML', () => {
     expect(build([{ path: 'a.md', content: '---\ntitle: [unclosed\n---\nBody' }]).kinds).toContain('front-matter');
+    // An unquoted ": " in a value is the usual cause, so the problem says how to fix it.
+    const colon = build([{ path: 'b.md', content: '---\ndescription: One: two\n---\nBody' }]).problems.find((p) => p.kind === 'front-matter');
+    expect(colon?.message).toMatch(/needs quotes, such as description: "One: two"/);
   });
 });
 
@@ -331,6 +334,15 @@ describe('front matter access (R89)', () => {
     expect(r.pages.find((p) => p.path === 'a/index.html')?.tier).toBe('private');
     expect(r.kinds).toContain('access-public-kept-private');
     expect(REFUSING.has('access-public-kept-private')).toBe(false);
+  });
+
+  it('warns once, naming the pages, when several are kept private (found publishing the docs)', () => {
+    const pages = Array.from({ length: 7 }, (_, i) => ({ path: `p${i}.md`, content: '---\naccess: public\n---\nBody' }));
+    const kept = build(pages, { rules: [] }).problems.filter((p) => p.kind === 'access-public-kept-private');
+    expect(kept).toEqual([{
+      kind: 'access-public-kept-private', source: null,
+      message: '7 pages say access: public, but the site\'s rules keep them private (p0.md, p1.md, p2.md, p3.md, p4.md and 2 more). Front matter never makes a page public: change the site\'s rules to.',
+    }]);
   });
 });
 

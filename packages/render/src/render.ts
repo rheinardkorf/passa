@@ -85,14 +85,18 @@ const sees = (viewerTier: string, item: { tier: string }) => viewerTier === 'pri
 
 type FrontMatter = Record<string, unknown>;
 
-function splitFrontMatter(content: string): { data: FrontMatter; body: string; problem?: string } {
+// A Markdown source's front matter and body, and why the front matter can't be
+// read when it can't. The passa command uses it too, to decide access the same way.
+export function splitFrontMatter(content: string): { data: FrontMatter; body: string; problem?: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
   if (!m) return { data: {}, body: content };
   try {
     const data: unknown = parseYaml(m[1] ?? '') ?? {};
     return { data: data && typeof data === 'object' && !Array.isArray(data) ? (data as FrontMatter) : {}, body: content.slice(m[0].length) };
   } catch (err) {
-    return { data: {}, body: content, problem: `front matter isn't valid YAML (${firstLine(err)})` };
+    // The usual cause: a value with ": " in it, which YAML reads as a nested key.
+    const hint = /mapping/i.test(firstLine(err)) ? '. A value containing ": " needs quotes, such as description: "One: two"' : '';
+    return { data: {}, body: content, problem: `front matter isn't valid YAML (${firstLine(err)})${hint}` };
   }
 }
 
@@ -234,10 +238,20 @@ export function render(input: RenderInput): RenderResult {
   }
 
   // Front matter access never grants access (R89), but disagreements are reported.
+  // Pages kept private are one warning, however many: a site published private
+  // with pages meant to be public would otherwise warn once per page.
+  const keptPrivate: Page[] = [];
   for (const p of pages) {
     const said = typeof p.data.access === 'string' ? p.data.access.toLowerCase() : undefined;
     if (said === 'private' && p.tier === 'public') problem('access-private-made-public', p.source, `${p.source} says access: private, but the site's rules make ${p.url} public`);
-    if (said === 'public' && p.tier !== 'public') problem('access-public-kept-private', p.source, `${p.source} says access: public, but the site's rules keep ${p.url} ${p.tier}`);
+    if (said === 'public' && p.tier !== 'public') keptPrivate.push(p);
+  }
+  const [only] = keptPrivate;
+  if (only && keptPrivate.length === 1) problem('access-public-kept-private', only.source, `${only.source} says access: public, but the site's rules keep ${only.url} ${only.tier}`);
+  else if (keptPrivate.length > 1) {
+    const named = keptPrivate.slice(0, 5).map((p) => p.source).join(', ');
+    const more = keptPrivate.length > 5 ? ` and ${keptPrivate.length - 5} more` : '';
+    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them private (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
   }
 
   // Link resolution: by path, by file name, or by title, ignoring case and punctuation (R73).

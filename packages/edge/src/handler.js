@@ -22,6 +22,9 @@ const PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
 const HANDOFF = '/_passa/session';
 // Set on every request served from storage, as response.js reads it.
 const TIER = 'x-passa-tier';
+// The version served, which the viewer-response function shows on public
+// responses, so passa sync can tell when a change has reached the edge.
+const VERSION = 'x-passa-version';
 // A page's social card (render's CARD_FILE): served from the site's cards,
 // which live outside versions, under the page's own access rule.
 const CARD = /\/_card-([0-9a-f]{20})\.png$/;
@@ -128,6 +131,7 @@ function serve(request, siteId, version, served, open) {
   request.querystring = {};
   request.cookies = {};
   request.headers[TIER] = { value: open ? 'public' : 'private' };
+  request.headers[VERSION] = { value: version };
   return request;
 }
 

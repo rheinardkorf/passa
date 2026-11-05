@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { accessToken, LoginNeeded, login, logout, readCredentials } from './auth.ts';
 import { request } from './http.ts';
 import { callTool } from './mcp.ts';
-import { deleteSite, publishFolder, rollback, setAccess, setName, syncFolder } from './deploy.ts';
+import { deleteSite, publishFolder, rollback, setAccess, setName, syncFolder, waitUntilServed } from './deploy.ts';
 import { pull, readLink, resolveTarget } from './sites.ts';
 
 let stack: Stack;
@@ -214,6 +214,14 @@ describe('changing sites (R106–R110)', () => {
     expect(synced).not.toHaveProperty('cards_skipped');
     expect((await syncFolder(await resolveTarget(folder, { dir }), { dir, ask: answering(true).ask })).up_to_date).toBe(true);
     expect(published.site_id).toBe(target.siteId);
+    // A public site says which version it serves, so sync can wait for it.
+    expect(await waitUntilServed(synced.url, synced.current_version, { waitMs: 50 })).toBe('live');
+  });
+
+  it('has nothing to wait for on a private site, which doesn\'t say its version', async () => {
+    const { dir } = await signedIn();
+    const published = await publishFolder(server, folderWith({ 'index.md': '# Home' }), 'Private', { dir, ask: answering(true).ask });
+    expect(await waitUntilServed(published.url, published.current_version, { waitMs: 50 })).toBe('unknown');
   });
 
   it('names, rolls back and deletes', async () => {

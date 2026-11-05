@@ -9,7 +9,7 @@ import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
 import { THEME_GUIDE } from '@passa/render';
 import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl, useServer } from './auth.ts';
 import { callTool, ToolRefused } from './mcp.ts';
-import { type Ask, deleteSite, parseRules, publishFolder, rollback, setAccess, setName, syncFolder } from './deploy.ts';
+import { type Ask, deleteSite, parseRules, publishFolder, rollback, setAccess, setName, syncFolder, waitUntilServed } from './deploy.ts';
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
 import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
@@ -361,6 +361,10 @@ async function syncCommand(args: string[]) {
   out(`Synced ${target.siteId} (version ${r.current_version}): ${String(r.changed ?? 0)} written, ${String(r.removed ?? 0)} removed.  ${r.url}`);
   if (r.cards_drawn_locally) out(`  drew ${r.cards_drawn_locally} social card${r.cards_drawn_locally === 1 ? '' : 's'} locally${typeof r.cards_stored === 'number' ? `; ${r.cards_stored} new to the site` : '; the site had them all'}`);
   notes(r);
+  // Until the edge has the new version, a new page can 404 and others show the old one.
+  const served = await waitUntilServed(r.url, r.current_version);
+  if (served === 'live') out('  live: the edge is serving the new version');
+  else if (served === 'slow') out('  Passa has it; the edge is still catching up, and will show it everywhere within a minute or so.');
   return 0;
 }
 
