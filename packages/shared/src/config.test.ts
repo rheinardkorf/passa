@@ -5,6 +5,17 @@ import { senderAddress, senderDomain, siteDomain, stageConfig } from './config.t
 const example = loadConfigFile(new URL('../../../config.example.yml', import.meta.url).pathname);
 
 describe('config', () => {
+  it('sends through SES by default, and through SMTP only with its settings (M5 R140, R141)', () => {
+    expect(parseConfig(example).email.provider).toBe('ses');
+    const smtp = { host: 'smtp.example.com', port: 465, user: 'passa@example.com', passwordParameter: '/passa/prod/smtp-password' };
+    expect(parseConfig({ ...example, email: { ...example.email, provider: 'smtp', smtp } }).email.smtp).toEqual(smtp);
+    expect(() => parseConfig({ ...example, email: { ...example.email, provider: 'smtp' } })).toThrow(/email.smtp is needed/);
+    // Only TLS ports, and a parameter's name, never a password.
+    expect(() => parseConfig({ ...example, email: { ...example.email, provider: 'smtp', smtp: { ...smtp, port: 25 } } })).toThrow();
+    expect(() => parseConfig({ ...example, email: { ...example.email, provider: 'smtp', smtp: { ...smtp, passwordParameter: 'hunter2' } } })).toThrow();
+    expect(() => parseConfig({ ...example, email: { ...example.email, provider: 'smtp', smtp: { ...smtp, password: 'hunter2' } } })).toThrow();
+  });
+
   it('parses the example config', () => {
     expect(example.domain).toBe('example.com');
   });

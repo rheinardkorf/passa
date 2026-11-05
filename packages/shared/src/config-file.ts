@@ -19,7 +19,20 @@ const timeZone = z.string().refine((zone) => {
     return false;
   }
 }, 'an IANA time zone, such as UTC or Australia/Sydney');
-const email = z.strictObject({ from: z.string().min(1) });
+// Who sends Passa's email, and how (M5 R140, R141): SES, or any SMTP service.
+// The SMTP password is a Parameter Store SecureString, named here, never the
+// password itself.
+const smtp = z.strictObject({
+  host: z.string().min(1),
+  port: z.union([z.literal(465), z.literal(587)]),
+  user: z.string().min(1),
+  passwordParameter: z.string().regex(/^\/[A-Za-z0-9_./-]{1,1000}$/),
+});
+const email = z.strictObject({
+  from: z.string().min(1),
+  provider: z.enum(['ses', 'smtp']).default('ses'),
+  smtp: smtp.optional(),
+}).refine((e) => e.provider !== 'smtp' || e.smtp, { message: 'email.smtp is needed when email.provider is smtp' });
 
 // What a stage can change: dev usually runs on its own subdomains.
 // Custom domains (M4): the Route 53 hosted zones (by ID) Passa may write

@@ -95,9 +95,18 @@ export class ServicesStack extends Stack {
     data.events.grantWriteData(auth);
     data.authSecret.grantRead(auth);
     data.tokenKey.grant(auth, 'kms:Sign', 'kms:GetPublicKey', 'kms:DescribeKey');
+    // Sends Passa's email in the background (M5 R145), with the provider config
+    // chooses (R140): auth. hands it each message without waiting.
+    const mailer = nodeFunction(this, 'MailFunction', {
+      entry: 'packages/mail/src/lambda.ts',
+      environment,
+      description: `Passa ${props.stage} mail`,
+      timeout: Duration.seconds(30),
+      removalPolicy: data.removalPolicy,
+    });
     // SES checks every identity involved, and in its sandbox that includes the
     // verified recipient, so any identity is allowed, but only from Passa's sender.
-    auth.addToRolePolicy(new PolicyStatement({
+    mailer.addToRolePolicy(new PolicyStatement({
       actions: ['ses:SendEmail'],
       resources: [
         this.formatArn({ service: 'ses', resource: 'identity', resourceName: '*' }),
@@ -105,6 +114,15 @@ export class ServicesStack extends Stack {
       ],
       conditions: { StringEquals: { 'ses:FromAddress': senderAddress(config.email.from) } },
     }));
+    // The SMTP password, when config sends through SMTP (R141): that one parameter.
+    if (config.email.provider === 'smtp' && config.email.smtp) {
+      mailer.addToRolePolicy(new PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [this.formatArn({ service: 'ssm', resource: 'parameter', resourceName: config.email.smtp.passwordParameter.slice(1) })],
+      }));
+    }
+    auth.addEnvironment(ENV.mailFunction, mailer.functionName);
+    mailer.grantInvoke(auth);
     const authUrl = auth.addFunctionUrl({ authType: FunctionUrlAuthType.NONE });
 
     // The origin header's value stays in Secrets Manager; CloudFormation resolves it at deploy.
@@ -299,7 +317,7 @@ export class ServicesStack extends Stack {
     });
     alarm('malware-found', new Metric({ namespace: 'AWS/Events', metricName: 'MatchedEvents', dimensionsMap: { RuleName: findings.ruleName }, statistic: 'Sum', period: Duration.minutes(5) }), 1, 'GuardDuty found malware in a published or uploaded file');
 
-    for (const [name, fn, threshold] of [['auth', auth, 5], ['mcp', mcp, 5], ['purge', purge, 1], ['bounces', bounces, 1], ['scans', scans, 1], ['cards', cards, 1]] as const) {
+    for (const [name, fn, threshold] of [['auth', auth, 5], ['mcp', mcp, 5], ['purge', purge, 1], ['bounces', bounces, 1], ['scans', scans, 1], ['cards', cards, 1], ['mail', mailer, 1]] as const) {
       alarm(`${name}-errors`, fn.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }), threshold, `Passa ${name} function errors`);
     }
 

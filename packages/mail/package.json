@@ -1,0 +1,20 @@
+{
+  "name": "@passa/mail",
+  "description": "Passa's email: the SES and SMTP providers behind one interface, and the mail function that sends in the background.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-lambda": "3.1152.0",
+    "@aws-sdk/client-sesv2": "3.1152.0",
+    "@aws-sdk/client-ssm": "3.1152.0",
+    "@passa/shared": "workspace:*",
+    "nodemailer": "10.2.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "8.0.2"
+  }
+}

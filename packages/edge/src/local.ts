@@ -68,6 +68,7 @@ async function authApp(w: ReturnType<typeof wiring>) {
     config: w.config,
     // Moto accepts the email but delivers nothing, so it's printed here too.
     mailer: {
+      kind: 'ses',
       async send(email) {
         await ses.send(email);
         out(`\nEmail to ${email.to}: ${email.subject}\n${email.text}`);

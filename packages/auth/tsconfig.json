@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "include": ["src"], "references": [{ "path": "../shared" }, { "path": "../mcp" }]
+  "include": ["src"], "references": [{ "path": "../shared" }, { "path": "../mail" }, { "path": "../mcp" }]
 }
