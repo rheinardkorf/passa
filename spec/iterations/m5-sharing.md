@@ -73,6 +73,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 - **R140** A mail provider has `send(email)` and `kind`; its bounce and complaint handling, where it has any, records them through the same events, and notifies admins, as SES bounces do today, whichever provider sends. Config `email.provider` chooses `ses` (the default) or `smtp`.
 - **R141** The SMTP provider sends over TLS (port 465, or 587 with STARTTLS), with a host, port and user in config and the password in a Parameter Store `SecureString` (on AWS), never in config. It works with any SMTP service. Bounces are left to the service's own suppression, which the docs say. Some services only send from the account's own address or verified aliases (Gmail rewrites any other `From`), which the docs say too.
 - **R142** Every email has the same content whichever provider sends it, and none includes a site's title (R12, R15). Tracking stays off.
+- **R145** Mail is sent in the background, handed off without waiting, so sign-in and `share` answer in the same time whichever provider sends and whether or not an email was sent (R15). An SMTP send takes 2–3 seconds (early check), which would otherwise slow sign-in and show whether an email has access.
 
 ### Admin users
 
@@ -99,7 +100,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 - **Cookies:** `kid.site.v.exp.tiers.sig`, where `tiers` is a short code (`o` for the owner, `s` for shared), covered by the signature. The handoff token carries the tiers too, so the edge sets them without a lookup.
 - **Edge:** edge rules gain `s` beside `p` (public) and `x` (private). A path's tier comes from its rule as now; a `shared` path is served when the cookie has `s` or `o`. The function stays within CloudFront's 10 KB limit (checked early).
 - **Sign-in:** `auth.` looks up grants by email when there's no publisher record, and sends a link only when the email is the site's owner or has a live share.
-- **Mail:** `packages/shared` gets the `MailProvider` interface; `SesMailer` moves behind it; `SmtpMailer` uses Nodemailer (MIT-0, no dependencies). The auth function builds the configured one.
+- **Mail:** `packages/shared` gets the `MailProvider` interface; `SesMailer` moves behind it; `SmtpMailer` uses Nodemailer (MIT-0, no dependencies). A small mail function sends; `auth.` and the MCP server hand it the message asynchronously (R145), as they hand cards to the cards function.
 - **Admin users:** new admin-function actions (`users.add`, `users.list`, `users.disable`, `users.enable`) and `passa admin users`.
 
 ## Decisions
@@ -111,11 +112,11 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 5. **SES and SMTP now, behind an interface.** SMTP covers almost any provider and the self-hosted target; HTTP APIs can be added the same way.
 6. **Admin users in M5,** since the admin function exists and adding a second publisher shouldn't mean editing the database.
 
-## To check early
+## Early checks
 
-- The edge function's size with tiers in cookies and rules, against CloudFront's 10 KB limit.
-- SMTP from Lambda: port 465 or 587 to a real service, Nodemailer's bundle size and cold start, and the password from Parameter Store.
-- A second SES-verified address for the demo while in sandbox.
+- **Edge size: passes.** The viewer-request function is at 7,335 of 10,240 bytes today; tiers in cookies and rules, prototyped, add 292 bytes (74%). Whitespace minification would free another 1.2 KB if a later milestone needs it.
+- **SMTP from Lambda: passes,** through Gmail on ports 465 and 587, with the password from a Parameter Store `SecureString` (`ssm:GetParameter` was enough). Nodemailer adds 239 KB and the cold start was 320 ms, but **a send takes 2–3 seconds**, hence R145. Gmail sends only as the account's own address or its verified aliases.
+- **Still to check:** a second SES-verified address for the demo while in sandbox.
 
 ## Starting values
 
