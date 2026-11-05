@@ -116,7 +116,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 
 - **Edge size: passes.** The viewer-request function is at 7,335 of 10,240 bytes today; tiers in cookies and rules, prototyped, add 292 bytes (74%). Whitespace minification would free another 1.2 KB if a later milestone needs it.
 - **SMTP from Lambda: passes,** through Gmail on ports 465 and 587, with the password from a Parameter Store `SecureString` (`ssm:GetParameter` was enough). Nodemailer adds 239 KB and the cold start was 320 ms, but **a send takes 2–3 seconds**, hence R145. Gmail sends only as the account's own address or its verified aliases.
-- **Still to check:** a second SES-verified address for the demo while in sandbox.
+- **A second address for the demo: done.** A second email is verified in dev's SES, so the demo's sharing invite and sign-in reach it while SES is in sandbox. Passa treats it as a different person from the owner, even where both addresses reach the same inbox.
 
 ## Starting values
 
