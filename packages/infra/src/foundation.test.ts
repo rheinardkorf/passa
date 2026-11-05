@@ -35,8 +35,10 @@ describe('foundation stack', () => {
     dev.template.hasResourceProperties('AWS::Route53::HostedZone', { Name: 'dev.example.com.' });
   });
 
-  it('refuses a sender that is not on the domain', () => {
+  it('refuses a sender that is not on the domain when SES sends, but not when an SMTP service does', () => {
     const bad = parseConfig({ ...example, email: { from: 'no-reply@elsewhere.com' } });
     expect(() => addStage(testApp(), bad, 'prod')).toThrow(/email.from/);
+    const smtp = parseConfig({ ...example, email: { from: 'Passa <me@elsewhere.com>', provider: 'smtp', smtp: { host: 'smtp.elsewhere.com', port: 587, user: 'me@elsewhere.com', passwordParameter: '/passa/prod/smtp-password' } } });
+    expect(() => addStage(testApp(), smtp, 'prod')).not.toThrow();
   });
 });

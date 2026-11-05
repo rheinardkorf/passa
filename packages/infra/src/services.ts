@@ -105,8 +105,9 @@ export class ServicesStack extends Stack {
       removalPolicy: data.removalPolicy,
     });
     // SES checks every identity involved, and in its sandbox that includes the
-    // verified recipient, so any identity is allowed, but only from Passa's sender.
-    mailer.addToRolePolicy(new PolicyStatement({
+    // verified recipient, so any identity is allowed, but only from Passa's
+    // sender. Only when SES sends: an SMTP provider needs none of it.
+    if (config.email.provider === 'ses') mailer.addToRolePolicy(new PolicyStatement({
       actions: ['ses:SendEmail'],
       resources: [
         this.formatArn({ service: 'ses', resource: 'identity', resourceName: '*' }),

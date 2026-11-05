@@ -18,8 +18,10 @@ export class FoundationStack extends Stack {
   constructor(scope: Construct, id: string, props: FoundationProps) {
     super(scope, id, props);
     const { domain, email } = props.config;
+    // SES sends from this domain's identity (below); an SMTP service sends as
+    // its own account, so the address is the service's to allow (M5 R141).
     const sender = senderDomain(email.from);
-    if (sender !== domain) throw new Error(`email.from must be an address at ${domain}, not ${sender}`);
+    if (email.provider === 'ses' && sender !== domain) throw new Error(`email.from must be an address at ${domain}, not ${sender}, when SES sends`);
 
     this.zone = new PublicHostedZone(this, 'Zone', { zoneName: domain });
     this.nameServers('NameServers', this.zone, domain);

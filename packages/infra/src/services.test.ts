@@ -79,6 +79,7 @@ describe('services stack', () => {
     const reading = smtpPolicies.filter((p) => p.text.includes('ssm:GetParameter')).map((p) => p.id.replace(/ServiceRole.*/, ''));
     expect(reading).toEqual(['MailFunction']);
     expect(smtpPolicies.find((p) => p.id.startsWith('MailFunction'))?.text).toContain('parameter/passa/prod/smtp-password');
+    expect(smtpPolicies.find((p) => p.id.startsWith('MailFunction'))?.text).not.toContain('ses:SendEmail');
   });
 
   it('sends mail through a configuration set that reports bounces and complaints', () => {
