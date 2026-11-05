@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-cloudfront-keyvaluestore": "3.1152.0",
-    "@aws-sdk/client-secrets-manager": "3.1152.0",
+    "@aws-sdk/client-secrets-manager": "3.1155.0",
     "@passa/auth": "workspace:*",
     "@passa/edge": "workspace:*",
     "@passa/shared": "workspace:*",
