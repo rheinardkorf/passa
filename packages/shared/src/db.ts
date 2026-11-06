@@ -666,7 +666,8 @@ export class Store {
       ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': prefix },
       ConsistentRead: true,
     }));
-    return (Items ?? []).map((item) => strip<Grant>(item));
+    // Shares from before shares had paths (dev only) open nothing, and are left out.
+    return (Items ?? []).filter((item) => typeof item.path === 'string').map((item) => strip<Grant>(item));
   }
 
   // Every share of a site; at most limits.sharesPerSite, so one page.
