@@ -35,12 +35,16 @@ Passa is open source and runs in your own AWS account; see the [repository](http
 passa login mcp.example.com            # sign in (tokens in ~/.config/passa, readable only by you)
 passa publish my-site --title "Notes"  # a new private site; the folder remembers it
 passa access my-site --public          # asks before anything goes public
+passa share my-site sam@example.com --path /proposals/acme/   # only that folder, after signing in
+passa unshare my-site sam@example.com  # from their next request
 passa sync my-site                     # only changed files go up, with the social cards drawn locally
 passa pull <site> other-folder         # a site's sources, on another machine
 passa sites                            # also: site, name, rollback, delete, logout, whoami
 ```
 
 Signed in to more than one deployment? Switch with `passa use <server>`, pass `--server <server>` to one command, or set `PASSA_SERVER` for a shell. A linked folder always uses the server it came from.
+
+Admins manage custom domains and who can publish with `passa admin domain …` and `passa admin users …`, using the deployment's AWS credentials.
 
 Run `passa --help` for every command and option.
 
