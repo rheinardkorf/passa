@@ -114,8 +114,10 @@ describe('share (R128–R130)', () => {
     const shared = (await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'shared' }] })).json();
     expect(shared).toMatchObject({ access: 'shared', made_shared: ['/'] });
     const back = (await call('set_access', { site_id: site.site_id, rules: [] })).json();
+    expect(shared.note).toBeUndefined(); // nothing was open to more people before
     expect(back).toMatchObject({ access: 'private', made_private: ['/'] });
     expect(back.note).toContain('up to a minute');
+    expect(back.narrowed).toBeUndefined();
   });
 
   it('resends at most hourly, and keeps when it was first shared', async () => {

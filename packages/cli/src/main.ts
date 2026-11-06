@@ -421,7 +421,7 @@ async function shareCommand(args: string[]) {
   out(`Shared ${shared.path} on ${target.siteId} with ${shared.email}${shared.expires_at ? ` until ${shared.expires_at.slice(0, 16).replace('T', ' ')} UTC` : ''}.`);
   const made = Array.isArray(r.made_shared) ? (r.made_shared as string[]) : [];
   if (made.length) out(`  made shared: ${made.join(', ')}`);
-  for (const u of Array.isArray(r.shared_urls) ? (r.shared_urls as string[]) : []) out(`  they can open ${u}`);
+  for (const u of [`${String(r.url)}${shared.path.slice(1)}`, ...(Array.isArray(r.also_opens) ? (r.also_opens as string[]) : [])]) out(`  they can open ${u}`);
   out(r.invite_sent ? '  invite sent' : `  ${String(r.invite_note ?? 'no invite sent')}`);
   if (typeof r.share_note === 'string') out(`  note: ${r.share_note}`);
   notes(r);

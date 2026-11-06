@@ -111,7 +111,8 @@ export type SiteSummary = {
 };
 
 // What a change of rules did, for the response and the event (R48).
-export type AccessChange = { made_public: string[]; made_shared: string[]; made_private: string[] };
+// narrowed: something open to more people before is open to fewer now.
+export type AccessChange = { made_public: string[]; made_shared: string[]; made_private: string[]; narrowed?: boolean };
 
 // A share as list_access shows it (M5 R132).
 export type Share = { email: string; path: string; shared_at: string; expires_at?: string; invited_at?: string };
@@ -213,16 +214,17 @@ export class Publisher {
       throw new ToolError(`This would make ${madePublic.join(', ')} public: anyone with the link could open ${madePublic.length > 1 ? 'them' : 'it'} without signing in. `
         + 'Check with the person first, then call again with confirm_public set to true.');
     }
-    return { made_public: madePublic, made_shared: madeShared, made_private: madePrivate };
+    const narrowed = madePrivate.length > 0 || madeShared.some((p) => tierFor(before, `${p}index.html`) === 'public');
+    return { made_public: madePublic, made_shared: madeShared, made_private: madePrivate, narrowed };
   }
 
   // The public and shared URLs, and a reminder when access was narrowed, since
   // the edge can take up to a minute everywhere (R40).
   #accessResult(site: Site, change: AccessChange) {
     const { public: open, shared } = regions(site.rules ?? []);
-    const narrowed = change.made_private.length || change.made_shared.length;
+    const { narrowed, ...made } = change;
     return {
-      ...change,
+      ...made,
       public_urls: open.map((p) => this.#url(site) + p.slice(1)),
       ...(shared.length ? { shared_urls: shared.map((p) => this.#url(site) + p.slice(1)) } : {}),
       ...(narrowed ? { note: 'Paths made private or shared can stay open as before at some edge locations for up to a minute.' } : {}),
