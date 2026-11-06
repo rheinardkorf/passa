@@ -174,7 +174,7 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + 'On a Markdown site, the pages are rendered again with the new rules in the same change, so lists, tags and the feed never name a page the rules make private. '
       + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
     share: `Share a site with someone by email. They can then open its shared paths, after signing in with that email by magic link; never its private ones. `
-      + 'If path (default /) is private, it becomes shared; paths already shared or public stay as they are. Everyone the site is shared with sees every shared path. '
+      + 'If path (default /) is private, it becomes shared; paths already shared or public stay as they are. Everyone the site is shared with sees every shared path, not only the one passed: also_opens lists the others, which you should tell the person about. '
       + 'They get an invite with your email and the address, never the site\'s title; sharing again with the same email resends it, at most once an hour. '
       + `Before sharing, read the email back to the person: confirm_share must be true. A site can be shared with ${limits.sharesPerSite} emails, and ${rateLimits.invitesPerDay} invites can be sent a day. `
       + 'Pass expires_at for a share that stops working at a set time.',

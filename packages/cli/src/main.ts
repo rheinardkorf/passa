@@ -423,6 +423,7 @@ async function shareCommand(args: string[]) {
   if (made.length) out(`  made shared: ${made.join(', ')}`);
   for (const u of Array.isArray(r.shared_urls) ? (r.shared_urls as string[]) : []) out(`  they can open ${u}`);
   out(r.invite_sent ? '  invite sent' : `  ${String(r.invite_note ?? 'no invite sent')}`);
+  if (typeof r.share_note === 'string') out(`  note: ${r.share_note}`);
   notes(r);
   if (target.folder && target.link && typeof r.current_version === 'string') writeLinkVersion(target, r.current_version);
   return 0;

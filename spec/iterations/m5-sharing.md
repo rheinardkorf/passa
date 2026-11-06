@@ -46,7 +46,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 
 ### Sharing
 
-- **R128** `share(site_id, email, path?, expires_at?)` shares a site with an email. It gives the email the site's `shared` tier, and, when `path` (default `/`) is private, makes it `shared` in the site's rules; a path that's already shared or public is left as it is. Sharing never makes anything public, so it never needs `confirm_public`.
+- **R128** `share(site_id, email, path?, expires_at?)` shares a site with an email. It gives the email the site's `shared` tier, and, when `path` (default `/`) is private, makes it `shared` in the site's rules; a path that's already shared or public is left as it is. Sharing never makes anything public, so it never needs `confirm_public`. Since a share opens every shared path, the result lists the site's other shared paths (`also_opens`), including a shared folder above `path`, so the person isn't surprised by what else the email can open.
 - **R129** `share` needs `confirm_share: true`: an agent must read the email back to the person first, since a typo shares private pages with a stranger. Without it, the tool refuses with the email to read back. The CLI asks in the terminal, or takes `--yes`.
 - **R130** Sharing sends the email an invite from the deployment's sender: who shared it (the owner's email) and the site's address. It never contains the site's title, a page title or a sign-in token. Sharing again with the same email sends it again, at most once an hour per email and site.
 - **R131** `unshare(site_id, email)` removes the share and bumps the site's access version, so every cookie for the site re-checks through `auth.`: viewers still shared with get a new cookie with no email, and the unshared one is refused. Unsharing doesn't change the rules: the paths stay `shared`, for whoever else has the site.
@@ -106,7 +106,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 ## Decisions
 
 1. **Sharing only.** Member self-sign-up needs a Join flow and abuse protection (CAPTCHA, WAF), and isn't needed yet.
-2. **One `shared` tier per site, not per-person paths.** Simple to reason about and to show in `list_access`; different paths for different people can come later as named tiers.
+2. **One `shared` tier per site, not per-person paths.** Simple to reason about and to show in `list_access`; different paths for different people can come later as named tiers. `share` says what else a share opens (R128), since `path` reads as if it scoped the person to it. Membership tiers (later) bring several tiers per site, and the same warning then applies per tier.
 3. **`share` makes the path shared when it's private,** so "share this with Sam" works in one step, rather than needing a rule change first.
 4. **Invites always go,** with no option to skip: the recipient needs the address, and a silent share is easy to forget.
 5. **SES and SMTP now, behind an interface.** SMTP covers almost any provider and the self-hosted target; HTTP APIs can be added the same way.

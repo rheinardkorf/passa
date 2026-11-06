@@ -34,7 +34,7 @@ Before anything is shared, the email is read back to you: an agent asks you to c
 | `shared` | You, and everyone the site is shared with, after signing in |
 | `private` | Only you |
 
-A site has one shared tier, so everyone you share it with sees every shared path. To share different things with different people, use different sites.
+A site has one shared tier, so everyone you share it with sees every shared path, not only the one you named. Sharing `/reports/` with Kim on a site whose `/plans/` is shared with Sam lets each of them open both. When that's the case, Passa says so as you share ("kim@example.com can also open …/plans/"). To share different things with different people, use different sites.
 
 You can set it directly, too: `passa access my-site --rule /plans/=shared`, or `--shared` for the whole site. Switching between private and shared needs no confirmation; making anything public still does.
 

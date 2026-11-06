@@ -828,10 +828,17 @@ export class Publisher {
     const rendered = rules === before ? undefined : await this.#saveRules(caller, site, rules, false);
     const updated = (await this.#sync(site.id)) ?? site;
     if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(updated) + input.path.slice(1), ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}) }));
+    // A share opens every shared path, not only this one (decision 2): say
+    // which others, including a shared folder above it.
+    const also = regions(updated.rules ?? []).shared.filter((p) => p !== input.path).map((p) => this.#url(updated) + p.slice(1));
     return {
       ...this.#summary(updated),
       ...this.#accessResult(updated, change),
       share: shareOf(grant),
+      ...(also.length ? {
+        also_opens: also,
+        share_note: `Everyone this site is shared with can open all its shared paths, so ${email} can also open ${also.join(', ')}. To share only ${input.path} with them, use a separate site.`,
+      } : {}),
       invite_sent: resend,
       ...(resend ? {} : { invite_note: 'An invite went to this email less than an hour ago, so another wasn\'t sent.' }),
       ...(rendered ?? {}),

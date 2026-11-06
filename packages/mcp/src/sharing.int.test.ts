@@ -74,6 +74,20 @@ describe('share (R128–R130)', () => {
     }
   });
 
+  it('says which other shared paths a share opens, including a shared folder above it', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Two audiences', files: page('x') })).json();
+    const first = (await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
+    expect(first.also_opens).toBeUndefined();
+    const second = (await call('share', { site_id: site.site_id, email: 'kim@example.com', path: '/reports/', confirm_share: true })).json();
+    expect(second.also_opens).toEqual([`${site.url}plans/`]);
+    expect(second.share_note).toContain('kim@example.com can also open');
+
+    const whole = (await call('publish', { title: 'All shared', files: page('x'), rules: [{ path: '/', tier: 'shared' }] })).json();
+    const under = (await call('share', { site_id: whole.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
+    expect(under).toMatchObject({ made_shared: [], also_opens: [whole.url] });
+  });
+
   it('leaves shared and public paths as they are, and never needs confirm_public', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Open', files: page('x'), rules: [{ path: '/', tier: 'public' }], confirm_public: true })).json();
