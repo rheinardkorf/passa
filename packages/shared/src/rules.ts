@@ -2,13 +2,33 @@
 // prefix and a tier; the longest matching prefix decides, and a path no rule
 // covers is private. Rules are matched against the path the edge serves, after
 // index.html is added.
+import { createHash } from 'node:crypto';
 
-// shared (M5): the owner and everyone the site is shared with.
+// shared (M5): the owner, and the people each shared path was shared with.
 export type Tier = 'private' | 'public' | 'shared';
 export type Rule = { path: string; tier: Tier };
 
-// The edge form: [prefix, tier] pairs, longest first. p: public, s: shared, x: private.
-export type EdgeRule = [string, 'p' | 's' | 'x'];
+// The edge form: [prefix, tier] pairs, longest first. p: public, s: shared, x:
+// private. A shared rule carries its ID, which a viewer's cookie lists when
+// they may open it (M5).
+export type EdgeRule = [string, 'p' | 'x'] | [string, 's', string];
+
+// A shared rule's ID: short, stable while the rule's path is, and the same
+// wherever it's computed. A collision within one site's 20 rules is a 1 in
+// 4 billion chance, and would only open a shared path to someone already
+// shared another.
+export const ruleId = (path: string): string => createHash('sha256').update(path).digest('hex').slice(0, 8);
+
+// The shared rules a viewer may open: those at or under a path they were
+// shared (a share of / opens every shared rule).
+export function sharedRulesFor(rules: Rule[], grantPaths: string[]): Rule[] {
+  return rules.filter((r) => r.tier === 'shared' && grantPaths.some((g) => r.path.startsWith(g)));
+}
+
+// The rule that decides a served path, if any.
+export function ruleFor(rules: Rule[], servedPath: string): Rule | undefined {
+  return [...rules].sort(byLength).find((r) => servedPath.startsWith(r.path));
+}
 
 export const MAX_RULES = 20;
 export const MAX_RULE_PATH = 200;
@@ -46,7 +66,7 @@ export function checkRules(rules: Rule[]): string[] {
 // edge: without a public or shared rule, everything is private anyway.
 export function edgeRules(rules: Rule[]): EdgeRule[] {
   if (!rules.some((r) => r.tier !== 'private')) return [];
-  return [...rules].sort(byLength).map((r) => [r.path, r.tier === 'public' ? 'p' : r.tier === 'shared' ? 's' : 'x']);
+  return [...rules].sort(byLength).map((r): EdgeRule => (r.tier === 'shared' ? [r.path, 's', ruleId(r.path)] : [r.path, r.tier === 'public' ? 'p' : 'x']));
 }
 
 // The tier for a served path, as the edge decides it.

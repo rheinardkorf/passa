@@ -76,13 +76,20 @@ const CARD_FORMAT = 'passa-card-1';
 // The served name of a card: _card-<hash>.png in its page's folder.
 export const CARD_FILE = /^_card-([0-9a-f]{20})\.png$/;
 
-// The tier for a served path: the longest matching rule, else private (as shared/rules.ts).
-const tierFor = (rules: Rule[], servedPath: string) =>
-  [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => servedPath.startsWith(r.path))?.tier ?? 'private';
+// The tier for a served path: the longest matching rule, else private (as
+// shared/rules.ts). Each shared rule is its own audience (M5): people are
+// shared paths, not the whole tier, so a shared page's tier names its rule.
+const tierFor = (rules: Rule[], servedPath: string) => {
+  const rule = [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => servedPath.startsWith(r.path));
+  return !rule ? 'private' : rule.tier === 'shared' ? `shared:${rule.path}` : rule.tier;
+};
+// A tier as people read it.
+const shown = (tier: string) => (tier.startsWith('shared:') ? 'shared' : tier);
 
 // Who sees what, the one rule for lists, backlinks and tag pages (R82): a page's
 // visitors see public pages and pages of the page's own tier; owner-only
-// (private) pages see everything. No other tier includes another.
+// (private) pages see everything. No other tier includes another, so a shared
+// page lists only pages under its own rule, which whoever can open it can open.
 const sees = (viewerTier: string, item: { tier: string }) => viewerTier === 'private' || item.tier === 'public' || item.tier === viewerTier;
 
 type FrontMatter = Record<string, unknown>;
@@ -246,15 +253,15 @@ export function render(input: RenderInput): RenderResult {
   for (const p of pages) {
     const said = typeof p.data.access === 'string' ? p.data.access.toLowerCase() : undefined;
     if (said === 'private' && p.tier === 'public') problem('access-private-made-public', p.source, `${p.source} says access: private, but the site's rules make ${p.url} public`);
-    if (said === 'private' && p.tier === 'shared') problem('access-private-made-shared', p.source, `${p.source} says access: private, but the site's rules make ${p.url} shared, so everyone the site is shared with can open it`);
+    if (said === 'private' && p.tier.startsWith('shared:')) problem('access-private-made-shared', p.source, `${p.source} says access: private, but the site's rules make ${p.url} shared, so everyone the site is shared with can open it`);
     if (said === 'public' && p.tier !== 'public') keptPrivate.push(p);
   }
   const [only] = keptPrivate;
-  if (only && keptPrivate.length === 1) problem('access-public-kept-private', only.source, `${only.source} says access: public, but the site's rules keep ${only.url} ${only.tier}`);
+  if (only && keptPrivate.length === 1) problem('access-public-kept-private', only.source, `${only.source} says access: public, but the site's rules keep ${only.url} ${shown(only.tier)}`);
   else if (keptPrivate.length > 1) {
     const named = keptPrivate.slice(0, 5).map((p) => p.source).join(', ');
     const more = keptPrivate.length > 5 ? ` and ${keptPrivate.length - 5} more` : '';
-    const tiers = [...new Set(keptPrivate.map((p) => p.tier))];
+    const tiers = [...new Set(keptPrivate.map((p) => shown(p.tier)))];
     problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them ${tiers.length === 1 ? tiers[0] : 'private or shared'} (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
   }
 
@@ -295,7 +302,7 @@ export function render(input: RenderInput): RenderResult {
   // reported once for the site (M5 R137).
   const hidden = pages.flatMap((p) => [...p.state.links].flatMap((target) => {
     const to = bySource.get(target);
-    return to && !sees(p.tier, to) ? [`${p.source} → ${to.source} (${to.tier})`] : [];
+    return to && !sees(p.tier, to) ? [`${p.source} → ${to.source} (${shown(to.tier)})`] : [];
   }));
   if (hidden.length) {
     const more = hidden.length > 5 ? ` and ${hidden.length - 5} more` : '';
@@ -567,7 +574,7 @@ export function render(input: RenderInput): RenderResult {
           self.socialImage = view.socialImage = absolute(`${p.url}_card-${card.hash}.png`);
         }
       }
-      out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: p.tier });
+      out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: shown(p.tier) });
     } catch (err) {
       problem('template', p.source, `${p.source ?? p.file}: layout ${layoutName} failed (${firstLine(err)})`);
     }

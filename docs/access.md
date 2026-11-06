@@ -15,7 +15,7 @@ A site's access is a list of rules. Each rule is a path — `/` for the whole si
 | Tier | Who can open it |
 | --- | --- |
 | `public` | Anyone with the link, without signing in |
-| `shared` | You, and the people the site is shared with, after signing in (see [[Sharing]]) |
+| `shared` | You, and the people it was shared with, after signing in (see [[Sharing]]) |
 | `private` | Only you |
 
 The longest matching rule decides, and anything no rule covers is private. So:
@@ -35,7 +35,7 @@ Passa refuses any change that would make something public unless the request say
 
 ## Markdown sites and private pages
 
-On a Markdown site, the rules decide which pages are public, and the pages are rendered again whenever the rules change. Lists of pages, tag pages and the feed only ever name pages the visitor can see, so a public page never leaks the title of a private one, and a shared page shows only shared and public pages. The feed lists public pages only.
+On a Markdown site, the rules decide which pages are public, and the pages are rendered again whenever the rules change. Lists of pages, tag pages and the feed only ever name pages the visitor can see, so a public page never leaks the title of a private one, and a shared page lists only public pages and pages in its own shared folder. The feed lists public pages only.
 
 Front matter can't make a page public. A page marked `access: private` that a rule would make public is refused until you fix one or the other, or confirm it.
 

@@ -222,6 +222,35 @@ describe('sharing (M5)', () => {
     expect(after.status).toBe(403);
   });
 
+  it('shows each person only the paths shared with them (proposals for different clients)', async () => {
+    const file = (path: string, body: string) => ({ path, content: new TextEncoder().encode(`<h1>${body}</h1>`) });
+    const site = await publisher.publish(alice, { title: 'Proposals', content: { files: [...page('<h1>Home</h1>'), file('proposals/acme/index.html', 'Acme'), file('proposals/globex/index.html', 'Globex')] } });
+    await publisher.share(alice, { siteId: site.site_id, email: 'acme@example.com', path: '/proposals/acme/', confirmShare: true });
+    await publisher.share(alice, { siteId: site.site_id, email: 'globex@example.com', path: '/proposals/globex/', confirmShare: true });
+    await publisher.share(alice, { siteId: site.site_id, email: 'partner@example.com', path: '/proposals/', confirmShare: true });
+
+    const signedIn = async (email: string, path: string) => {
+      const browser = new Browser(port);
+      await browser.follow(`${site.url}${path.slice(1)}`);
+      await browser.open(`http://localhost:${port}/signin`, { email, site: site.site_id, path });
+      const landed = await openLink(browser, email);
+      return { browser, landed };
+    };
+    const acme = await signedIn('acme@example.com', '/proposals/acme/');
+    expect(acme.landed.body).toContain('<h1>Acme</h1>');
+    expect((await acme.browser.follow(`${site.url}proposals/globex/`)).status).toBe(403);
+    expect((await acme.browser.follow(site.url)).status).toBe(403);
+
+    const globex = await signedIn('globex@example.com', '/proposals/globex/');
+    expect(globex.landed.body).toContain('<h1>Globex</h1>');
+    expect((await globex.browser.follow(`${site.url}proposals/acme/`)).status).toBe(403);
+
+    // A share of the folder opens both shared folders under it.
+    const partner = await signedIn('partner@example.com', '/proposals/acme/');
+    expect(partner.landed.body).toContain('<h1>Acme</h1>');
+    expect((await partner.browser.follow(`${site.url}proposals/globex/`)).body).toContain('<h1>Globex</h1>');
+  });
+
   it('sends no sign-in link to an email a site isn\'t shared with, answering the same (R135)', async () => {
     const site = await publisher.publish(alice, { title: 'Not shared', content: { files: page('x') } });
     const browser = new Browser(port);

@@ -68,10 +68,11 @@ function sign(crypto, key, purpose, fields) {
   return crypto.createHmac('sha256', key).update(purpose + '.' + fields.join('.')).digest('hex');
 }
 
-// Parses "<kid>.<site-id>.<access-version>.<expiry>.<signature>".
+// Parses "<kid>.<site-id>.<access-version>.<expiry>.<tiers>.<signature>".
+// tiers: o (the owner), or s-<id>-… (the shared rules a viewer may open).
 function parseSigned(value) {
   const parts = typeof value === 'string' ? value.split('.') : [];
-  if (parts.length !== 6 || !/^[A-Za-z0-9_-]{1,32}$/.test(parts[0]) || !/^\d{1,12}$/.test(parts[2]) || !/^\d{1,12}$/.test(parts[3]) || !/^[os]{1,4}$/.test(parts[4])) return null;
+  if (parts.length !== 6 || !/^[A-Za-z0-9_-]{1,32}$/.test(parts[0]) || !/^\d{1,12}$/.test(parts[2]) || !/^\d{1,12}$/.test(parts[3]) || !/^(o|s(-[0-9a-f]{8}){1,20})$/.test(parts[4])) return null;
   return { kid: parts[0], site: parts[1], v: Number(parts[2]), exp: Number(parts[3]), tiers: parts[4], sig: parts[5] };
 }
 
@@ -112,20 +113,25 @@ function indexPath(path) {
   return last.indexOf('.') === -1 ? path + '/index.html' : path;
 }
 
-// rules: the record's [prefix, tier] pairs, longest first, so the first match
-// decides; "p" is public. Anything unmatched, or malformed, is private.
-function tierOf(rules, served) {
-  if (!Array.isArray(rules)) return 'x';
+// rules: the record's [prefix, tier, id] entries, longest first, so the first
+// match decides; "p" is public, "s" shared (with its rule ID). Anything
+// unmatched, or malformed, is private: [tier, id].
+function ruleOf(rules, served) {
+  if (!Array.isArray(rules)) return ['x', ''];
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i];
-    if (Array.isArray(rule) && typeof rule[0] === 'string' && served.indexOf(rule[0]) === 0) return rule[1] === 'p' || rule[1] === 's' ? rule[1] : 'x';
+    if (Array.isArray(rule) && typeof rule[0] === 'string' && served.indexOf(rule[0]) === 0) {
+      if (rule[1] === 's' && typeof rule[2] === 'string' && /^[0-9a-f]{8}$/.test(rule[2])) return ['s', rule[2]];
+      return [rule[1] === 'p' ? 'p' : 'x', ''];
+    }
   }
-  return 'x';
+  return ['x', ''];
 }
 
-// Whether a cookie's tiers open a path's tier: the owner opens everything.
-function opens(tiers, tier) {
-  return tiers.indexOf('o') >= 0 || (tier === 's' && tiers.indexOf('s') >= 0);
+// Whether a cookie's tiers open a path: the owner opens everything, and a
+// viewer the shared rules their cookie lists.
+function opens(tiers, rule) {
+  return tiers === 'o' || (rule[0] === 's' && (tiers + '-').indexOf('-' + rule[1] + '-') > 0);
 }
 
 // The tier header tells the viewer-response function (response.js) whether
@@ -202,13 +208,13 @@ async function handle(event, options) {
   // Public paths need no cookie (M2 R39). Rules match the path as served, so
   // /docs and /docs/ are both covered by /docs/.
   const served = indexPath(path);
-  const tier = record ? tierOf(record.r, served) : 'x';
-  if (tier === 'p') return serve(request, siteId, record.cur, served, true);
+  const rule = record ? ruleOf(record.r, served) : ['x', ''];
+  if (rule[0] === 'p') return serve(request, siteId, record.cur, served, true);
 
   const cookie = parseSigned(request.cookies[COOKIE] ? request.cookies[COOKIE].value : null);
   const key = cookie ? await readKey(options.kvs, cookie.kid) : null;
   const allowed = cookie && key && record && cookie.site === siteId && cookie.v === record.v && cookie.exp > now
-    && opens(cookie.tiers, tier) && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', [cookie.kid, cookie.site, cookie.v, cookie.exp, cookie.tiers]));
+    && opens(cookie.tiers, rule) && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', [cookie.kid, cookie.site, cookie.v, cookie.exp, cookie.tiers]));
 
   // A missing site, or a name no site has, looks exactly like a private one, so
   // the redirect reveals nothing (R12). auth. resolves names itself.

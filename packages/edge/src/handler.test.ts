@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, SITE_ID_PATTERN, siteCookie } from '@passa/shared';
+import { type EdgeRecord, handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, ruleId, SITE_ID_PATTERN, siteCookie, type SiteTiers, viewerTiers } from '@passa/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { functionCode, MAX_FUNCTION_BYTES, responseFunctionCode } from './build.ts';
 import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler, loadViewerResponse } from './load.ts';
@@ -38,7 +38,7 @@ function request(uri: string, extra: { host?: string; cookie?: string; query?: R
 
 const domains = { sites: 'example.com', auth: 'https://auth.example.com' };
 const run = (event: { request: EdgeRequest }) => handle(event, { kvs, crypto, now: NOW, ...domains });
-const cookie = (overrides: Partial<{ siteId: string; accessVersion: number; expires: number; key: typeof key; tiers: 'o' | 's' }> = {}) =>
+const cookie = (overrides: Partial<{ siteId: string; accessVersion: number; expires: number; key: typeof key; tiers: SiteTiers }> = {}) =>
   siteCookie({ key, tiers: 'o', siteId: SITE, accessVersion: 1, expires: now + 600, ...overrides });
 
 async function response(event: { request: EdgeRequest }): Promise<EdgeResponse> {
@@ -232,14 +232,21 @@ describe('named sites (M2 R44, R45)', () => {
 });
 
 describe('shared paths (M5 R136)', () => {
+  const PLANS = ruleId('/plans/');
+  const ACME = ruleId('/plans/acme/');
+  const rules: EdgeRecord['r'] = [['/plans/acme/', 's', ACME], ['/plans/', 's', PLANS], ['/', 'x']];
   beforeEach(async () => {
-    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/plans/', 's'], ['/', 'x']] });
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: rules });
   });
 
-  it('opens shared paths to someone the site is shared with, and nothing private', async () => {
-    const viewer = cookie({ tiers: 's' });
-    expect(await rewrite(request('/plans/', { cookie: viewer }))).toBe(`/${SITE}/${VERSION}/plans/index.html`);
-    expect((await response(request('/', { cookie: viewer }))).headers.location?.value).toBe(signinFor('/'));
+  it('opens the shared rules a viewer\'s cookie lists, and nothing else that isn\'t public', async () => {
+    const acmeOnly = cookie({ tiers: viewerTiers([ACME]) });
+    expect(await rewrite(request('/plans/acme/', { cookie: acmeOnly }))).toBe(`/${SITE}/${VERSION}/plans/acme/index.html`);
+    expect((await response(request('/plans/', { cookie: acmeOnly }))).headers.location?.value).toBe(signinFor('/plans/'));
+    expect((await response(request('/', { cookie: acmeOnly }))).headers.location?.value).toBe(signinFor('/'));
+    const both = cookie({ tiers: viewerTiers([PLANS, ACME]) });
+    expect(await rewrite(request('/plans/', { cookie: both }))).toBe(`/${SITE}/${VERSION}/plans/index.html`);
+    expect(await rewrite(request('/plans/acme/', { cookie: both }))).toBe(`/${SITE}/${VERSION}/plans/acme/index.html`);
   });
 
   it('opens everything to the owner, and shared paths to no one without a cookie', async () => {
@@ -248,19 +255,26 @@ describe('shared paths (M5 R136)', () => {
     expect((await response(request('/plans/'))).headers.location?.value).toBe(signinFor('/plans/'));
   });
 
-  it('refuses a cookie whose tiers were changed, since the signature covers them', async () => {
-    const forged = cookie({ tiers: 's' }).replace('.s.', '.o.');
-    expect((await response(request('/', { cookie: forged }))).statusCode).toBe(302);
+  it('refuses a cookie whose rules were changed, since the signature covers them', async () => {
+    const forged = cookie({ tiers: viewerTiers([ACME]) }).replace(`.s-${ACME}.`, `.s-${PLANS}.`);
+    expect((await response(request('/plans/', { cookie: forged }))).statusCode).toBe(302);
+    expect((await response(request('/', { cookie: cookie({ tiers: viewerTiers([ACME]) }).replace(`.s-${ACME}.`, '.o.') }))).statusCode).toBe(302);
   });
 
-  it('hands sign-in back with the viewer\'s tiers, and an old access version stops working', async () => {
-    const url = new URL(handoffUrl({ key, tiers: 's', siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/plans/', cookieLifetime: 3600, now: NOW }));
+  it('treats a shared rule without an ID as private', async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/plans/', 's'] as unknown as EdgeRecord['r'][number]] });
+    expect((await response(request('/plans/', { cookie: cookie({ tiers: viewerTiers([PLANS]) }) }))).statusCode).toBe(302);
+  });
+
+  it('hands sign-in back with the viewer\'s rules, and an old access version stops working', async () => {
+    const tiers = viewerTiers([ACME]);
+    const url = new URL(handoffUrl({ key, tiers, siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/plans/acme/', cookieLifetime: 3600, now: NOW }));
     const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
     const r = await response(request(url.pathname, { query }));
-    expect(r.cookies?.['__Host-passa']?.value).toBe(cookie({ tiers: 's', expires: now + 3600 }));
+    expect(r.cookies?.['__Host-passa']?.value).toBe(cookie({ tiers, expires: now + 3600 }));
     // Unsharing bumps the access version (R131): the viewer's cookie stops opening anything.
-    await kvs.put(SITE, { cur: VERSION, v: 2, r: [['/plans/', 's'], ['/', 'x']] });
-    expect((await response(request('/plans/', { cookie: cookie({ tiers: 's' }) }))).statusCode).toBe(302);
+    await kvs.put(SITE, { cur: VERSION, v: 2, r: rules });
+    expect((await response(request('/plans/acme/', { cookie: cookie({ tiers }) }))).statusCode).toBe(302);
   });
 });
 

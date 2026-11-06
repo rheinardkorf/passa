@@ -125,9 +125,12 @@ export class TooManyShares extends Error {}
 
 // A site shared with an email (M5 R128): it gives that email the site's tier
 // (shared), until expiresAt if set. invitedAt: when the last invite went (R130).
+// One path of a site shared with one email (M5): it opens the site's shared
+// rules at or under that path.
 export type Grant = {
   siteId: string;
   email: string;
+  path: string;
   tier: 'shared';
   source: 'share';
   createdAt: string;
@@ -145,8 +148,10 @@ const purgeKey = (siteId: string) => ({ pk: `PURGE#${siteId}`, sk: 'META' });
 const nameKey = (name: string) => ({ pk: `NAME#${name}`, sk: 'META' });
 // Every custom domain is also listed under one index key, for admins (M4 R116).
 const domainKey = (domain: string) => ({ pk: `DOMAIN#${domain}`, sk: 'META' });
-// A share sits with its site, so the site's shares are one query (M5 R132).
-const grantKey = (siteId: string, email: string) => ({ pk: `SITE#${siteId}`, sk: `GRANT#${email}` });
+// A share sits with its site, so the site's shares are one query (M5 R132),
+// and one email's are a prefix of it. Emails with # are refused, and paths
+// start with /, so GRANT#<email>#/ never matches another email's shares.
+const grantKey = (siteId: string, email: string, path: string) => ({ pk: `SITE#${siteId}`, sk: `GRANT#${email}#${path}` });
 // One per name a site has claimed, so a purge can find its current and held names.
 const siteNameKey = (siteId: string, name: string) => ({ pk: `SITE#${siteId}`, sk: `NAME#${name}` });
 const tokenKey = (hash: string) => ({ pk: `TOKEN#${hash}`, sk: 'META' });
@@ -641,32 +646,49 @@ export class Store {
   // Shares a site with an email, or updates the share (M5 R128, R133). Refused
   // when the site already has max shares and this email isn't one of them.
   async putGrant(grant: Grant, max: number): Promise<void> {
-    if (!(await this.getGrant(grant.siteId, grant.email)) && (await this.listGrants(grant.siteId)).length >= max) throw new TooManyShares(grant.siteId);
+    if (grant.email.includes('#')) throw new Error('emails with # can\'t be shared with');
+    if (!(await this.getGrant(grant.siteId, grant.email, grant.path)) && (await this.listGrants(grant.siteId)).length >= max) throw new TooManyShares(grant.siteId);
     await this.#db.send(new PutCommand({
       TableName: this.#table,
-      Item: { ...grantKey(grant.siteId, grant.email), ...grant, ...(grant.expiresAt ? { ttl: epochSeconds(grant.expiresAt) } : {}) },
+      Item: { ...grantKey(grant.siteId, grant.email, grant.path), ...grant, ...(grant.expiresAt ? { ttl: epochSeconds(grant.expiresAt) } : {}) },
     }));
   }
 
-  async getGrant(siteId: string, email: string): Promise<Grant | undefined> {
-    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: grantKey(siteId, email), ConsistentRead: true }));
+  async getGrant(siteId: string, email: string, path: string): Promise<Grant | undefined> {
+    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: grantKey(siteId, email, path), ConsistentRead: true }));
     return entity<Grant>(Item);
   }
 
-  async listGrants(siteId: string): Promise<Grant[]> {
+  async #queryGrants(siteId: string, prefix: string): Promise<Grant[]> {
     const { Items } = await this.#db.send(new QueryCommand({
       TableName: this.#table,
       KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
-      ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': 'GRANT#' },
+      ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': prefix },
       ConsistentRead: true,
     }));
     return (Items ?? []).map((item) => strip<Grant>(item));
   }
 
-  // Removes a share; true when there was one (M5 R131).
-  async deleteGrant(siteId: string, email: string): Promise<boolean> {
-    const { Attributes } = await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: grantKey(siteId, email), ReturnValues: 'ALL_OLD' }));
-    return !!Attributes;
+  // Every share of a site; at most limits.sharesPerSite, so one page.
+  listGrants(siteId: string): Promise<Grant[]> {
+    return this.#queryGrants(siteId, 'GRANT#');
+  }
+
+  // The paths of a site shared with one email.
+  grantsFor(siteId: string, email: string): Promise<Grant[]> {
+    return email.includes('#') ? Promise.resolve([]) : this.#queryGrants(siteId, `GRANT#${email}#/`);
+  }
+
+  // Removes one shared path, or with no path every path shared with the
+  // email; how many were removed (M5 R131).
+  async deleteGrants(siteId: string, email: string, path?: string): Promise<number> {
+    const paths = path ? [path] : (await this.grantsFor(siteId, email)).map((g) => g.path);
+    let removed = 0;
+    for (const p of paths) {
+      const { Attributes } = await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: grantKey(siteId, email, p), ReturnValues: 'ALL_OLD' }));
+      if (Attributes) removed++;
+    }
+    return removed;
   }
 
   // Who may view the site has changed (an unshare, an expiry): every cookie

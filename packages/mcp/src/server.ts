@@ -94,11 +94,15 @@ const schemas = {
   share: z.strictObject({
     site_id: siteId,
     email: z.email().max(254).describe('The email to share with, exactly as the person gave it'),
-    path: z.string().max(MAX_RULE_PATH).regex(/^\/(?:[^/]+\/)*$/).default('/').describe('/ or a folder ending in /: made shared if it\'s private. Paths already shared or public stay as they are'),
+    path: z.string().max(MAX_RULE_PATH).regex(/^\/(?:[^/]+\/)*$/).default('/').describe('/ or a folder ending in /: what the email may open, with shared folders under it. It gets a shared rule of its own unless it\'s public'),
     expires_at: z.iso.datetime({ offset: true }).optional().describe('When the share stops working: at least an hour and at most a year ahead. Without it, it lasts until unshared'),
     confirm_share: z.boolean().default(false).describe('Must be true. Read the email back to the person first, since a typo shares private pages with a stranger'),
   }),
-  unshare: z.strictObject({ site_id: siteId, email: z.email().max(254) }),
+  unshare: z.strictObject({
+    site_id: siteId,
+    email: z.email().max(254),
+    path: z.string().max(MAX_RULE_PATH).optional().describe('One shared path to take away; without it, every path shared with the email'),
+  }),
   list_access: z.strictObject({ site_id: siteId }),
   set_name: z.strictObject({
     site_id: siteId,
@@ -173,13 +177,13 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + 'Changes take effect within seconds, and everywhere within about a minute. '
       + 'On a Markdown site, the pages are rendered again with the new rules in the same change, so lists, tags and the feed never name a page the rules make private. '
       + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
-    share: `Share a site with someone by email. They can then open its shared paths, after signing in with that email by magic link; never its private ones. `
-      + 'If path (default /) is private, it becomes shared; paths already shared or public stay as they are. Everyone the site is shared with sees every shared path, not only the one passed: also_opens lists the others, which you should tell the person about. '
-      + 'They get an invite with your email and the address, never the site\'s title; sharing again with the same email resends it, at most once an hour. '
+    share: `Share part of a site with someone by email, such as one client's proposal: they can then open path (default /, the whole site) after signing in with that email by magic link, and nothing else that isn't public. `
+      + 'The path gets a shared rule of its own, so sharing /proposals/acme/ with one person and /proposals/globex/ with another keeps each from the other. Shared folders under the path open with it (also_opens lists them; tell the person). A public path stays public. '
+      + 'They get an invite with your email and the address, never the site\'s title; sharing the same path with the same email again resends it, at most once an hour. '
       + `Before sharing, read the email back to the person: confirm_share must be true. A site can be shared with ${limits.sharesPerSite} emails, and ${rateLimits.invitesPerDay} invites can be sent a day. `
       + 'Pass expires_at for a share that stops working at a set time.',
-    unshare: 'Stop sharing a site with an email. Their next request is refused, while everyone else the site is shared with keeps access. The rules don\'t change: shared paths stay shared.',
-    list_access: 'List who can open a site: its rules, its public and shared URLs, and the emails it\'s shared with, with when each was shared, when it expires and when the invite was sent.',
+    unshare: 'Stop sharing a path of a site with an email, or with no path, everything shared with them. Their next request is refused, while everyone else keeps their access. The rules don\'t change.',
+    list_access: 'List who can open a site: its rules, its public and shared URLs, and its shares: each email and path, when it was shared, when it expires and when the invite was sent.',
     get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. On a Markdown site, sources have role source, and pages made from them have role rendered and rendered_from; _passa/access.yml is a read-only copy of the rules, for folders taken out of Passa. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
     find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
@@ -286,12 +290,12 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
     const r = await publisher.share(caller, {
       siteId: i.site_id, email: i.email, path: i.path, confirmShare: i.confirm_share, ...(i.expires_at ? { expiresAt: i.expires_at } : {}),
     });
-    return { result: r, siteId: r.site_id, ...accessDetail(r, `shared with ${r.share.email}${r.invite_sent ? ', invited' : ''}`) };
+    return { result: r, siteId: r.site_id, ...accessDetail(r, `shared ${r.share.path} with ${r.share.email}${r.invite_sent ? ', invited' : ''}`) };
   });
 
   tool('unshare', describe.unshare, { destructiveHint: true, idempotentHint: true }, schemas.unshare, async (i) => {
-    const r = await publisher.unshare(caller, { siteId: i.site_id, email: i.email });
-    return { result: r, siteId: r.site_id, detail: `unshared with ${r.email}` };
+    const r = await publisher.unshare(caller, { siteId: i.site_id, email: i.email, ...(i.path ? { path: i.path } : {}) });
+    return { result: r, siteId: r.site_id, detail: `unshared ${r.path ?? 'everything'} with ${r.email}` };
   });
 
   tool('list_access', describe.list_access, { readOnlyHint: true }, schemas.list_access, async (i) => ({

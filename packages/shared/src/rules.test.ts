@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, servedPath, tierFor } from './rules.ts';
+import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, ruleId, servedPath, sharedRulesFor, tierFor } from './rules.ts';
 
 const pub = (path: string): Rule => ({ path, tier: 'public' });
 const priv = (path: string): Rule => ({ path, tier: 'private' });
@@ -79,8 +79,10 @@ describe('the shared tier (M5)', () => {
   const shared = (path: string): Rule => ({ path, tier: 'shared' });
 
   it('sends shared rules to the edge as s, even with nothing public', () => {
-    expect(edgeRules([shared('/plans/')])).toEqual([['/plans/', 's']]);
-    expect(edgeRules([pub('/'), shared('/plans/'), priv('/plans/drafts/')])).toEqual([['/plans/drafts/', 'x'], ['/plans/', 's'], ['/', 'p']]);
+    expect(edgeRules([shared('/plans/')])).toEqual([['/plans/', 's', ruleId('/plans/')]]);
+    expect(edgeRules([pub('/'), shared('/plans/'), priv('/plans/drafts/')])).toEqual([['/plans/drafts/', 'x'], ['/plans/', 's', ruleId('/plans/')], ['/', 'p']]);
+    expect(ruleId('/plans/')).toMatch(/^[0-9a-f]{8}$/);
+    expect(ruleId('/plans/')).not.toBe(ruleId('/plans/acme/'));
     expect(edgeRules([priv('/a/')])).toEqual([]);
   });
 
@@ -136,5 +138,16 @@ describe('served paths', () => {
     expect(servedPath('/plans/')).toBe('/plans/index.html');
     expect(servedPath('/plans')).toBe('/plans/index.html');
     expect(servedPath('/plans/q1.pdf')).toBe('/plans/q1.pdf');
+  });
+});
+
+describe('shares by path (M5)', () => {
+  const shared = (path: string): Rule => ({ path, tier: 'shared' });
+  const rules = [pub('/'), shared('/proposals/acme/'), shared('/proposals/globex/'), shared('/plans/'), priv('/plans/hr/')];
+  it('opens the shared rules at or under each path shared', () => {
+    expect(sharedRulesFor(rules, ['/proposals/acme/']).map((r) => r.path)).toEqual(['/proposals/acme/']);
+    expect(sharedRulesFor(rules, ['/proposals/']).map((r) => r.path)).toEqual(['/proposals/acme/', '/proposals/globex/']);
+    expect(sharedRulesFor(rules, ['/']).map((r) => r.path)).toEqual(['/proposals/acme/', '/proposals/globex/', '/plans/']);
+    expect(sharedRulesFor(rules, ['/plans/acme/'])).toEqual([]);
   });
 });

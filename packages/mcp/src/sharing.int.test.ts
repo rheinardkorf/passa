@@ -5,6 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Email } from '@passa/shared';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ruleId } from '@passa/shared';
 import { expiredShares } from './purge.ts';
 import { Publisher } from './publisher.ts';
 import { createServer } from './server.ts';
@@ -61,7 +62,7 @@ describe('share (R128–R130)', () => {
     expect(r.json()).toMatchObject({ made_shared: ['/plans/'], made_public: [], invite_sent: true, access: 'mixed', share: { email: 'sam@example.com' } });
     expect(r.json().rules).toEqual([{ path: '/plans/', tier: 'shared' }]);
     expect(r.json().shared_urls).toEqual([`${site.url}plans/`]);
-    expect((await edgeRecord(site.site_id)).r).toEqual([['/plans/', 's']]);
+    expect((await edgeRecord(site.site_id)).r).toEqual([['/plans/', 's', ruleId('/plans/')]]);
 
     expect(sent).toHaveLength(1);
     const [invite] = sent;
@@ -74,25 +75,37 @@ describe('share (R128–R130)', () => {
     }
   });
 
-  it('says which other shared paths a share opens, including a shared folder above it', async () => {
+  it('gives each shared path a rule of its own, and says which shared folders under it open with it', async () => {
     const call = await as('alice');
-    const site = (await call('publish', { title: 'Two audiences', files: page('x') })).json();
-    const first = (await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
-    expect(first.also_opens).toBeUndefined();
-    const second = (await call('share', { site_id: site.site_id, email: 'kim@example.com', path: '/reports/', confirm_share: true })).json();
-    expect(second.also_opens).toEqual([`${site.url}plans/`]);
-    expect(second.share_note).toContain('kim@example.com can also open');
+    const site = (await call('publish', { title: 'Proposals', files: page('x') })).json();
+    const acme = (await call('share', { site_id: site.site_id, email: 'acme@example.com', path: '/proposals/acme/', confirm_share: true })).json();
+    expect(acme).toMatchObject({ made_shared: ['/proposals/acme/'], share: { path: '/proposals/acme/' } });
+    expect(acme.also_opens).toBeUndefined();
+    const globex = (await call('share', { site_id: site.site_id, email: 'globex@example.com', path: '/proposals/globex/', confirm_share: true })).json();
+    expect(globex.also_opens).toBeUndefined();
+    expect(globex.rules).toEqual([{ path: '/proposals/acme/', tier: 'shared' }, { path: '/proposals/globex/', tier: 'shared' }]);
 
+    const all = (await call('share', { site_id: site.site_id, email: 'partner@example.com', path: '/proposals/', confirm_share: true })).json();
+    expect(all.also_opens).toEqual([`${site.url}proposals/acme/`, `${site.url}proposals/globex/`]);
+    expect(all.share_note).toContain('partner@example.com can also open');
+  });
+
+  it('adds a rule for a path already shared through a folder above it, and leaves a public path public', async () => {
+    const call = await as('alice');
     const whole = (await call('publish', { title: 'All shared', files: page('x'), rules: [{ path: '/', tier: 'shared' }] })).json();
     const under = (await call('share', { site_id: whole.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
-    expect(under).toMatchObject({ made_shared: [], also_opens: [whole.url] });
+    expect(under.rules).toEqual([{ path: '/', tier: 'shared' }, { path: '/plans/', tier: 'shared' }]);
+    expect(under.made_shared).toEqual([]);
+    const open = (await call('publish', { title: 'Open', files: page('x'), rules: [{ path: '/', tier: 'public' }], confirm_public: true })).json();
+    const r = (await call('share', { site_id: open.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
+    expect(r).toMatchObject({ rules: [{ path: '/', tier: 'public' }], share_note: expect.stringContaining('is public') });
   });
 
   it('leaves shared and public paths as they are, and never needs confirm_public', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Open', files: page('x'), rules: [{ path: '/', tier: 'public' }], confirm_public: true })).json();
     const r = (await call('share', { site_id: site.site_id, email: 'sam@example.com', confirm_share: true })).json();
-    expect(r).toMatchObject({ made_shared: [], access: 'public', rules: [{ path: '/', tier: 'public' }] });
+    expect(r).toMatchObject({ made_shared: [], made_public: [], access: 'public', rules: [{ path: '/', tier: 'public' }] });
   });
 
   it('switches private and shared with set_access without confirm_public (R138)', async () => {
@@ -142,11 +155,11 @@ describe('share (R128–R130)', () => {
 });
 
 describe('limits (R134)', () => {
-  it('shares a site with at most sharesPerSite emails, counting a re-share once', async () => {
+  it('allows at most sharesPerSite shares a site, counting a re-share once', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Many', files: page('x') })).json();
     for (const n of [1, 2, 3]) expect((await call('share', { site_id: site.site_id, email: `p${n}@example.com`, confirm_share: true })).isError).toBe(false);
-    expect((await call('share', { site_id: site.site_id, email: 'p4@example.com', confirm_share: true })).text).toContain('shared with 3 emails, the most allowed');
+    expect((await call('share', { site_id: site.site_id, email: 'p4@example.com', confirm_share: true })).text).toContain('has 3 shares, the most allowed');
     expect((await call('share', { site_id: site.site_id, email: 'p1@example.com', confirm_share: true })).isError).toBe(false);
   });
 
@@ -166,19 +179,31 @@ describe('list_access and unshare (R131, R132)', () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Revoke', files: page('x') })).json();
     await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true });
+    await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/notes/', confirm_share: true });
     await call('share', { site_id: site.site_id, email: 'kim@example.com', path: '/plans/', confirm_share: true });
     const listed = (await call('list_access', { site_id: site.site_id })).json();
-    expect(listed.shares.map((s: { email: string }) => s.email).sort()).toEqual(['kim@example.com', 'sam@example.com']);
+    expect(listed.shares.map((s: { email: string; path: string }) => `${s.email} ${s.path}`).sort()).toEqual(['kim@example.com /plans/', 'sam@example.com /notes/', 'sam@example.com /plans/']);
     expect(listed.shares[0]).toMatchObject({ shared_at: expect.any(String), invited_at: expect.any(String) });
-    expect(listed.shared_urls).toEqual([`${site.url}plans/`]);
 
     const before = (await edgeRecord(site.site_id)).v;
-    expect((await call('unshare', { site_id: site.site_id, email: 'Sam@example.com' })).json()).toMatchObject({ unshared: true, email: 'sam@example.com' });
+    expect((await call('unshare', { site_id: site.site_id, email: 'Sam@example.com', path: '/notes/' })).json()).toMatchObject({ unshared: 1, email: 'sam@example.com', path: '/notes/' });
     expect((await edgeRecord(site.site_id)).v).toBe(before + 1);
+    expect((await call('unshare', { site_id: site.site_id, email: 'sam@example.com', path: '/notes/' })).text).toContain('/notes/ isn\'t shared with that email');
+    expect((await call('unshare', { site_id: site.site_id, email: 'kim@example.com' })).json()).toMatchObject({ unshared: 1 });
     const after = (await call('list_access', { site_id: site.site_id })).json();
-    expect(after.shares.map((s: { email: string }) => s.email)).toEqual(['kim@example.com']);
-    expect(after.rules).toEqual([{ path: '/plans/', tier: 'shared' }]);
-    expect((await call('unshare', { site_id: site.site_id, email: 'sam@example.com' })).text).toContain('isn\'t shared with that email');
+    expect(after.shares.map((s: { email: string; path: string }) => `${s.email} ${s.path}`)).toEqual(['sam@example.com /plans/']);
+    expect(after.rules).toEqual([{ path: '/plans/', tier: 'shared' }, { path: '/notes/', tier: 'shared' }]);
+    expect((await call('unshare', { site_id: site.site_id, email: 'kim@example.com' })).text).toContain('isn\'t shared with that email');
+  });
+
+  it('marks shares that open nothing once their path is made private', async () => {
+    const call = await as('alice');
+    const site = (await call('publish', { title: 'Orphan', files: page('x') })).json();
+    await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true });
+    await call('set_access', { site_id: site.site_id, rules: [] });
+    const listed = (await call('list_access', { site_id: site.site_id })).json();
+    expect(listed.shares[0]).toMatchObject({ path: '/plans/', opens_nothing: true });
+    expect(listed.note).toContain('open nothing');
   });
 
   it('leaves out expired shares', async () => {

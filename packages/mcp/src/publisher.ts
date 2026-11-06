@@ -32,6 +32,7 @@ import {
   storedPath,
   syncEdge,
   THREATS,
+  sharedRulesFor,
   tierFor,
   TooManyShares,
   type UploadSync,
@@ -113,8 +114,8 @@ export type SiteSummary = {
 export type AccessChange = { made_public: string[]; made_shared: string[]; made_private: string[] };
 
 // A share as list_access shows it (M5 R132).
-export type Share = { email: string; shared_at: string; expires_at?: string; invited_at?: string };
-const shareOf = (g: Grant): Share => ({ email: g.email, shared_at: g.createdAt, ...(g.expiresAt ? { expires_at: g.expiresAt } : {}), ...(g.invitedAt ? { invited_at: g.invitedAt } : {}) });
+export type Share = { email: string; path: string; shared_at: string; expires_at?: string; invited_at?: string };
+const shareOf = (g: Grant): Share => ({ email: g.email, path: g.path, shared_at: g.createdAt, ...(g.expiresAt ? { expires_at: g.expiresAt } : {}), ...(g.invitedAt ? { invited_at: g.invitedAt } : {}) });
 
 export type SiteFile = {
   path: string; size: number; content_type: string; sha256: string; role?: FileEntry['role']; rendered_from?: string; content?: string; download_url?: string;
@@ -777,17 +778,19 @@ export class Publisher {
     return rendered;
   }
 
-  // Shares a site with an email (M5 R128–R130, R133, R134): the email gets the
-  // site's shared tier, the path becomes shared if it was private, and an
-  // invite goes to the email, at most hourly per site and email.
+  // Shares a path of a site with an email (M5 R128–R130, R133, R134): the
+  // path gets a shared rule of its own (unless it's public), the email may
+  // open the shared rules at or under it, and an invite goes to the email, at
+  // most hourly per path.
   async share(caller: Caller, input: { siteId: string; email: string; path: string; expiresAt?: string; confirmShare: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
     const email = input.email.trim().toLowerCase();
     const owner = await this.#d.store.getUser(caller.userId);
     if (email === owner?.email) throw new ToolError('That\'s your own email: you can open every part of the site already.');
+    if (email.includes('#')) throw new ToolError('Passa can\'t share with an email that has # in it.');
     if (!input.confirmShare) {
-      throw new ToolError(`This would share the site's shared paths with ${email}, and email them an invite. Read the address back to the person exactly as written here, `
+      throw new ToolError(`This would let ${email} open ${input.path} (and shared folders under it) after signing in, and email them an invite. Read the address back to the person exactly as written here, `
         + 'since a typo shares private pages with a stranger, then call again with confirm_share set to true.');
     }
     const now = this.#now();
@@ -798,14 +801,15 @@ export class Publisher {
     const { mailer, config, store } = this.#d;
     if (!mailer) throw new ToolError('This deployment can\'t send email, so it can\'t send the invite.');
 
-    // The rules first: a path that's private becomes shared; shared or public stays.
+    // The rules first: the path gets a shared rule of its own, so only the
+    // people it's shared with open it, unless it's public already.
     const before = site.rules ?? [];
-    const rules = tierFor(before, `${input.path}index.html`) === 'private'
-      ? [...before.filter((r) => r.path !== input.path), { path: input.path, tier: 'shared' as const }]
-      : before;
+    const exact = before.find((r) => r.path === input.path);
+    const isPublic = tierFor(before, `${input.path}index.html`) === 'public';
+    const rules = isPublic || exact?.tier === 'shared' ? before : [...before.filter((r) => r.path !== input.path), { path: input.path, tier: 'shared' as const }];
     const change = this.#checkAccess(before, rules, false);
 
-    const existing = await store.getGrant(site.id, email);
+    const existing = await store.getGrant(site.id, email, input.path);
     const resend = !existing?.invitedAt || Date.parse(existing.invitedAt) <= now.getTime() - HOUR_MS;
     if (resend) {
       const dayStart = Math.floor(now.getTime() / 1000 / DAY_S) * DAY_S;
@@ -814,7 +818,7 @@ export class Publisher {
       }
     }
     const grant: Grant = {
-      siteId: site.id, email, tier: 'shared', source: 'share',
+      siteId: site.id, email, path: input.path, tier: 'shared', source: 'share',
       createdAt: existing?.createdAt ?? now.toISOString(),
       ...(input.expiresAt ? { expiresAt: new Date(input.expiresAt).toISOString() } : {}),
       ...(resend ? { invitedAt: now.toISOString() } : existing?.invitedAt ? { invitedAt: existing.invitedAt } : {}),
@@ -823,36 +827,35 @@ export class Publisher {
       await store.putGrant(grant, config.limits.sharesPerSite);
     } catch (err) {
       if (!(err instanceof TooManyShares)) throw err;
-      throw new ToolError(`This site is shared with ${config.limits.sharesPerSite} emails, the most allowed. Unshare one first.`);
+      throw new ToolError(`This site has ${config.limits.sharesPerSite} shares, the most allowed. Unshare one first.`);
     }
     const rendered = rules === before ? undefined : await this.#saveRules(caller, site, rules, false);
     const updated = (await this.#sync(site.id)) ?? site;
+    // Folders already shared under the path open with it.
+    const also = sharedRulesFor(updated.rules ?? [], [input.path]).filter((r) => r.path !== input.path).map((r) => this.#url(updated) + r.path.slice(1));
     if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(updated) + input.path.slice(1), ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}) }));
-    // A share opens every shared path, not only this one (decision 2): say
-    // which others, including a shared folder above it.
-    const also = regions(updated.rules ?? []).shared.filter((p) => p !== input.path).map((p) => this.#url(updated) + p.slice(1));
     return {
       ...this.#summary(updated),
       ...this.#accessResult(updated, change),
       share: shareOf(grant),
-      ...(also.length ? {
-        also_opens: also,
-        share_note: `Everyone this site is shared with can open all its shared paths, so ${email} can also open ${also.join(', ')}. To share only ${input.path} with them, use a separate site.`,
-      } : {}),
+      ...(also.length ? { also_opens: also, share_note: `${email} can also open ${also.join(', ')}: shared folders under ${input.path} open with it.` } : {}),
+      ...(isPublic ? { share_note: `${input.path} is public, so anyone can open it already; the share matters only if it's made shared later.` } : {}),
       invite_sent: resend,
-      ...(resend ? {} : { invite_note: 'An invite went to this email less than an hour ago, so another wasn\'t sent.' }),
+      ...(resend ? {} : { invite_note: 'An invite for this path went to this email less than an hour ago, so another wasn\'t sent.' }),
       ...(rendered ?? {}),
     };
   }
 
-  // Removes a share, and makes every cookie for the site check again, so the
-  // email's next request is refused (M5 R131). The rules stay as they are.
-  async unshare(caller: Caller, input: { siteId: string; email: string }) {
+  // Removes one shared path, or every path shared with the email, and makes
+  // every cookie for the site check again, so the email's next request is
+  // refused (M5 R131). The rules stay as they are.
+  async unshare(caller: Caller, input: { siteId: string; email: string; path?: string }) {
     const site = await this.#ownSite(caller, input.siteId);
     const email = input.email.trim().toLowerCase();
-    if (!(await this.#d.store.deleteGrant(site.id, email))) throw new ToolError('The site isn\'t shared with that email.');
+    const removed = await this.#d.store.deleteGrants(site.id, email, input.path);
+    if (!removed) throw new ToolError(input.path ? `${input.path} isn't shared with that email.` : 'The site isn\'t shared with that email.');
     await this.#revoke(site.id);
-    return { site_id: site.id, email, unshared: true };
+    return { site_id: site.id, email, ...(input.path ? { path: input.path } : {}), unshared: removed };
   }
 
   // After DynamoDB removes an expired share (M5 R133): as an unshare.
@@ -870,19 +873,22 @@ export class Publisher {
   async listAccess(caller: Caller, input: { siteId: string }) {
     const site = await this.#ownSite(caller, input.siteId);
     const now = this.#now();
+    const rules = site.rules ?? [];
     const grants = (await this.#d.store.listGrants(site.id)).filter((g) => grantIsLive(g, now));
-    const { public: open, shared } = regions(site.rules ?? []);
+    const { public: open, shared } = regions(rules);
+    const opensNothing = grants.filter((g) => !sharedRulesFor(rules, [g.path]).length);
     return {
       site_id: site.id,
       url: this.#url(site),
-      access: accessOf(site.rules ?? []),
-      rules: site.rules ?? [],
+      access: accessOf(rules),
+      rules,
       public_urls: open.map((p) => this.#url(site) + p.slice(1)),
       shared_urls: shared.map((p) => this.#url(site) + p.slice(1)),
-      shares: grants.map(shareOf),
-      ...(grants.length && !shared.length ? { note: 'No path is shared, so the people listed can\'t open anything yet. Make a path shared with set_access or share.' } : {}),
+      shares: grants.map((g) => ({ ...shareOf(g), ...(opensNothing.includes(g) ? { opens_nothing: true } : {}) })),
+      ...(opensNothing.length ? { note: 'Shares marked opens_nothing have no shared path at or under them, so they open nothing until one is made shared again.' } : {}),
     };
   }
+
 
   async delete(caller: Caller, input: { siteId: string; now: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);

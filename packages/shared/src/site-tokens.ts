@@ -12,9 +12,11 @@ export const isSitePath = (path: string): boolean => path.startsWith('/') && SIT
 export const HANDOFF_TTL_S = 60;
 
 // What a cookie lets its holder open on a site (M5 R136): o, the owner, opens
-// every path; s, someone the site is shared with, opens shared paths. Public
-// paths need no cookie at all.
-export type SiteTiers = 'o' | 's';
+// every path; s-<id>-<id>…, someone the site is shared with, opens the shared
+// rules with those IDs (ruleId). Public paths need no cookie at all.
+export type SiteTiers = 'o' | `s-${string}`;
+export const MAX_VIEWER_RULES = 20;
+export const viewerTiers = (ids: string[]): SiteTiers => `s-${ids.slice(0, MAX_VIEWER_RULES).join('-')}`;
 
 const sign = (key: SigningKey, purpose: string, fields: (string | number)[]) =>
   createHmac('sha256', key.secret).update(`${purpose}.${fields.join('.')}`).digest('hex');

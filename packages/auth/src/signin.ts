@@ -10,14 +10,17 @@ import {
   isName,
   isSiteId,
   newUserId,
+  ruleFor,
+  ruleId,
   servedPath,
+  sharedRulesFor,
   type SigningKey,
   type SiteTiers,
   type Site,
   siteDomain,
   type Store,
-  tierFor,
   type User,
+  viewerTiers,
 } from '@passa/shared';
 import type { Mailer } from './mailer.ts';
 import { magicLinkEmail, type Next, type Target } from './pages.ts';
@@ -88,12 +91,14 @@ export class SignIn {
     return site?.status === 'active' ? site : undefined;
   }
 
-  // What an email may open on a site: everything as its owner (o), or its
-  // shared paths while the site is shared with that email (s, M5 R135, R136).
+  // What an email may open on a site: everything as its owner (o), or the
+  // shared rules at or under the paths shared with it (M5 R135, R136).
   async #tiersFor(site: Site, user: { id: string; email: string } | undefined, email: string): Promise<SiteTiers | undefined> {
     if (user && site.ownerId === user.id) return 'o';
-    const grant = await this.#d.store.getGrant(site.id, email);
-    return grant && grantIsLive(grant, new Date(this.#now())) ? 's' : undefined;
+    const now = new Date(this.#now());
+    const paths = (await this.#d.store.grantsFor(site.id, email)).filter((g) => grantIsLive(g, now)).map((g) => g.path);
+    const rules = sharedRulesFor(site.rules ?? [], paths);
+    return rules.length ? viewerTiers(rules.map((r) => ruleId(r.path))) : undefined;
   }
 
   async #viewableSite(user: User, label: string): Promise<{ site: Site; tiers: SiteTiers } | undefined> {
@@ -208,9 +213,11 @@ export class SignIn {
   // URL, which sets the site cookie. Undefined when they may not view it.
   async siteRedirect(user: User, target: Target, ip: string): Promise<string | undefined> {
     const viewable = await this.#viewableSite(user, target.siteId);
-    // Someone the site is shared with is refused its private paths here: a
-    // cookie without them would only send them back (M5 R136).
-    const opens = viewable && (viewable.tiers === 'o' || tierFor(viewable.site.rules ?? [], servedPath(target.path)) !== 'private');
+    // Someone the site is shared with is refused paths not shared with them
+    // here: a cookie without them would only send them back (M5 R136).
+    const rule = viewable ? ruleFor(viewable.site.rules ?? [], servedPath(target.path)) : undefined;
+    const opens = viewable && (viewable.tiers === 'o' || rule?.tier === 'public'
+      || (rule?.tier === 'shared' && viewable.tiers.split('-').includes(ruleId(rule.path))));
     if (!viewable || !opens) {
       await this.#d.events.record({ action: 'site.view', result: 'refused', userId: user.id, siteId: target.siteId, ip });
       return undefined;

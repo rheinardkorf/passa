@@ -239,9 +239,9 @@ describe('changing sites (R106–R110)', () => {
     expect(r).toMatchObject({ made_shared: ['/plans/'], invite_sent: true, share: { email: 'sam@example.com', expires_at: '2027-01-31T23:59:59.000Z' } });
     expect(stack.sent.at(-1)?.to).toBe('sam@example.com');
     const listed = await listAccess(target, { dir });
-    expect(listed).toMatchObject({ access: 'mixed', rules: [{ path: '/plans/', tier: 'shared' }], shares: [{ email: 'sam@example.com' }] });
+    expect(listed).toMatchObject({ access: 'mixed', rules: [{ path: '/plans/', tier: 'shared' }], shares: [{ email: 'sam@example.com', path: '/plans/' }] });
 
-    expect(await unshare(target, 'sam@example.com', { dir })).toMatchObject({ unshared: true });
+    expect(await unshare(target, 'sam@example.com', { dir, path: '/plans/' })).toMatchObject({ unshared: 1, path: '/plans/' });
     expect((await listAccess(target, { dir })).shares).toEqual([]);
     expect(await setAccess(target, parseRules({ shared: true }) ?? [], { dir, ask: answering(false).ask })).toMatchObject({ access: 'shared' });
   });
