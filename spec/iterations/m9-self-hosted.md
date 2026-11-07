@@ -1,8 +1,8 @@
-# M8: Self-hosted target
+# M9: Self-hosted target
 
 | | |
 | --- | --- |
-| **Status** | Draft: approved 2026-10-31 for an earlier roadmap, and to be revised before work starts, for what M3 (Markdown, social cards), M4 (custom domains, the admin function), M5 (mail providers, sharing), M6 (membership) and M7 (fragments, the login block, HTMX at the edge) added. Its requirement numbers (R40–R66) clash with M2's and are renumbered then |
+| **Status** | Draft: approved 2026-10-31 for an earlier roadmap, and to be revised before work starts, for what M3 (Markdown, social cards), M4 (custom domains, the admin function), M5 (mail providers, sharing), M6 (membership) and M7 (fragments, the login block, HTMX at the edge) and M8 (forms, the first site API, a Lambda origin and a site data table) added. Its requirement numbers (R40–R66) clash with M2's and are renumbered then |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: a second deployment target, with new stores, packaging and a new way in from the internet |
 | **Security-relevant** | Yes: new data stores, new entry points, secrets on disk, email through SMTP, and a third party (Cloudflare) in front of everything |
