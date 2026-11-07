@@ -38,11 +38,3 @@ passa admin users enable sam@example.com
 - **`list`** shows everyone: admins, publishers and viewers, and whether they're active.
 
 Each change is recorded, with the computer it was made from. The first time, `passa admin` asks which AWS profile reaches the deployment you're signed in to (or takes `--profile`), finds the deployment's admin function in that account, and remembers both. After that, admin commands need nothing extra. When the AWS sign-in has expired, it says how to sign in again with that profile. `--server` picks another deployment, `--stage` names its admin function directly, and `--json` is for scripts.
-
-## After upgrading
-
-Passa lists users through an index that came with sharing. On a deployment from before then, run this once after upgrading, so `list` shows everyone who signed up earlier:
-
-```sh
-passa admin users reindex
-```

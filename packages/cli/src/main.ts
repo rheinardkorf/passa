@@ -65,7 +65,6 @@ Admin, with the deployment's AWS credentials (AWS_PROFILE, aws sso login), never
   passa admin users disable <email>    stop them, from their next call; admins in config, and the last
                                        active admin, can't be disabled
   passa admin users enable <email>     let them back in
-  passa admin users reindex            once, after upgrading to M5: lists users created before it
   Admin commands work on the deployment you're signed in to (or --server). The first time, they ask
   which AWS profile reaches it (or take --profile), find its admin function, and remember both.
   --stage <stage> names the function directly; --region and --json too.
@@ -491,8 +490,8 @@ async function rollbackCommand(args: string[]) {
 // passa admin domain|users …: invokes passa-<stage>-admin with AWS credentials (M4, M5).
 async function adminCommand(args: string[]) {
   const [group, action, ...rest] = args;
-  const usage = 'Usage: passa admin domain add|list|status|remove … or passa admin users add|list|disable|enable|reindex … (see passa --help)';
-  const actions: Record<string, string[]> = { domain: ['add', 'list', 'status', 'remove'], users: ['add', 'list', 'disable', 'enable', 'reindex'] };
+  const usage = 'Usage: passa admin domain add|list|status|remove … or passa admin users add|list|disable|enable … (see passa --help)';
+  const actions: Record<string, string[]> = { domain: ['add', 'list', 'status', 'remove'], users: ['add', 'list', 'disable', 'enable'] };
   if (!group || !action || !actions[group]?.includes(action)) throw new Error(usage);
   const { values, positionals } = parseArgs({
     args: rest, allowPositionals: true,
@@ -524,12 +523,6 @@ async function adminCommand(args: string[]) {
       const users = await invoke({ action: 'users.list' }) as UserReport[];
       if (values.json) return printJson(users), 0;
       for (const line of formatUsers(users)) out(line);
-      return 0;
-    }
-    if (action === 'reindex') {
-      const r = await invoke({ action: 'users.reindex' }) as { reindexed: number };
-      if (values.json) return printJson(r), 0;
-      out(r.reindexed ? `Added ${r.reindexed} user${r.reindexed === 1 ? '' : 's'} to the users index.` : 'Every user is in the users index already.');
       return 0;
     }
     const email = positionals[0];
