@@ -93,6 +93,14 @@ Put the full archive (\`pages\`, \`years\`) on the home, archive or tag pages, n
 
 To match your theme, use \`theme: 'base'\` with \`themeVariables\` (for example \`{ primaryColor, primaryTextColor, lineColor, fontFamily }\`), and pick values by \`matchMedia('(prefers-color-scheme: dark)')\`.
 
+**Fragments.** \`htmx\` is the URL of Passa's copy of HTMX when the page embeds a fragment. Include this once, near the end of \`<body>\`, and never load HTMX any other way:
+
+\`\`\`html
+{{#htmx}}<script src="{{htmx}}"></script>{{/htmx}}
+\`\`\`
+
+A page with \`fragment: true\` never uses a layout: it's its content in a \`div.passa-fragment\`, which replaces the fallback inside the \`div.passa-embed\` on the page that embeds it. The embed keeps the block's \`class\`, so style by it (\`.family-cards .passa-fragment ul\`) from the embedding page's CSS, and a fragment fits wherever it lands.
+
 ## What \`content\` contains
 
 Standard Markdown, plus:
@@ -125,6 +133,7 @@ A fenced block whose name is a widget renders through a template instead of show
 | \`gallery\` | one \`![caption](image)\` per line | \`div.w-gallery > figure > img + figcaption\` |
 | \`timeline\` | one \`when: what\` per line | \`ol.w-timeline > li > span.w-when + span.w-what\` |
 | \`mermaid\` | a Mermaid diagram | \`pre.mermaid\` (becomes an SVG in the browser; see Diagrams) |
+| \`fragment\` | \`src: [[page]]\` (a page with \`fragment: true\`), optional \`trigger\` (\`load\`, \`revealed\` or \`click\`), \`fallback\` (Markdown) and \`class\` (class names for your CSS) | \`div.passa-embed\` plus its \`class\`, holding the fallback, which becomes the fragment's \`div.passa-fragment\` for viewers who can open it (see Fragments). A theme can't replace it |
 
 **Charts** are drawn as SVG when the site is published: no script, and they work in feeds.
 - Every mark uses \`currentColor\`: set \`color\` on \`.w-chart\` for the main colour.

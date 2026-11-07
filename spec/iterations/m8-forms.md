@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Draft, 2026-11-07 |
+| **Status** | Approved 2026-11-07 (PR #60) |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: the first site API, so the first time a site's pages write data, through a new origin behind CloudFront |
 | **Security-relevant** | Yes: accepts writes from site pages, stores what viewers send, and gives owners a way to read it |
@@ -150,7 +150,7 @@ On dev, on the family site: anna answers the RSVP, comes back, sees the answer a
 
 ## Design
 
-- **Render:** the `form` fence parses and checks its YAML (R182), writes the placeholder (`<div class="w-form" hx-get="/_passa/api/forms/<id>" hx-trigger="load" hx-swap="innerHTML" data-passa-rule="…">fallback</div>`), and adds the definition to `_passa/forms.json` in the version. The edge already returns 404 for `/_passa/*`, so viewers can't fetch it. Pages with forms set `hasFragments`, so layouts load HTMX (M7).
+- **Render:** the `form` fence parses and checks its YAML (R182), writes the placeholder (`<div class="w-form" hx-get="/_passa/api/forms/<id>" hx-trigger="load" hx-swap="innerHTML" data-passa-rule="…">fallback</div>`), and adds the definition to `_passa/forms.json` in the version. The edge already returns 404 for `/_passa/*`, so viewers can't fetch it. Pages with forms get `htmx`, so layouts load HTMX (M7).
 - **The API:** a new Lambda behind a CloudFront behavior for `/_passa/api/*`, through a function URL with origin access control, never cached. It finds the site from the host and its rules and access version from the site record. It checks the cookie with the same signing keys and code as the edge (moved to `@passa/shared`), and reads the live version's `forms.json` from the versions bucket, cached briefly by version.
 - **Storage:** a separate table for site data, so it can be backed up, sized and deleted apart from Passa's own records.
   - A response is `SITE#<site>#FORM#<id>` / `RESP#<email>` for `once` and `edit` (written with a condition: absent for `once`), or `RESP#<email>#<ulid>` for `many`.

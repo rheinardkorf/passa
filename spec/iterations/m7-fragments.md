@@ -147,7 +147,14 @@ On dev: a public home page embedding a family fragment. A stranger in a private 
 
 ## Changes after approval
 
-None yet.
+From the early checks (2026-11-07, all passed in Chromium, WebKit and Firefox):
+
+- **HTMX's path** is `/_passa/htmx-<version>.min.js` (now `/_passa/htmx-4.0.0.min.js`), not `/_passa/htmx.js`: a new version gets a new name, so no browser or cache keeps an old one. It's served from the sites bucket, outside every site, uploaded at deploy. It's too big for the edge function (36.7 KB) and a KeyValueStore value, and publishers can't upload `_passa/` paths, so nobody else can replace it.
+- **The edge build minifies** its function code (esbuild, keeping `handler`). M7's edge changes would otherwise leave 239 of CloudFront's 10,240 bytes. Minified, the current code is 4,555 bytes, and gives identical answers in CloudFront's TestFunction. The tests run against the built code too.
+- **`HX-Redirect` is sent on the `204`.** HTMX 4 follows it there in all three engines.
+- **Layouts get `htmx`** (the script's URL, or null), as they get `mermaid`, rather than `hasFragments`.
+- **An embed takes `class`** (2026-11-08, user): class names added to `div.passa-embed`, for themes. Render refuses anything but plain class names. So the class stays when the fragment loads, the swap is `innerHTML`, not `outerHTML`: the fragment's `div.passa-fragment` goes inside the embed, replacing the fallback.
+- **`passa serve`** answers an HTMX request for a page it isn't showing with a `204`, as the edge does, since HTMX 4 swaps a 404 into the page.
 
 ## Done when
 
