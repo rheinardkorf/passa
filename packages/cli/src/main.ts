@@ -370,14 +370,15 @@ function notes(result: Record<string, unknown>) {
 const targetOf = (arg: string | undefined, server: string | undefined) => resolveTarget(arg, server ? { server } : {});
 
 async function publishCommand(args: string[]) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, title: { type: 'string' } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...DEPLOY_OPTIONS, title: { type: 'string' }, 'confirm-public': { type: 'boolean' } } });
   if (!positionals[0] || !values.title) throw new Error('passa publish <folder> --title <title>');
   const server = chooseServer(values.server, readCredentials());
-  const r = await publishFolder(server, positionals[0], values.title, { ask: askTerminal(false) });
+  // A site whose _site.yml declares access can be public from its first publish (M6), so this asks too.
+  const r = await publishFolder(server, positionals[0], values.title, { ask: askTerminal(false), confirmPublic: values['confirm-public'] === true });
   if (values.json) return printJson(r), 0;
-  out(`Published ${r.site_id}, private: ${r.url}`);
+  out(`Published ${r.site_id}, ${String(r.access ?? 'private')}: ${r.url}`);
   notes(r);
-  out(`The folder is linked to it: passa sync ${positionals[0]} updates it, passa access ${positionals[0]} --public makes it public.`);
+  out(`The folder is linked to it: passa sync ${positionals[0]} updates it${r.access === 'private' ? `, passa access ${positionals[0]} --public makes it public` : ''}.`);
   return 0;
 }
 
