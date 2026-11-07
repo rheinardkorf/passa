@@ -1,0 +1,159 @@
+# M6: membership
+
+| | |
+| --- | --- |
+| **Status** | Draft, for review |
+| **Owner** | Rheinard Korf (product and technical decisions) |
+| **Spec depth** | Full: named tiers on a site, a new kind of grant, access declared in a site's own files, and a change to how rules and shares are written |
+| **Security-relevant** | Yes: decides who besides the owner opens which paths, lets site files set access, and changes how shares reach paths |
+
+## Summary
+
+M5 let an owner share a path with one person. M6 adds **tiers**: named groups on a site, such as `gold` and `silver`, that rules open paths to. The owner adds people to tiers (**memberships**), and everyone in a tier opens what its rules open. Shares stay, for one person and one path, and work whatever the rules say: a course for gold and silver members can still be shared with one reviewer who isn't a member.
+
+Access moves into the site's own files: `_site.yml` sets folders and names the site's tiers, and a page's front matter can set its own. Who is in a tier is never in site files; it lives on the server.
+
+The paywall (M8) then only has to add "a purchase grants a tier", and scheduled access (M9) builds on the start and end dates every grant gains here.
+
+## Terms
+
+| Term | Meaning | Example |
+| --- | --- | --- |
+| **Rule** | A path, and who may open it | `{ path: /lessons/, access: [gold, silver] }` |
+| **Audience** | One entry in a rule's `access` list: `public`, `private`, or a tier name | `gold` |
+| **Tier** | A named membership group a site defines; names only, no people | `gold`, `silver` |
+| **Membership** | A grant: one person in one tier | sam@example.com is in `gold` |
+| **Share** | A grant: one person, one path | reviewer@example.com may open `/lessons/` |
+| **Grant** | Either kind: "this email may open something" | |
+
+The owner opens everything, whatever the rules say.
+
+## Demo
+
+A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold, silver]` and `/lessons/bonus/` to `[gold]`, and whose `/drafts/` is private; one lesson's front matter says `access: [silver]`. Published with `passa sync` and no access commands. `passa members add` puts one address in `gold` and another in `silver`, from a start date, with an end date; each gets an invite. Signed in, the gold member opens the bonus and the silver member doesn't; neither opens `/drafts/`. `/lessons/` is shared with a third address, who opens every lesson but not the bonus or the silver-only lesson, and the share's result says so. `passa access course --as <email>` shows what each person opens, and why. `passa members remove`, and that person's next request is refused.
+
+## Scope
+
+**In:**
+
+- Tiers, and rules that list them.
+- Memberships, added and removed by the owner through tools and the CLI.
+- Access declared in `_site.yml` and front matter, as the source of truth for Markdown sites.
+- Shares that reach a path whatever its rule, stopping at the next rule down.
+- Start and end dates on every grant.
+- "What can this person see?" from the CLI and a tool.
+- Moving existing rules and shares to the new form.
+
+**Out (later):**
+
+- Other ways into a tier: invite links, self sign-up, agents or scripts adding members, and the paywall (M8). Self sign-up needs abuse checks and email to strangers.
+- Tiers shared across sites: tiers and rules belong to one site.
+- A tier's default duration, and reminder emails before a grant ends.
+- Tiers that include other tiers: lists only, so `gold` doesn't include `silver` unless both are listed.
+- Previewing a site as a given person.
+
+## Requirements
+
+### Rules and tiers
+
+- **R146** A rule is a path and an `access` list of one or more audiences: `public`, `private`, or tier names. A path opens to anyone in any listed audience; the longest matching rule decides, and a path no rule covers is private. `private` stands alone (`[private]`: the owner, and anyone the path is shared with); combined with anything else it's refused, since the owner opens everything anyway. `public` combined with tiers is refused too, since it already opens to everyone.
+- **R147** A site names its tiers in `_site.yml` (`tiers: [gold, silver]`). A rule may only list named tiers; tier names are 1–30 lowercase letters, digits and hyphens, and `public`, `private` and `shared` are reserved.
+- **R148** The owner opens every path of their site, whatever its rules.
+- **R149** A site has at most 20 rules, counting folder rules, page rules and the rules shares create (R156), within the edge record's budget (about 850 bytes). Over it, the change is refused with which rules to merge.
+
+### Access in the site
+
+- **R150** On a Markdown site, `_site.yml`'s `access` sets rules for folders (`/lessons/: [gold, silver]`), and a page's front matter `access` (`[silver]`) sets a rule for that page's folder. The site's files are the source of truth: publishing or syncing them sets the site's rules, and `set_access` on a Markdown site writes `_site.yml` (making a new version, as rule changes on Markdown sites do now).
+- **R151** Anything a change would make public still needs `confirm_public` from an agent, or a yes in the terminal (`--confirm-public` in scripts), whether the change comes from `set_access`, `_site.yml` or front matter. Tiers and `private` need no confirmation. This replaces M3 R89 (front matter never grants access) for tiers.
+- **R152** Plain HTML sites keep their rules on the site, set with `set_access` and `passa access`, in the new form.
+
+### Memberships
+
+- **R153** `add_member(site_id, email, tier, starts_at?, expires_at?, confirm_member)` and `passa members add <site> <email> <tier> [--from date] [--expires date | --for 30d] [--yes]` add a person to a tier; `confirm_member` (or the terminal) reads the email back first, as `confirm_share` does. Adding again replaces the dates. The invite says who added them, the site's address and when access begins; never the title or a sign-in token. Invites count against `rateLimits.invitesPerDay`, at most hourly per email and tier.
+- **R154** `remove_member(site_id, email, tier?)` and `passa members remove` remove one membership, or every membership of the email, and bump the site's access version, so the person's next request is refused.
+- **R155** `list_members(site_id, tier?, cursor?)` and `passa members list` list memberships with their dates, a page at a time. There's no member limit.
+
+### Shares
+
+- **R156** A share opens the rule at its path, and every folder and page under it that has no rule of its own; a folder or page with its own rule is shared separately. When the path has no rule, the share adds one copying the access of the rule above, so nobody else's access changes. The share's result names any paths under it that it leaves out because they have their own rules.
+- **R157** A share works whatever the rule's audiences (`public` aside, which needs none). `shared` is no longer an audience.
+
+### Start and end dates
+
+- **R158** Every grant, membership or share, may have a start (`starts_at`, `--from`) and an end (`expires_at`, `--expires`, or `--for` a duration turned into a date when added). Before its start and after its end a grant opens nothing: sign-in and cookie refresh check both, and an ended grant is removed (DynamoDB TTL), bumping the access version, as shares' expiry does now. An end is at most a year after the grant is made (or after its start).
+
+### Seeing who has access
+
+- **R159** `passa access <site> --as <email>`, and an `email` option on `list_access`, list every path the person opens and why (public, a membership of which tier, or a share of which path), and the restricted paths they don't open.
+- **R160** `list_access` lists rules with their audiences, the site's tiers, and shares; `list_members` lists memberships.
+
+### Rendering
+
+- **R161** A page's audience is its rule's audience. A page lists, links in lists, backlinks and tags another page only if everyone who can open the first can open the second: public pages always, owner-only pages everything, and otherwise pages whose audience covers the listing page's. Shares don't change what pages list. Pages that aren't public get no social cards. Render's warnings name links a page's readers can't follow, as now.
+
+### Moving to the new form
+
+- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `[private]`, and M5's `shared` → `[private]` (the people it was shared with keep their shares). Existing shares keep working under R156. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
+
+### CLI and docs
+
+- **R163** The CLI does everything the tools do: `passa members add | remove | list`, `passa access --as`, and `--from` / `--expires` / `--for` on `passa share` and `passa members add`.
+- **R164** The docs get a Membership page (tiers, memberships, access in `_site.yml` and front matter, how shares and memberships combine, dates), and the Access and Sharing pages move to the new terms.
+
+## Security and quality requirements
+
+- **Making things public is still confirmed,** whichever way access is set (R151).
+- **Members are never in site files:** emails stay on the server, never in versions, pulls or folders.
+- **Adding a member is confirmed,** reading the email back, as sharing is (R153).
+- **No bulk email:** invites count against the daily cap (R153).
+- **Lists never leak:** a page lists only pages everyone who can open it can open (R161).
+- **Revocation is complete:** removing a membership or share, or its end passing, bumps the access version; site cookies last an hour at most anyway.
+- **The owner is never locked out** of their own site (R148).
+
+## Design
+
+- **Rules:** `{ path, access: string[] }`, stored on the site as now. The edge record is unchanged: a rule that isn't public or owner-only becomes `[path, "s", id]` as M5's shared rules do, since the edge only needs a rule's ID; audiences stay off the edge.
+- **Viewer cookies:** list the IDs of the rules a person opens: rules listing a tier they're a member of (within its dates), and the rule each of their shares opens (R156). `auth.` works them out at sign-in, as now.
+- **Memberships:** items in the site's partition (`SITE#<site>`, `MEMBER#<tier>#<email>`), with start, end, invite time and a TTL at the end; one person's are found by a second key (`MEMBERSHIP#<email>#<tier>` in the same partition, or an index), so sign-in reads them directly. Listing a tier is a query, a page at a time.
+- **Shares:** as M5 (`GRANT#<email>#<path>`), plus a start date; a share no longer reaches rules under its path.
+- **Access in files:** render reads `_site.yml`'s `access` and `tiers` and each page's front matter into rules, merges page rules that match their folder's, and returns them with the version; publishing stores them on the site. `_passa/access.yml` remains a read-only copy for folders taken out of Passa.
+- **Render:** audiences become sets; "may list" is "every audience of the listing page is in the listed page's audience" (with public and owner-only as now).
+
+## Decisions
+
+1. **Tiers and shares are separate grants.** A tier is an audience rules name; a share is one person and one path, and works whatever the rule says, so a reviewer can see a members' course without becoming a member.
+2. **A share stops at the next rule down.** A folder with its own rule is a separate decision, so "share the lessons but not the bonus" needs nothing extra, and new folders without their own rule are included.
+3. **Lists, not hierarchies.** `gold` doesn't include `silver`; a rule lists every tier it opens to.
+4. **The Markdown is the source of truth** for Markdown sites, with page front matter able to differ from its folder; the longest rule wins, so a page's own setting needs no special precedence.
+5. **Owner-added only.** Other ways in (invite links, self sign-up, agents, the paywall) come later; owner-added needs no abuse protection and works while SES is in its sandbox.
+6. **Per site.** Tiers, memberships and rules belong to one site.
+7. **No member limit.** Member count doesn't affect the edge, cookies or sign-in; the daily invite cap limits email, and lists come in pages.
+8. **Start and end dates on every grant,** checked at sign-in, so nothing needs scheduling.
+
+## Early checks
+
+- **Render audiences as sets:** list-and-link visibility with overlapping tiers, page rules inside folder rules, and shares; the leak tests from M3 R82 extended to tiers.
+- **The edge budget** with realistic folder and page rules, now that rules can come from front matter.
+- **Moving M5's rules and shares** on a copy of dev's data.
+
+## Starting values
+
+| Setting | Value |
+| --- | --- |
+| Rules per site | 20 (edge budget ~850 bytes) |
+| Tier names | 1–30 lowercase letters, digits, hyphens; `public`, `private`, `shared` reserved |
+| Grant end | at most a year after the grant (or its start) |
+| Invites | count against `rateLimits.invitesPerDay`; at most hourly per email and tier or path |
+| Member list page | 100 |
+
+## Delivery
+
+1. Rules in the new form (`access` lists), the move from M5's form, and render's set audiences.
+2. Access in `_site.yml` and front matter, as the source of truth for Markdown sites.
+3. Memberships: tools, CLI, invites, revocation, dates; shares' new reach and start dates.
+4. "What can this person see?", docs, and the demo on dev, then production.
+
+## Done when
+
+- The demo works.
+- Tested: rules listing several tiers; `private` and `public` combinations refused; a page's front matter overriding its folder; public access from files needing confirmation; members opening their tiers' paths and nothing else; a share reaching a path whatever its rule, and stopping at a sub-rule (named in the result); start and end dates on memberships and shares; removing a membership and a share; render lists without leaks across tiers; `--as` showing what a person opens and why; M5's rules and shares moved; the CLI matching every tool.
