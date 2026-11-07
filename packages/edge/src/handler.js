@@ -71,13 +71,20 @@ function sign(crypto, key, purpose, fields) {
   return crypto.createHmac('sha256', key).update(purpose + '.' + fields.join('.')).digest('hex');
 }
 
-// Parses "<kid>.<site-id>.<access-version>.<expiry>.<tiers>.<signature>".
-// tiers: o (the owner), or s-<id>-… (the shared rules a viewer may open).
+// Parses "<kid>.<site-id>.<access-version>.<expiry>.<tiers>.<email>.<signature>".
+// tiers: o (the owner), or s-<id>-… (the shared rules a viewer may open);
+// email: the viewer's, as hex of its UTF-8 (shared/site-tokens.ts, emailField).
 function parseSigned(value) {
   const parts = typeof value === 'string' ? value.split('.') : [];
-  if (parts.length !== 6 || !/^[A-Za-z0-9_-]{1,32}$/.test(parts[0]) || !/^\d{1,12}$/.test(parts[2]) || !/^\d{1,12}$/.test(parts[3]) || !/^(o|s(-[0-9a-f]{8}){1,20})$/.test(parts[4])) return null;
-  return { kid: parts[0], site: parts[1], v: Number(parts[2]), exp: Number(parts[3]), tiers: parts[4], sig: parts[5] };
+  if (parts.length !== 7 || !/^[A-Za-z0-9_-]{1,32}$/.test(parts[0]) || !/^\d{1,12}$/.test(parts[2]) || !/^\d{1,12}$/.test(parts[3]) || !/^(o|s(-[0-9a-f]{8}){1,20})$/.test(parts[4]) || !/^([0-9a-f]{2}){1,1016}$/.test(parts[5])) return null;
+  return { kid: parts[0], site: parts[1], v: Number(parts[2]), exp: Number(parts[3]), tiers: parts[4], email: parts[5], sig: parts[6] };
 }
+
+function fieldsOf(t) {
+  return [t.kid, t.site, t.v, t.exp, t.tiers, t.email];
+}
+
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';');
 
 async function readJson(kvs, key) {
   try {
@@ -176,8 +183,19 @@ async function handle(event, options) {
   // can't set a cookie for this host. The token becomes the site cookie.
   if (path === HANDOFF) {
     const q = request.querystring;
-    const token = parseSigned(q.t ? q.t.value : null);
     const to = q.p ? decodePath(q.p.value) : '/';
+    // The clear form (M7 R175): auth.'s refresh found no access, so the cookie
+    // goes and the visitor returns to the page as a stranger.
+    const clear = q.c ? /^([A-Za-z0-9_-]{1,32})\.(\d{1,12})\.([0-9a-f]{64})$/.exec(q.c.value) : null;
+    if (clear) {
+      const clearKey = await readKey(options.kvs, clear[1]);
+      if (!clearKey || !siteId || Number(clear[2]) <= now || to.charAt(0) !== '/' || !PATH.test(to)
+        || !sameHex(clear[3], sign(options.crypto, clearKey, 'clear', [clear[1], siteId, clear[2], to]))) return notFound();
+      const gone = {};
+      gone[COOKIE] = { value: '', attributes: 'Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax' };
+      return respond(302, 'Found', { location: to }, { cookies: gone });
+    }
+    const token = parseSigned(q.t ? q.t.value : null);
     // The cookie lifetime (seconds) is set by auth. and covered by the signature.
     const life = q.l && /^\d{1,5}$/.test(q.l.value) ? Number(q.l.value) : 0;
     const key = token ? await readKey(options.kvs, token.kid) : null;
@@ -185,11 +203,11 @@ async function handle(event, options) {
     // a signed token then waits for it, which grants nothing on its own.
     const signed = token && key && (siteId === null || token.site === siteId) && token.exp > now
       && life > 0 && life <= 86400 && to.charAt(0) === '/' && PATH.test(to)
-      && sameHex(token.sig, sign(options.crypto, key, 'handoff', [token.kid, token.site, token.v, token.exp, token.tiers, life, to]));
+      && sameHex(token.sig, sign(options.crypto, key, 'handoff', fieldsOf(token).concat([life, to])));
     if (!signed) return notFound();
     if (!siteId || !record || token.v > record.v) return notReady();
     if (token.v !== record.v) return notFound();
-    const fields = [token.kid, siteId, record.v, now + life, token.tiers];
+    const fields = [token.kid, siteId, record.v, now + life, token.tiers, token.email];
     const cookies = {};
     cookies[COOKIE] = {
       value: fields.join('.') + '.' + sign(options.crypto, key, 'cookie', fields),
@@ -204,6 +222,30 @@ async function handle(event, options) {
     request.cookies = {};
     request.headers[TIER] = { value: 'public' };
     return request;
+  }
+
+  // The site cookie, checked once: signed for this site (valid), and not out of
+  // date (current). Paths decide below whether it opens them.
+  const cookie = parseSigned(request.cookies[COOKIE] ? request.cookies[COOKIE].value : null);
+  const key = cookie ? await readKey(options.kvs, cookie.kid) : null;
+  const valid = cookie && key && record && cookie.site === siteId && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', fieldsOf(cookie)));
+  const current = valid && cookie.v === record.v && cookie.exp > now;
+  // The address auth. signs in to: the custom domain, or the host's label.
+  const asked = custom ? domain : label;
+
+  // The login block asks who's signed in (M7 R178): nobody (204, so its
+  // sign-in link stays), or the viewer, by name if the block says show_user.
+  if (path === '/_passa/login') {
+    if (!current) return respond(204, 'No Content', {});
+    const who = request.querystring.show_user && request.querystring.show_user.value === 'true'
+      ? 'Signed in as ' + escapeHtml(decodePath(cookie.email.replace(/../g, '%$&'))) : '';
+    return respond(200, 'OK', { 'content-type': 'text/html; charset=utf-8' }, { body: '<span class="passa-login-who">' + who + '</span>' });
+  }
+  // The login block's link (M7 R177): render can't know auth.'s address, so
+  // the edge sends it there, for this site and the page it's on.
+  if (path === '/_passa/signin') {
+    const back = request.querystring.path ? decodePath(request.querystring.path.value) : '/';
+    return respond(302, 'Found', { location: options.auth + '/site/signin?site=' + asked + '&path=' + encodeURIComponent(back.charAt(0) === '/' && PATH.test(back) ? back : '/') });
   }
 
   // Reserved for Passa; never served from storage (R14).
@@ -222,19 +264,24 @@ async function handle(event, options) {
   const rule = record ? ruleOf(record.r, served) : ['x', ''];
   if (rule[0] === 'p') return serve(request, siteId, record.cur, served, true);
 
-  const cookie = parseSigned(request.cookies[COOKIE] ? request.cookies[COOKIE].value : null);
-  const key = cookie ? await readKey(options.kvs, cookie.kid) : null;
-  const allowed = cookie && key && record && cookie.site === siteId && cookie.v === record.v && cookie.exp > now
-    && opens(cookie.tiers, rule) && sameHex(cookie.sig, sign(options.crypto, key, 'cookie', [cookie.kid, cookie.site, cookie.v, cookie.exp, cookie.tiers]));
+  const allowed = current && opens(cookie.tiers, rule);
 
   // A missing site, or a name no site has, looks exactly like a private one, so
   // the redirect reveals nothing (R12). auth. resolves names itself.
   if (!allowed) {
     // HTMX asking for a fragment its viewer can't open gets nothing, never
     // sign-in, so the embed keeps its fallback (M7 R174). The header changes
-    // only the form of a refusal: anyone can send it.
-    if (request.headers['hx-request'] && request.headers['hx-request'].value === 'true') return respond(204, 'No Content', {});
-    const signin = options.auth + '/site/signin?site=' + (custom ? domain : label) + '&path=' + encodeURIComponent(path);
+    // only the form of a refusal: anyone can send it. Someone signed in whose
+    // cookie is out of date goes through auth.'s refresh, back to the page
+    // (R175); auth. gives them a cookie, or clears it, so it can't loop.
+    if (request.headers['hx-request'] && request.headers['hx-request'].value === 'true') {
+      if (!valid || current) return respond(204, 'No Content', {});
+      const origin = (options.scheme || 'https') + '://' + host;
+      const page = request.headers['hx-current-url'] ? request.headers['hx-current-url'].value : '';
+      const from = page.indexOf(origin + '/') === 0 ? decodePath(page.slice(origin.length).split(/[?#]/)[0]) : '';
+      return respond(204, 'No Content', { 'hx-redirect': options.auth + '/site/refresh?site=' + asked + '&path=' + encodeURIComponent(PATH.test(from) && from ? from : '/') });
+    }
+    const signin = options.auth + '/site/signin?site=' + asked + '&path=' + encodeURIComponent(path);
     return respond(302, 'Found', { location: signin });
   }
 

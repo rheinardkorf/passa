@@ -47,7 +47,7 @@ Every layout gets the page (`title`, `content`, `date`, `tags`, `toc`, …), lis
 
 ## Rules
 
-- Pages are served with a strict Content Security Policy: scripts, styles and fonts come from the site or a few public CDNs, images from the site itself, and pages can't make network requests.
+- Pages are served with a strict Content Security Policy: scripts, styles and fonts come from the site or a few public CDNs, images from the site itself, and pages can make requests only to their own site (as fragments do).
 - Every layout is a complete HTML document, and works at phone width.
 - Support light and dark colour schemes.
 

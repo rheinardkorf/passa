@@ -311,7 +311,7 @@ export function render(input: RenderInput): RenderResult {
       fragment,
       words: proseWords(body),
       tags: fragment ? [] : tags,
-      state: pageState(s.path, dirOf(s.path)),
+      state: { ...pageState(s.path, dirOf(s.path)), url: fragment ? '/' : out.url },
       title: '', content: '', kind: '', cover: undefined, excerpt: '', backlinks: [],
     });
   }

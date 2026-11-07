@@ -233,6 +233,9 @@ async function serveCommand(args: string[]) {
     const type = TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream';
     if (pages.has(path)) return res.writeHead(200, { ...headers, 'content-type': TYPES['.html'] }).end(pages.get(path));
     if (pages.has(`${path}/index.html`)) return res.writeHead(301, { location: `/${path}/` }).end();
+    // Previews have no sign-in: the login block keeps its link (M7 R177, R178).
+    if (path === '_passa/login') return res.writeHead(204, headers).end();
+    if (path === '_passa/signin') return res.writeHead(200, { ...headers, 'content-type': 'text/plain; charset=utf-8' }).end('Previews have no sign-in. On Passa, this link signs in to the site and comes back to the page.');
     if (`/${path}` === HTMX) return res.writeHead(200, { ...headers, 'content-type': TYPES['.js'] }).end(readFileSync(HTMX_FILE));
     if (path === 'feed.xml' && build.feed) return res.writeHead(200, { ...headers, 'content-type': TYPES['.xml'] }).end(build.feed);
     if (files.has(path)) return res.writeHead(200, { ...headers, 'content-type': type }).end(readFileSync(join(folder, path)));

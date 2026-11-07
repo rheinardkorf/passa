@@ -55,11 +55,19 @@ async function call(url: string, init: { body?: unknown; form?: Record<string, s
 
 // Follows the sign-in handoff the way a browser would, and returns the cookie.
 async function signIn(siteId: string, accessVersion = 1): Promise<string> {
-  const url = new URL(handoffUrl({ key, tiers: 'o', siteId, accessVersion, origin: `http://${siteId}.localhost:${port}`, path: '/', cookieLifetime: 3600 }));
+  const url = new URL(handoffUrl({ key, email: 'owner@example.com', tiers: 'o', siteId, accessVersion, origin: `http://${siteId}.localhost:${port}`, path: '/', cookieLifetime: 3600 }));
   const r = await get(siteId, url.pathname + url.search);
   expect(r.status).toBe(302);
   const set = (r.headers['set-cookie'] as string[])[0] ?? '';
   return set.slice(0, set.indexOf(';'));
+}
+
+// Opens the newest magic link sent to an email, as its owner would.
+async function openLink(browser: Browser, to: string) {
+  const link = /(http:\/\/localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.filter((e) => e.to === to).at(-1)?.text ?? '');
+  expect(link).not.toBeNull();
+  await browser.open(link?.[1] ?? '');
+  return browser.follow(link?.[1] ?? '', { token: link?.[2] ?? '' });
 }
 
 const page = (body: string) => [{ path: 'index.html', content: new TextEncoder().encode(`<!doctype html>${body}`) }];
@@ -186,13 +194,6 @@ describe('signing in', () => {
 
 describe('sharing (M5)', () => {
   // Follows a magic link the way the page's script does, then the handoff.
-  async function openLink(browser: Browser, to: string) {
-    const link = /(http:\/\/localhost:\d+\/signin\/continue)#t=([A-Za-z0-9_-]+)/.exec(sent.filter((e) => e.to === to).at(-1)?.text ?? '');
-    expect(link).not.toBeNull();
-    await browser.open(link?.[1] ?? '');
-    return browser.follow(link?.[1] ?? '', { token: link?.[2] ?? '' });
-  }
-
   it('lets someone a site is shared with sign in and open its shared paths, until unshared (R128–R136)', async () => {
     const site = await publisher.publish(alice, { title: 'Plans', content: { files: [...page('<h1>Home</h1>'), { path: 'plans/index.html', content: new TextEncoder().encode('<h1>Plans</h1>') }] } });
     const shared = await publisher.share(alice, { siteId: site.site_id, email: 'sam@example.com', path: '/plans/', confirmShare: true });
@@ -339,6 +340,56 @@ describe('fragments (M7)', () => {
     expect(cards.headers['x-robots-tag']).toBe('noindex');
     expect(Object.keys(cards.headers).filter((h) => h.startsWith('x-amz-meta'))).toEqual([]);
     expect((await get('the-family', '/')).headers['x-robots-tag']).toBeUndefined();
+  });
+});
+
+describe('signing in from a page (M7)', () => {
+  it('shows who is signed in, refreshes a stale cookie through auth., and clears it when access is gone', async () => {
+    const text = (path: string, body: string) => ({ path, content: new TextEncoder().encode(body) });
+    const site = await publisher.publish(carol, {
+      title: 'Home',
+      content: { files: [
+        text('_site.yml', 'title: Home\ntiers: [family]\naccess:\n  /: [public]\n  /family/: [family]\n'),
+        text('index.md', '# Home\n\n```login\nshow_user: true\n```\n\n```fragment\nsrc: [[family/cards]]\n```\n'),
+        text('family/cards.md', '---\nfragment: true\n---\nThe cards\n'),
+      ] },
+      confirmPublic: true,
+    });
+    await publisher.addMember(carol, { siteId: site.site_id, email: 'anna@example.com', tier: 'family', confirmMember: true });
+    const home = await get(site.site_id, '/');
+    expect(home.body).toContain('href="/_passa/signin?path=%2F"');
+
+    // From the page's link, through auth.'s sign-in, back to the page with a cookie.
+    const anna = new Browser(port);
+    const link = await anna.follow(`${site.url}_passa/signin?path=%2F`);
+    expect(link.url.pathname).toBe('/site/signin');
+    await anna.open(`http://localhost:${port}/signin`, { email: 'anna@example.com', site: site.site_id, path: '/' });
+    expect((await openLink(anna, 'anna@example.com')).url.href).toBe(site.url);
+    const hx = { 'hx-request': 'true', 'hx-current-url': site.url };
+    const who = await anna.open(`${site.url}_passa/login?show_user=true`, undefined, hx);
+    expect(who.body).toBe('<span class="passa-login-who">Signed in as anna@example.com</span>');
+    expect((await anna.open(`${site.url}family/cards/`, undefined, hx)).status).toBe(200);
+
+    // Added again (new dates), the access version moves on: the fragment's
+    // request goes through auth.'s refresh and back, with no email.
+    await publisher.addMember(carol, { siteId: site.site_id, email: 'anna@example.com', tier: 'family', confirmMember: true });
+    const emails = sent.length;
+    const stale = await anna.open(`${site.url}family/cards/`, undefined, hx);
+    expect([stale.status, stale.body]).toEqual([204, '']);
+    const refresh = String(stale.headers['hx-redirect']);
+    expect(refresh).toBe(`http://localhost:${port}/site/refresh?site=${site.site_id}&path=%2F`);
+    expect((await anna.follow(refresh)).url.href).toBe(site.url);
+    expect((await anna.open(`${site.url}family/cards/`, undefined, hx)).body).toContain('The cards');
+    expect(sent.length).toBe(emails);
+
+    // Removed: the refresh clears the cookie, and the next request is a stranger's.
+    await publisher.removeMember(carol, { siteId: site.site_id, email: 'anna@example.com' });
+    const gone = await anna.open(`${site.url}family/cards/`, undefined, hx);
+    expect(gone.headers['hx-redirect']).toBe(refresh);
+    expect((await anna.follow(refresh)).url.href).toBe(site.url);
+    const after = await anna.open(`${site.url}family/cards/`, undefined, hx);
+    expect([after.status, after.headers['hx-redirect']]).toEqual([204, undefined]);
+    expect((await anna.open(`${site.url}_passa/login?show_user=true`, undefined, hx)).status).toBe(204);
   });
 });
 

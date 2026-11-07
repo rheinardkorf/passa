@@ -95,3 +95,33 @@ describe('embeds (M7 R171–R173)', () => {
     expect(REFUSING.has('fragment')).toBe(true);
   });
 });
+
+describe('the login block (M7 R177)', () => {
+  const login = (block: string, path = 'family/notes.md') => build([site, cards, about, home('src: [[family/cards]]'), { path, content: `# Notes\n\n\`\`\`login\n${block}\n\`\`\`\n` }]);
+
+  it('renders a sign-in link back to the page, which the edge replaces once signed in', () => {
+    const r = login('');
+    expect(r.problems).toEqual([]);
+    expect(r.html('family/notes/index.html')).toContain('<div class="passa-login" hx-get="/_passa/login?show_user=false" hx-trigger="load" hx-swap="innerHTML"><a class="passa-login-link" href="/_passa/signin?path=%2Ffamily%2Fnotes%2F">Sign in</a></div>');
+    expect(r.html('family/notes/index.html')).toContain(`<script src="${HTMX}"></script>`);
+  });
+
+  it('takes show_user, a label and classes', () => {
+    const html = login('show_user: true\nlabel: Family <sign in>\nclass: top-right').html('family/notes/index.html');
+    expect(html).toContain('<div class="passa-login top-right" hx-get="/_passa/login?show_user=true"');
+    expect(html).toContain('>Family &lt;sign in&gt;</a>');
+  });
+
+  it('returns to the home page from a fragment, which is shown on other pages', () => {
+    const r = login('', 'family/bar.md');
+    const inFragment = build([site, about, { path: 'bar.md', content: '---\nfragment: true\n---\n```login\n```\n' }]);
+    expect(r.problems).toEqual([]);
+    expect(inFragment.html('bar/index.html')).toContain('href="/_passa/signin?path=%2F"');
+  });
+
+  it('refuses a login block it can\'t read', () => {
+    for (const [block, message] of [['show_user: yes please', 'true or false'], ['class: "a;b"', 'class names'], ['- a', 'as YAML']] as const) {
+      expect(login(block).problems).toContainEqual(expect.objectContaining({ kind: 'fragment', message: expect.stringContaining(message) }));
+    }
+  });
+});

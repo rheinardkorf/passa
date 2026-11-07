@@ -85,11 +85,11 @@ export class Browser {
     this.#port = port;
   }
 
-  async open(url: string, form?: Record<string, string>): Promise<Reply & { url: URL }> {
+  async open(url: string, form?: Record<string, string>, extra: Record<string, string> = {}): Promise<Reply & { url: URL }> {
     const u = new URL(url);
     const cookies = this.jar.get(u.host) ?? new Map<string, string>();
     this.jar.set(u.host, cookies);
-    const headers: Record<string, string> = { cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join('; ') };
+    const headers: Record<string, string> = { ...extra, cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join('; ') };
     let body: string | undefined;
     if (form) {
       headers.origin = u.origin;

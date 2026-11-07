@@ -103,6 +103,8 @@ renders as:
 | `gallery` | One `![caption](image)` per line |
 | `timeline` | One `when: what` per line |
 | `mermaid` | A Mermaid diagram |
+| `fragment` | `src: [[page]]`: a fragment, loaded for viewers who can open it. See [[Fragments and sign-in]] |
+| `login` | A sign-in link, and who's signed in. See [[Fragments and sign-in]] |
 
 Charts are drawn as SVG when the site is published, so they need no script:
 
