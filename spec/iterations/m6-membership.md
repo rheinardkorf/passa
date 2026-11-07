@@ -13,7 +13,7 @@ M5 let an owner share a path with one person. M6 adds **tiers**: named groups on
 
 Access moves into the site's own files: `_site.yml` sets folders and names the site's tiers, and a page's front matter can set its own. Who is in a tier is never in site files; it lives on the server.
 
-The paywall (M8) then only has to add "a purchase grants a tier", and scheduled access (M9) builds on the start and end dates every grant gains here.
+The paywall (M9) then only has to add "a purchase grants a tier", and scheduled access (M10) builds on the start and end dates every grant gains here.
 
 ## Terms
 
@@ -77,7 +77,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 **Out (later):**
 
-- Other ways into a tier: invite links, self sign-up, agents or scripts adding members, and the paywall (M8). Self sign-up needs abuse checks and email to strangers.
+- Other ways into a tier: invite links, self sign-up, agents or scripts adding members, and the paywall (M9). Self sign-up needs abuse checks and email to strangers.
 - Tiers shared across sites: tiers and rules belong to one site.
 - A tier's default duration, and reminder emails before a grant ends.
 - Tiers that include other tiers: lists only, so `gold` doesn't include `silver` unless both are listed.
