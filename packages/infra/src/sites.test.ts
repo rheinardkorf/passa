@@ -62,10 +62,10 @@ describe('sites stack', () => {
   });
 
   it('builds the function from handler.js with the store and both domains', () => {
-    const fn = Object.values(sites.findResources('AWS::CloudFront::Function')).find((f) => JSON.stringify(f).includes('cf.kvs'));
-    // Fn::Join of the code around the store's ID.
+    const fn = Object.values(sites.findResources('AWS::CloudFront::Function')).find((f) => JSON.stringify(f).includes('.kvs('));
+    // Fn::Join of the code around the store's ID (minified).
     const code = (fn?.Properties.FunctionCode['Fn::Join'][1] as unknown[]).filter((part) => typeof part === 'string').join('<id>');
-    expect(code).toContain("cf.kvs('<id>')");
+    expect(code).toMatch(/\w\.kvs\("<id>"\)/);
     expect(code).toContain('"example-sites.com"');
     expect(code).toContain('"https://auth.example.com"');
     expect(code).not.toContain('passa-kvs-placeholder');
@@ -89,11 +89,16 @@ describe('sites stack', () => {
   it('decides x-robots-tag by host in a viewer-response function, not in the headers policy', () => {
     const policy = JSON.stringify(sites.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
     expect(policy).not.toContain('x-robots-tag');
-    sites.hasResourceProperties('AWS::CloudFront::Function', { FunctionCode: Match.stringLikeRegexp('function viewerResponse\\(event, options\\)') });
+    sites.hasResourceProperties('AWS::CloudFront::Function', { FunctionCode: Match.stringLikeRegexp('"x-robots-tag"') });
   });
 
   it('refuses site headers it cannot express exactly', () => {
     expect(() => responseHeadersPolicy({ ...siteHeaders(config), 'referrer-policy': 'origin' })).toThrow(/site headers changed/);
+  });
+
+  it('uploads Passa\'s HTMX beside the sites, touching nothing else (M7 R173)', () => {
+    sites.hasResourceProperties('Custom::CDKBucketDeployment', Match.objectLike({ Prune: false, DestinationBucketKeyPrefix: Match.absent() }));
+    expect(JSON.stringify(sites.findResources('Custom::CDKBucketDeployment'))).toContain('max-age=31536000, immutable');
   });
 
   it('turns storage misses into a plain 404', () => {

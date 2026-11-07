@@ -342,7 +342,16 @@ importers:
       '@passa/shared':
         specifier: workspace:*
         version: link:../shared
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      htmx.org:
+        specifier: 4.0.0
+        version: 4.0.0
     devDependencies:
+      '@passa/render':
+        specifier: workspace:*
+        version: link:../render
       playwright-core:
         specifier: 1.64.1
         version: 1.64.1

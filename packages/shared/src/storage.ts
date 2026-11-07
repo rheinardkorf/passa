@@ -40,6 +40,11 @@ function bytes(body: { transformToByteArray(): Promise<Uint8Array> } | undefined
   return body.transformToByteArray();
 }
 
+// A fragment (M7 R170) is stored with this metadata, which the viewer-response
+// function turns into noindex (as x-amz-meta-passa-fragment).
+export const FRAGMENT_MARK = 'passa-fragment';
+export type FileMarks = { fragment?: boolean };
+
 export class SiteFiles {
   readonly #s3: S3Client;
   readonly #buckets: Buckets;
@@ -50,8 +55,9 @@ export class SiteFiles {
   }
 
   // Stages the file for scanning, then copies it into place. The staged copy
-  // stays until the uploads bucket expires it, so the scan can finish.
-  async putVersionFile(siteId: string, versionId: string, path: string, body: Uint8Array, contentType: string): Promise<void> {
+  // stays until the uploads bucket expires it, so the scan can finish. Marks
+  // travel with the file (S3 metadata, copied with it) for the edge to read.
+  async putVersionFile(siteId: string, versionId: string, path: string, body: Uint8Array, contentType: string, marks?: FileMarks): Promise<void> {
     const staged = `${STAGED_PREFIX}${siteId}/${versionId}/${path}`;
     await this.#s3.send(new PutObjectCommand({
       Bucket: this.#buckets.uploads,
@@ -59,6 +65,7 @@ export class SiteFiles {
       Body: body,
       ContentType: contentType,
       CacheControl: IMMUTABLE,
+      ...(marks?.fragment ? { Metadata: { [FRAGMENT_MARK]: '1' } } : {}),
     }));
     // The scan result tag isn't carried over: the sites bucket isn't scanned.
     await this.#s3.send(new CopyObjectCommand({

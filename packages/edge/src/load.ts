@@ -46,6 +46,11 @@ function load<T>(source: string, name: string, filename: string): T {
 }
 
 export const loadHandler = (): Handle => load<Handle>(handlerSource(), 'handle', 'handler.js');
+// The handler as the CloudFront build minifies it, for tests.
+export const loadMinifiedHandler = async (): Promise<Handle> => {
+  const { minify } = await import('./build.ts');
+  return load<Handle>(minify(handlerSource(), 'handle'), 'handle', 'handler.min.js');
+};
 export const loadViewerResponse = (): ViewerResponse => load<ViewerResponse>(responseSource(), 'viewerResponse', 'response.js');
 
 export const isResponse = (result: EdgeRequest | EdgeResponse): result is EdgeResponse => 'statusCode' in result;

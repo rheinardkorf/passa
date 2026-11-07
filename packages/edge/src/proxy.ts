@@ -3,9 +3,11 @@
 // headers CloudFront adds. Sites are at http://<site-id>.localhost:<port>,
 // sign-in at http://localhost:<port> and MCP at http://mcp.localhost:<port>.
 import { createHmac } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from 'node:http';
 import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { type EdgeReader, siteHeaders } from '@passa/shared';
+import { htmxFile, htmxPath } from './build.ts';
 import { type EdgeRequest, type Header, isResponse, loadHandler, loadViewerResponse } from './load.ts';
 
 export type ProxyOptions = {
@@ -43,6 +45,7 @@ export function startProxy(options: ProxyOptions, port: number): Promise<Server>
   const viewerResponse = loadViewerResponse();
   const crypto = { createHmac: (algorithm: string, key: string) => createHmac(algorithm, key) };
   const headers = siteHeaders({ cdnAllowlist: options.cdnAllowlist });
+  const htmx = htmxPath();
 
   async function serve(req: IncomingMessage, res: ServerResponse) {
     // Sign-in is on plain localhost, not auth.localhost: OAuth clients such as
@@ -70,6 +73,12 @@ export function startProxy(options: ProxyOptions, port: number): Promise<Server>
       res.writeHead(result.statusCode).end(req.method === 'HEAD' ? undefined : result.body?.data);
       return;
     }
+    // Deployed, HTMX is in the sites bucket (infra uploads it); here, from its package.
+    if (result.uri === htmx) {
+      for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable' }).end(req.method === 'HEAD' ? undefined : readFileSync(htmxFile()));
+      return;
+    }
     try {
       const object = await options.s3.send(new GetObjectCommand({ Bucket: options.bucket, Key: result.uri.slice(1) }));
       const etag = object.ETag ?? '';
@@ -78,7 +87,9 @@ export function startProxy(options: ProxyOptions, port: number): Promise<Server>
       for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
       // As the viewer-response function does on CloudFront.
       const host = req.headers.host ? { host: { value: req.headers.host.replace(/:\d+$/, '') } } : {};
-      const extra = viewerResponse({ request: { headers: { ...result.headers, ...host } }, response: { statusCode: 200, headers: {} } }, { sites: sites.replace(/:\d+$/, '') }).headers;
+      // S3 metadata reaches the function as x-amz-meta-* headers.
+      const metadata = Object.fromEntries(Object.entries(object.Metadata ?? {}).map(([name, value]) => [`x-amz-meta-${name}`, { value }]));
+      const extra = viewerResponse({ request: { headers: { ...result.headers, ...host } }, response: { statusCode: 200, headers: metadata } }, { sites: sites.replace(/:\d+$/, '') }).headers;
       for (const [name, { value }] of Object.entries(extra)) res.setHeader(name, value);
       if (etag && req.headers['if-none-match'] === etag) {
         res.writeHead(304).end();

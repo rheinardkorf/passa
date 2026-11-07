@@ -20,6 +20,9 @@ const DOMAIN = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z
 // "..", dotfiles and empty segments) can't match a published file.
 const PATH = /^(\/[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*)*\/?$/;
 const HANDOFF = '/_passa/session';
+// Passa's copy of HTMX (M7 R173), the same file for every site whatever its
+// rules, stored outside every site. render's HTMX names the same path.
+const HTMX = '/_passa/htmx-4.0.0.min.js';
 // Set on every request served from storage, as response.js reads it.
 const TIER = 'x-passa-tier';
 // The version served, which the viewer-response function shows on public
@@ -195,6 +198,14 @@ async function handle(event, options) {
     return respond(302, 'Found', { location: to }, { cookies: cookies });
   }
 
+  if (path === HTMX) {
+    request.uri = HTMX;
+    request.querystring = {};
+    request.cookies = {};
+    request.headers[TIER] = { value: 'public' };
+    return request;
+  }
+
   // Reserved for Passa; never served from storage (R14).
   if (path === '/_passa' || path.indexOf('/_passa/') === 0) return notFound();
 
@@ -219,6 +230,10 @@ async function handle(event, options) {
   // A missing site, or a name no site has, looks exactly like a private one, so
   // the redirect reveals nothing (R12). auth. resolves names itself.
   if (!allowed) {
+    // HTMX asking for a fragment its viewer can't open gets nothing, never
+    // sign-in, so the embed keeps its fallback (M7 R174). The header changes
+    // only the form of a refusal: anyone can send it.
+    if (request.headers['hx-request'] && request.headers['hx-request'].value === 'true') return respond(204, 'No Content', {});
     const signin = options.auth + '/site/signin?site=' + (custom ? domain : label) + '&path=' + encodeURIComponent(path);
     return respond(302, 'Found', { location: signin });
   }

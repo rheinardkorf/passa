@@ -4,7 +4,8 @@
 // domains (M4) are tenants of a second, multi-tenant distribution with the
 // same behaviour, attached at runtime by the admin function.
 
-import { functionCode, responseFunctionCode } from '@passa/edge/build';
+import { readFileSync } from 'node:fs';
+import { functionCode, htmxFile, htmxPath, responseFunctionCode } from '@passa/edge/build';
 import { type Config, ENV, siteDomain, siteHeaders } from '@passa/shared';
 import { Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
@@ -31,6 +32,7 @@ import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import { AaaaRecord, ARecord, type IHostedZone, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { CloudFrontTarget } from 'aws-cdk-lib/aws-route53-targets';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
+import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import { type DataStack, kvsWritePolicy } from './data.ts';
@@ -221,6 +223,17 @@ export class SitesStack extends Stack {
       onUpdate: putNotFound,
       policy: AwsCustomResourcePolicy.fromSdkCalls({ resources: [data.sites.arnForObjects(NOT_FOUND_KEY)] }),
       installLatestAwsSdk: false,
+    });
+
+    // Passa's copy of HTMX (M7 R173), outside every site's files. Its name
+    // carries its version, so it never changes once there: an upgrade is a new
+    // file. prune: false, so nothing else in the bucket is touched.
+    new BucketDeployment(this, 'Htmx', {
+      sources: [Source.data(htmxPath().slice(1), readFileSync(htmxFile(), 'utf8'))],
+      destinationBucket: sitesBucket,
+      prune: false,
+      contentType: 'text/javascript; charset=utf-8',
+      cacheControl: [CacheControl.fromString('public, max-age=31536000, immutable')],
     });
   }
 }

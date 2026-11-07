@@ -305,6 +305,43 @@ describe('sharing (M5)', () => {
   });
 });
 
+describe('fragments (M7)', () => {
+  it('serves HTMX, answers a refused fragment request with a 204, and never lets a fragment be indexed', async () => {
+    const text = (path: string, body: string) => ({ path, content: new TextEncoder().encode(body) });
+    const site = await publisher.publish(alice, {
+      title: 'Home',
+      content: { files: [
+        text('_site.yml', 'title: Home\ntiers: [family]\naccess:\n  /: [public]\n  /family/: [family]\n'),
+        text('index.md', '# Home\n\n```fragment\nsrc: [[family/cards]]\nclass: cards\n```\n'),
+        text('family/cards.md', '---\nfragment: true\n---\n- [Anna](https://anna.example.com/)\n'),
+      ] },
+      confirmPublic: true,
+    });
+    await publisher.setName(alice, { siteId: site.site_id, name: 'the-family' });
+
+    const home = await get('the-family', '/');
+    expect(home.status).toBe(200);
+    expect(home.body).toContain('<div class="passa-embed cards" hx-get="/family/cards/"');
+    const htmx = /<script src="(\/_passa\/htmx-[\d.]+\.min\.js)"><\/script>/.exec(home.body)?.[1] ?? '';
+    const script = await get('the-family', htmx);
+    expect([script.status, script.headers['content-type'], script.headers['cache-control']]).toEqual([200, 'text/javascript; charset=utf-8', 'public, max-age=31536000, immutable']);
+    expect(script.body).toContain('htmx');
+
+    // A stranger's HTMX request: nothing, not sign-in. Without the header, sign-in.
+    const refused = await get('the-family', '/family/cards/', { 'hx-request': 'true' });
+    expect([refused.status, refused.body, refused.headers['cache-control'], refused.headers.location]).toEqual([204, '', 'no-store', undefined]);
+    expect((await get('the-family', '/family/cards/')).status).toBe(302);
+
+    // Someone it opens to gets the fragment, never indexed, even on a name host.
+    const cards = await get('the-family', '/family/cards/', { 'hx-request': 'true', cookie: await signIn(site.site_id) });
+    expect(cards.status).toBe(200);
+    expect(cards.body).toMatch(/^<div class="passa-fragment">/);
+    expect(cards.headers['x-robots-tag']).toBe('noindex');
+    expect(Object.keys(cards.headers).filter((h) => h.startsWith('x-amz-meta'))).toEqual([]);
+    expect((await get('the-family', '/')).headers['x-robots-tag']).toBeUndefined();
+  });
+});
+
 describe('viewing a private site', () => {
   it('redirects to sign in, then serves the current version with site headers', async () => {
     const site = await publisher.publish(alice, { title: 'Hello', content: { files: [...page('<h1>Hello</h1>'), { path: 'docs/index.html', content: new TextEncoder().encode('docs') }] } });
