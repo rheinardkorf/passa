@@ -5,7 +5,7 @@
 // fails, they're left behind but never served.
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
-import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { type Config, Events, NotFoundOrConflict, runtimeEnv, SiteFiles, Store, versionsToKeep } from '@passa/shared';
 
 export type RetentionDeps = { store: Store; files: SiteFiles; events: Events; config: Config; log?: (message: string, data?: Record<string, unknown>) => void };
@@ -40,41 +40,29 @@ export async function applyRetention(deps: RetentionDeps, siteIds: string[], now
 
 const log = (message: string, data?: Record<string, unknown>) => console.log(JSON.stringify({ message, ...data })); // eslint-disable-line no-console
 
-// Every site's ID. A scan, since this is a maintenance job (see db.ts).
-async function allSiteIds(db: DynamoDBDocumentClient, table: string): Promise<string[]> {
+// Every site's ID, through the indexes rather than a scan: every user (gsi2),
+// then each one's sites (gsi1). Only publishers have sites.
+export async function allSiteIds(store: Store): Promise<string[]> {
   const ids: string[] = [];
-  let ExclusiveStartKey: Record<string, unknown> | undefined;
-  do {
-    const page = await db.send(new ScanCommand({
-      TableName: table,
-      FilterExpression: 'begins_with(pk, :site) AND sk = :meta',
-      ExpressionAttributeValues: { ':site': 'SITE#', ':meta': 'META' },
-      ProjectionExpression: 'id',
-      ExclusiveStartKey,
-    }));
-    for (const item of page.Items ?? []) if (typeof item.id === 'string') ids.push(item.id);
-    ExclusiveStartKey = page.LastEvaluatedKey;
-  } while (ExclusiveStartKey);
+  for (const user of await store.listUsers()) {
+    if (user.roles.length) for (const site of await store.listSitesByOwner(user.id)) ids.push(site.id);
+  }
   return ids;
 }
 
-let ready: { deps: RetentionDeps; db: DynamoDBDocumentClient; table: string } | undefined;
+let ready: RetentionDeps | undefined;
 
 export async function handler(): Promise<void> {
   if (!ready) {
     const env = runtimeEnv();
     const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
     ready = {
-      db,
-      table: env.tables.main,
-      deps: {
-        store: new Store(db, env.tables.main),
-        files: new SiteFiles(new S3Client({}), env.buckets),
-        events: new Events(db, env.tables.events, env.config.retention.eventYears),
-        config: env.config,
-        log,
-      },
+      store: new Store(db, env.tables.main),
+      files: new SiteFiles(new S3Client({}), env.buckets),
+      events: new Events(db, env.tables.events, env.config.retention.eventYears),
+      config: env.config,
+      log,
     };
   }
-  await applyRetention(ready.deps, await allSiteIds(ready.db, ready.table));
+  await applyRetention(ready, await allSiteIds(ready.store));
 }

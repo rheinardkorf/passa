@@ -27,8 +27,7 @@ export type AdminEvent =
   | { action: 'users.list' }
   | { action: 'users.add'; email: string; admin?: boolean; actor?: string }
   | { action: 'users.disable'; email: string; actor?: string }
-  | { action: 'users.enable'; email: string; actor?: string }
-  | { action: 'users.reindex' };
+  | { action: 'users.enable'; email: string; actor?: string };
 
 export type AdminResult = { ok: true; result: unknown } | { ok: false; refused: string };
 
@@ -84,7 +83,6 @@ export async function handler(event: AdminEvent): Promise<AdminResult> {
       case 'users.add': return { ok: true, result: await admin.users.add(event) };
       case 'users.disable': return { ok: true, result: await admin.users.disable(event) };
       case 'users.enable': return { ok: true, result: await admin.users.enable(event) };
-      case 'users.reindex': return { ok: true, result: await admin.users.reindex() };
       default: return { ok: false, refused: `Unknown action ${(event as { action?: unknown }).action as string}` };
     }
   } catch (err) {

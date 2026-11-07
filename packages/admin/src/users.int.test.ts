@@ -1,6 +1,5 @@
 // passa admin users (M5 R143) against the real store: adding publishers,
 // disabling and enabling them, and the guards that keep a deployment runnable.
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
 import { Publisher } from '@passa/mcp';
 import { addUser, type TestEnv, testEnv } from '@passa/mcp/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -58,14 +57,5 @@ describe('admin users (R143)', () => {
     expect(list.find((u) => u.email === 'admin@example.com')).toMatchObject({ roles: ['admin', 'publisher'], in_config: true });
     expect(list.map((u) => u.email)).toEqual([...list.map((u) => u.email)].sort());
     expect(list.map((u) => u.email)).toContain('pub@example.com');
-  });
-
-  it('lists users written before the users index once reindexed (a one-off)', async () => {
-    const old = { id: 'old', email: 'old@example.com', roles: ['publisher'], status: 'active', createdAt: '2026-10-30T00:00:00.000Z' };
-    await env.db.send(new PutCommand({ TableName: env.tables.main, Item: { pk: 'USER#old', sk: 'PROFILE', gsi1pk: 'EMAIL#old@example.com', gsi1sk: 'USER', ...old } }));
-    expect((await users.list()).map((u) => u.email)).not.toContain('old@example.com');
-    expect(await users.reindex()).toEqual({ reindexed: 1 });
-    expect((await users.list()).find((u) => u.email === 'old@example.com')).toMatchObject({ roles: ['publisher'], status: 'active' });
-    expect(await users.reindex()).toEqual({ reindexed: 0 });
   });
 });

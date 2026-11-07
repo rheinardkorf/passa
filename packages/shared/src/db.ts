@@ -8,7 +8,6 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
-  ScanCommand,
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
@@ -224,28 +223,6 @@ export class Store {
       ExclusiveStartKey = page.LastEvaluatedKey;
     } while (ExclusiveStartKey);
     return users;
-  }
-
-  // Users written before gsi2 existed aren't in it until written again. A
-  // one-off migration (passa admin users reindex), and the only scan Passa
-  // runs: remove it once every deployment has run it.
-  async reindexUsers(): Promise<number> {
-    let count = 0;
-    let ExclusiveStartKey: Record<string, unknown> | undefined;
-    do {
-      const page = await this.#db.send(new ScanCommand({
-        TableName: this.#table,
-        FilterExpression: 'begins_with(pk, :pk) AND sk = :sk AND attribute_not_exists(gsi2pk)',
-        ExpressionAttributeValues: { ':pk': 'USER#', ':sk': 'PROFILE' },
-        ExclusiveStartKey,
-      }));
-      for (const item of page.Items ?? []) {
-        await this.putUser(strip<User>(item));
-        count++;
-      }
-      ExclusiveStartKey = page.LastEvaluatedKey;
-    } while (ExclusiveStartKey);
-    return count;
   }
 
   async getSite(id: string): Promise<Site | undefined> {

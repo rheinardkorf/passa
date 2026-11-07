@@ -81,11 +81,6 @@ export class AdminUsers {
     return this.#report(user);
   }
 
-  // Adds users written before the users index to it (a one-off; see Store.reindexUsers).
-  async reindex(): Promise<{ reindexed: number }> {
-    return { reindexed: await this.#d.store.reindexUsers() };
-  }
-
   async disable(input: { email: string; actor?: string }): Promise<UserReport> {
     const user = await this.#find(input.email);
     if (this.#inConfig(user.email)) throw new UserRefused(`${user.email} is an admin in config, and stays one: take it out of admins there and deploy first.`);

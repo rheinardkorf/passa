@@ -4,7 +4,7 @@ import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { NotFoundOrConflict } from '@passa/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Publisher } from './publisher.ts';
-import { applyRetention } from './retention.ts';
+import { allSiteIds, applyRetention } from './retention.ts';
 import { addUser, type TestEnv, testEnv } from './testing/moto.ts';
 
 let env: TestEnv;
@@ -88,5 +88,17 @@ describe('applyRetention', () => {
       ExpressionAttributeValues: { ':pk': 'DAY#2026-10-31' },
     }));
     expect(Items.find((e) => e.action === 'test.ttl')?.ttl).toBe(Date.parse('2033-10-31T00:00:00Z') / 1000);
+  });
+});
+
+describe('which sites a run covers', () => {
+  it('finds every publisher\'s sites through the indexes, without a scan', async () => {
+    await addUser(env, { id: 'bob' });
+    await addUser(env, { id: 'viewer', roles: [] });
+    const a = await publisher.publish(alice, { title: 'A', content: { files: page('a') } });
+    const b = await publisher.publish({ userId: 'bob' }, { title: 'B', content: { files: page('b') } });
+    const ids = await allSiteIds(env.store);
+    expect(ids).toEqual(expect.arrayContaining([a.site_id, b.site_id]));
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
