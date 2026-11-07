@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 
 const ALLOWED = new Set([
   '0BSD',
+  // 0BSD under the name HTMX's package uses.
+  'BSD-0-Clause',
   'Apache-2.0',
   'BlueOak-1.0.0',
   'BSD-2-Clause',

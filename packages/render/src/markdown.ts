@@ -32,10 +32,14 @@ export type PageState = {
   startsWithHeading?: boolean;
   excerpt?: string;
   mermaid: boolean;
+  // True when the page embeds a fragment, so its layout loads HTMX.
+  embeds: boolean;
+  // Embeds render refuses (M7 R172): a missing src, or one that isn't a fragment.
+  badEmbeds: string[];
 };
 
 export const pageState = (source: string | null, dir: string): PageState => ({
-  source, dir, links: new Set(), missing: [], ids: new Set(), toc: [], problems: [], mermaid: false,
+  source, dir, links: new Set(), missing: [], ids: new Set(), toc: [], problems: [], mermaid: false, embeds: false, badEmbeds: [],
 });
 
 export type Env = { page: PageState };
@@ -44,6 +48,9 @@ export type MarkdownContext = {
   // Resolves a link target to a page: by path, file name or title; `from` makes
   // it a relative link from that source.
   resolve: (target: string, from?: string) => { source: string; url: string } | undefined;
+  // Resolves an embed's src to a fragment's URL and its rule's mark (M6 R167),
+  // or says why it can't be embedded.
+  embed: (target: string) => { url: string; mark?: string | undefined } | { problem: string };
   widgets: Map<string, string>;
   partials: Record<string, string>;
   site: Record<string, unknown>;
@@ -53,6 +60,11 @@ export type MarkdownContext = {
 export const inlineLambda = (md: Markdown, env: Env) => () => (text: string, render: (t: string) => string) => md.renderInline(render(text), env);
 
 const textOf = (tokens: Token[] | null) => (tokens ?? []).filter((c) => c.type === 'text' || c.type === 'code_inline').map((c) => c.content).join('');
+// How an embed loads: when the page does, when it's scrolled into view, or on a click.
+const TRIGGERS = ['load', 'revealed', 'click'];
+// An embed's own classes, for themes: plain class names, space-separated.
+const CLASSES = /^-?[A-Za-z_][\w-]*(?: +-?[A-Za-z_][\w-]*)*$/;
+
 const isAbsolute = (href: string) => /^([a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(href);
 
 export function markdownFor(ctx: MarkdownContext): Markdown {
@@ -79,6 +91,7 @@ export function markdownFor(ctx: MarkdownContext): Markdown {
     if (!token) return '';
     const info = token.info.trim();
     const name = info.split(/\s+/)[0] ?? '';
+    if (name === 'fragment') return embed(token.content, env);
     const template = ctx.widgets.get(name) ?? DEFAULT_WIDGETS[name];
     if (!template) return fallback();
     const content = token.content;
@@ -123,6 +136,39 @@ export function markdownFor(ctx: MarkdownContext): Markdown {
       env.page.problems.push(`${name} block: ${(err instanceof Error ? err.message : String(err)).split('\n')[0]}`);
       return fallback();
     }
+  };
+
+  // An embed (M7 R171): a placeholder HTMX fills with a fragment, showing its
+  // fallback until then, and for viewers the fragment's rule doesn't open. The
+  // placeholder stays, with its classes; the fragment goes inside it.
+  // It isn't a link: a page may embed what some of its readers can't open.
+  const embed = (content: string, env: Env) => {
+    const refuse = (why: string) => {
+      env.page.badEmbeds.push(why);
+      return '';
+    };
+    let data: Record<string, unknown>;
+    try {
+      const parsed: unknown = parseYaml(content) ?? {};
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return refuse('a fragment block needs src: [[page]]');
+      data = parsed as Record<string, unknown>;
+    } catch (err) {
+      return refuse(`a fragment block isn't valid YAML (${(err instanceof Error ? err.message : String(err)).split('\n')[0]})`);
+    }
+    // Unquoted, YAML reads src: [[page]] as a list in a list.
+    const raw = Array.isArray(data.src) && Array.isArray(data.src[0]) ? data.src[0][0] : data.src;
+    const src = typeof raw === 'string' ? raw.trim().replace(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/, '$1').trim() : '';
+    if (!src) return refuse('a fragment block needs src: [[page]]');
+    const trigger = data.trigger === undefined ? 'load' : String(data.trigger);
+    if (!TRIGGERS.includes(trigger)) return refuse(`a fragment block's trigger is ${TRIGGERS.join(', ')}, not ${trigger}`);
+    const classes = data.class === undefined ? '' : String(data.class).trim();
+    if (classes && !CLASSES.test(classes)) return refuse(`a fragment block's class is class names separated by spaces, not ${classes}`);
+    const found = ctx.embed(src);
+    if ('problem' in found) return refuse(found.problem);
+    env.page.embeds = true;
+    const fallback = data.fallback === undefined ? '' : md.render(String(data.fallback), env);
+    const mark = found.mark ? ` data-passa-rule="${found.mark}"` : '';
+    return `<div class="passa-embed${classes ? ` ${classes}` : ''}" hx-get="${escapeHtml(found.url)}" hx-trigger="${trigger}" hx-swap="innerHTML"${mark}>${fallback}</div>\n`;
   };
 
   // Wikilinks: [[target]] and [[target|text]], before link parsing, so Foam's

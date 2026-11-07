@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
+import { HTMX_VERSION } from '@passa/render';
 import { describe, expect, it } from 'vitest';
 import { grantDates, parseRules } from './deploy.ts';
 import { initSite } from './init.ts';
@@ -186,5 +188,14 @@ describe('grant dates (M6 R158)', () => {
     expect(() => grantDates({ expires: '2026-12-31', for: '30d' }, now)).toThrow(/Choose one/);
     expect(() => grantDates({ for: '30' }, now)).toThrow(/--for takes/);
     expect(() => grantDates({ from: 'soon', for: '30d' }, now)).toThrow(/--from takes/);
+  });
+});
+
+describe('HTMX (M7 R173)', () => {
+  it('ships the version render names, which passa serve serves', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> };
+    expect(pkg.dependencies['htmx.org']).toBe(HTMX_VERSION);
+    const file = createRequire(import.meta.url).resolve('htmx.org/dist/htmx.min.js');
+    expect(JSON.parse(readFileSync(join(dirname(file), '..', 'package.json'), 'utf8'))).toMatchObject({ version: HTMX_VERSION });
   });
 });

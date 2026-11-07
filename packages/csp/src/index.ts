@@ -1,7 +1,7 @@
 // The Content Security Policy every Passa site is served with: pages may run
-// inline scripts, but can't send data anywhere (no fetch, XHR or WebSockets,
-// no form posts, no frames), and images and media come only from the site
-// itself. Its own package, with no dependencies, so the edge, the infra and
+// inline scripts and fetch from their own site (M7 R179, for fragments), but
+// can't send data anywhere else (no other origins, no form posts, no frames),
+// and images and media come only from the site itself. Its own package, with no dependencies, so the edge, the infra and
 // the passa command can all use it without pulling in each other's.
 
 // The CDNs config.example.yml allows, for local previews.
@@ -17,7 +17,7 @@ export function contentSecurityPolicy(cdnAllowlist: string[]): string {
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
     "manifest-src 'self'",
-    "connect-src 'none'",
+    "connect-src 'self'",
     "form-action 'none'",
     "frame-src 'none'",
     "frame-ancestors 'none'",

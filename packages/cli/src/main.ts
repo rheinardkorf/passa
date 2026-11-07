@@ -4,9 +4,10 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { contentSecurityPolicy, DEFAULT_CDN_ALLOWLIST } from '@passa/csp';
-import { THEME_GUIDE } from '@passa/render';
+import { HTMX, THEME_GUIDE } from '@passa/render';
 import { chooseServer, login, LoginNeeded, logout, readCredentials, serverUrl, useServer } from './auth.ts';
 import { callTool, ToolRefused } from './mcp.ts';
 import { addMember, type Ask, deleteSite, listAccess, listMembers, listShares, parseRules, publishFolder, removeMember, rollback, setAccess, setName, share, syncFolder, unshare, waitUntilServed } from './deploy.ts';
@@ -87,6 +88,8 @@ matter says access: public are built.`;
 
 // The CSP Passa serves sites with, and its default CDN allowlist.
 const CSP = contentSecurityPolicy(DEFAULT_CDN_ALLOWLIST);
+// Passa's copy of HTMX, for previews of pages that embed fragments (M7 R173).
+const HTMX_FILE = createRequire(import.meta.url).resolve('htmx.org/dist/htmx.min.js');
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json', '.xml': 'application/xml', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -154,6 +157,10 @@ async function renderCommand(args: string[]) {
     writeFileSync(join(dest, page.path), page.html);
   }
   if (build.feed) writeFileSync(join(dest, 'feed.xml'), build.feed);
+  if (build.pages.some((p) => p.html.includes(HTMX))) {
+    mkdirSync(join(dest, '_passa'), { recursive: true });
+    cpSync(HTMX_FILE, join(dest, HTMX));
+  }
   for (const file of build.files) {
     mkdirSync(dirname(join(dest, file)), { recursive: true });
     cpSync(join(folder, file), join(dest, file));
@@ -226,6 +233,7 @@ async function serveCommand(args: string[]) {
     const type = TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream';
     if (pages.has(path)) return res.writeHead(200, { ...headers, 'content-type': TYPES['.html'] }).end(pages.get(path));
     if (pages.has(`${path}/index.html`)) return res.writeHead(301, { location: `/${path}/` }).end();
+    if (`/${path}` === HTMX) return res.writeHead(200, { ...headers, 'content-type': TYPES['.js'] }).end(readFileSync(HTMX_FILE));
     if (path === 'feed.xml' && build.feed) return res.writeHead(200, { ...headers, 'content-type': TYPES['.xml'] }).end(build.feed);
     if (files.has(path)) return res.writeHead(200, { ...headers, 'content-type': type }).end(readFileSync(join(folder, path)));
     const card = cards.get(path);
@@ -233,6 +241,8 @@ async function serveCommand(args: string[]) {
       if (!drawn.has(card.hash)) drawn.set(card.hash, drawSiteCard(folder, build, card));
       return res.writeHead(200, { ...headers, 'content-type': 'image/png' }).end(await (drawn.get(card.hash) ?? Promise.reject(new Error('no card'))));
     }
+    // As the edge answers a fragment its viewer can't open: nothing, so the fallback stays (M7 R174).
+    if (req.headers['hx-request'] === 'true') return res.writeHead(204, headers).end();
     res.writeHead(404, { ...headers, 'content-type': 'text/plain; charset=utf-8' }).end('Not found (or not public).');
   }
   await new Promise<void>((done, fail) => server.once('error', fail).listen(port, '127.0.0.1', done));

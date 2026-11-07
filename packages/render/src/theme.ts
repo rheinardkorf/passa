@@ -98,6 +98,7 @@ const DEFAULT_LAYOUT = `<!doctype html>
 </main>
 </div>
 {{#mermaid}}<script type="module">import mermaid from '{{{mermaid}}}'; mermaid.initialize({ startOnLoad: true, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });</script>{{/mermaid}}
+{{#htmx}}<script src="{{htmx}}"></script>{{/htmx}}
 </body>
 </html>
 `;
@@ -129,6 +130,7 @@ html{scroll-snap-type:y mandatory}body{margin:0}
 {{#sections}}<section class="slide" id="s{{index}}"><span class="num">{{index}} / {{sections.length}}</span>{{{content}}}</section>{{/sections}}
 <script>addEventListener('keydown',e=>{const s=[...document.querySelectorAll('.slide')];const i=s.findIndex(x=>x.getBoundingClientRect().top>=-5);const d={ArrowRight:1,ArrowDown:1,PageDown:1,' ':1,ArrowLeft:-1,ArrowUp:-1,PageUp:-1}[e.key];if(d){e.preventDefault();s[Math.max(0,Math.min(s.length-1,i+d))]?.scrollIntoView({behavior:'smooth'})}})</script>
 {{#mermaid}}<script type="module">import mermaid from '{{{mermaid}}}'; mermaid.initialize({ startOnLoad: true, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });</script>{{/mermaid}}
+{{#htmx}}<script src="{{htmx}}"></script>{{/htmx}}
 </body>
 </html>
 `;

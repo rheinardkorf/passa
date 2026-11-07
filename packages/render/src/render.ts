@@ -12,6 +12,10 @@ import { baseOf, dirOf, escapeHtml, outputOf, resolveFrom, slugify } from './tex
 Mustache.escape = (value: unknown) => escapeHtml(String(value));
 
 export const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@12.2.0/dist/mermaid.esm.min.mjs';
+// HTMX, for pages that embed fragments (M7 R173): Passa's own pinned copy,
+// served at this path on every site. The CLI's htmx.org dependency must match.
+export const HTMX_VERSION = '4.0.0';
+export const HTMX = `/_passa/htmx-${HTMX_VERSION}.min.js`;
 
 export type Source = { path: string; content: string };
 // A rule's access is a list of audiences (public, or tier names) or private (M6 R146).
@@ -46,6 +50,7 @@ export type ProblemKind =
   | 'link-hidden' // M5 R137: a page links to pages its own visitors can't open
   | 'missing-link' // R73
   | 'widget' // R76: invalid widget data
+  | 'fragment' // M7 R168, R172: an embed of something that isn't a fragment, or a fragment that can't be one
   | 'front-matter'
   | 'site-settings'
   | 'template'
@@ -55,7 +60,7 @@ export type Problem = { kind: ProblemKind; source: string | null; message: strin
 
 // Problems that refuse a publish in Passa; access-private-made-public refuses
 // only until the change is confirmed with confirm_public.
-export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public', 'card', 'access']);
+export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public', 'card', 'access', 'fragment']);
 
 // The files a site renders from (R86): Markdown, layouts and the site's settings.
 export const isSource = (path: string) =>
@@ -67,7 +72,7 @@ export const RULES_FILE = '_passa/access.yml';
 export const rulesFile = (rules: Rule[]) => '# Written by Passa on every publish: the site\'s access rules. Editing this changes nothing; use set_access.\n'
   + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, access: ${JSON.stringify(r.access)} }\n`).join('') : '[]\n');
 
-export type RenderedPage ={ path: string; html: string; from: string | null; tier: string };
+export type RenderedPage ={ path: string; html: string; from: string | null; tier: string; fragment?: true };
 
 // cards and cardFonts only with input.cards; cardFonts are the theme's font
 // paths, or empty for the default card's built-in fonts.
@@ -200,6 +205,8 @@ type Page = {
   tier: string;
   date: string | undefined;
   unlisted: boolean;
+  // A fragment (M7 R168): its content alone, loaded into other pages.
+  fragment: boolean;
   words: number;
   tags: string[];
   state: PageState;
@@ -294,13 +301,16 @@ export function render(input: RenderInput): RenderResult {
     if (data.draft === true) continue;
     const out = outputOf(s.path);
     const tags = Array.isArray(data.tags) ? data.tags.map(String) : data.tags ? [String(data.tags)] : [];
+    // Fragments are never listed, tagged or in the feed (M7 R170).
+    const fragment = data.fragment === true;
     pages.push({
       source: s.path, dir: dirOf(s.path), body, data, ...out,
       tier: tierFor(rules, `${out.url}index.html`),
       date: isoDate(data.date),
-      unlisted: data.hidden === true || data.unlisted === true,
+      unlisted: fragment || data.hidden === true || data.unlisted === true,
+      fragment,
       words: proseWords(body),
-      tags,
+      tags: fragment ? [] : tags,
       state: pageState(s.path, dirOf(s.path)),
       title: '', content: '', kind: '', cover: undefined, excerpt: '', backlinks: [],
     });
@@ -359,11 +369,29 @@ export function render(input: RenderInput): RenderResult {
     return found?.source ? { source: found.source, url: found.url } : undefined;
   };
 
-  const md = markdownFor({ resolve, widgets, partials, site });
+  // A non-public page's mark (M6 R167): its rule's ID, or owner when no rule covers it.
+  const byLength = [...rules].sort((a, b) => b.path.length - a.path.length);
+  const markOf = (p: Page) => {
+    if (p.tier === 'public') return undefined;
+    const rule = byLength.find((r) => `${p.url}index.html`.startsWith(r.path));
+    return rule ? ruleId(rule.path) : 'owner';
+  };
+  for (const p of pages) if (p.fragment && p.url === '/') problem('fragment', p.source, `${p.source} is the home page, so it can't be a fragment`);
+  // An embed's src must be one of the site's fragments (M7 R172).
+  const embed = (target: string) => {
+    const found = resolve(target);
+    const p = found ? pages.find((q) => q.source === found.source) : undefined;
+    if (!p) return { problem: `a fragment block's src [[${target}]] doesn't match any page` };
+    if (!p.fragment) return { problem: `a fragment block's src [[${target}]] is ${p.source}, which isn't a fragment (fragment: true)` };
+    return { url: p.url, mark: markOf(p) };
+  };
+
+  const md = markdownFor({ resolve, embed, widgets, partials, site });
   const resolveAsset = (dir: string, value: string) => (/^([a-z]+:|\/)/i.test(value) ? value : resolveFrom(dir, value));
   for (const p of pages) {
     p.content = md.render(p.body, { page: p.state });
     for (const message of p.state.problems) problem('widget', p.source, message);
+    for (const message of p.state.badEmbeds) problem('fragment', p.source, message);
     for (const target of p.state.missing) problem('missing-link', p.source, `[[${target}]] doesn't match any page`);
     p.title = String(p.data.title ?? p.state.firstHeading ?? baseOf(p.source ?? ''));
     // Front matter `kind` wins; a deck is a deck; otherwise essay or note by length.
@@ -375,7 +403,7 @@ export function render(input: RenderInput): RenderResult {
 
   // Backlinks.
   const bySource = new Map(pages.map((p) => [p.source, p]));
-  for (const p of pages) for (const target of p.state.links) bySource.get(target)?.backlinks.push(p);
+  for (const p of pages) if (!p.fragment) for (const target of p.state.links) bySource.get(target)?.backlinks.push(p);
 
   // Links the page's own visitors can't follow, such as a shared page's link
   // home to a private page: kept, since the owner can follow them, but
@@ -467,7 +495,7 @@ export function render(input: RenderInput): RenderResult {
   // a tag used only on private pages never gets a public page naming it.
   const generatedPage = (file: string, url: string, title: string, tier: string, generated: 'index' | 'tag', tag?: string): Page => ({
     source: null, dir: '', file, url, data: {}, body: '', tier, date: undefined, unlisted: true, words: 0, tags: [],
-    state: pageState(null, ''), generated, ...(tag === undefined ? {} : { tag }), title, content: '', kind: '', cover: undefined, excerpt: '', backlinks: [],
+    fragment: false, state: pageState(null, ''), generated, ...(tag === undefined ? {} : { tag }), title, content: '', kind: '', cover: undefined, excerpt: '', backlinks: [],
   });
   if (!pages.some((p) => p.file === 'index.html') && !taken.has('index.html')) pages.push(generatedPage('index.html', '/', site.title, tierFor(rules, '/index.html'), 'index'));
   for (const t of [...new Set(sorted.flatMap((p) => p.tags))].sort((a, b) => a.localeCompare(b))) {
@@ -512,6 +540,11 @@ export function render(input: RenderInput): RenderResult {
 
   const out: RenderedPage[] = [];
   for (const p of pages) {
+    // A fragment is its content in a wrapper: no layout, no card (M7 R168, R170).
+    if (p.fragment) {
+      out.push({ path: p.file, html: `<div class="passa-fragment">\n${p.content}</div>\n`, from: p.source, tier: kind(p.tier), fragment: true });
+      continue;
+    }
     const layoutName = p.data.layout ? String(p.data.layout)
       : p.url === '/' && layouts.has('home') ? 'home'
       : p.generated === 'index' ? (layouts.has('index') ? 'index' : 'default')
@@ -620,6 +653,7 @@ export function render(input: RenderInput): RenderResult {
       navNext: reading >= 0 ? readingOrder[reading + 1] ?? null : null,
       lang: String(site.lang ?? site.locale ?? 'en'),
       mermaid: p.state.mermaid ? MERMAID : null,
+      htmx: p.state.embeds ? HTMX : null,
       feed,
       // {{#markdown}}{{hero.text}}{{/markdown}}: a value as inline Markdown.
       markdown: inlineLambda(md, { page: pageState(p.source, p.dir) }),
@@ -665,9 +699,8 @@ export function render(input: RenderInput): RenderResult {
   // a viewer can't follow. They reveal only a short hash of a path.
   const marks = new Map<string, string>();
   for (const p of pages) {
-    if (p.tier === 'public') continue;
-    const rule = [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => `${p.url}index.html`.startsWith(r.path));
-    marks.set(p.url, rule ? ruleId(rule.path) : 'owner');
+    const mark = markOf(p);
+    if (mark) marks.set(p.url, mark);
   }
   if (marks.size) {
     for (const page of out) {
