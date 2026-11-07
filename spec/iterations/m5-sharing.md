@@ -13,7 +13,7 @@ Until now, *private* has meant *only the owner*. M5 lets an owner share parts of
 
 Two pieces of groundwork come with it, both behind interfaces so another implementation slots in later:
 
-- **The mailer** becomes a provider chosen in config: SES (as now) or SMTP, which works with almost any mail service, in case SES production access never comes, and which the self-hosted target (M7) needs anyway.
+- **The mailer** becomes a provider chosen in config: SES (as now) or SMTP, which works with almost any mail service, in case SES production access never comes, and which the self-hosted target (M8) needs anyway.
 - **Publishers** can be added and disabled by admins with `passa admin users`, through the admin function from M4, instead of by editing the database.
 
 Member self-sign-up (anyone joining a site's `members` tier) is out of scope: it needs its own abuse protection.
@@ -38,7 +38,7 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 **Out (later):**
 
 - Member self-sign-up (`members` tier, Join, CAPTCHA): a later milestone.
-- Membership tiers (M6), paid tiers (M8) and scheduled access (M9).
+- Membership tiers (M6), paid tiers (M9) and scheduled access (M10).
 - HTTP-API mail providers (Postmark, Resend): another implementation of the same interface, when wanted.
 - Membership tiers, where everyone in a tier sees the same paths: a later milestone (see decision 2).
 
