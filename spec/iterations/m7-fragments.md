@@ -126,13 +126,14 @@ On dev: a public home page embedding a family fragment. A stranger in a private 
 
 - **HTMX against the edge:** `hx-get` with a `204` (nothing swapped, fallback kept), `HX-Redirect` through refresh and back, under the new CSP, in Chrome, Safari and Firefox.
 - **Never cached:** a refusal followed by an allowed request for the same fragment, through CloudFront, gets the content; a member's response never reaches a stranger.
+- **HTMX 4's behaviour:** it requests with fetch (`mode: 'same-origin'`), swaps nothing on a `204`, swaps 4xx and 5xx answers by default (so refusals stay `204`, never an error status), sends `HX-Request` and `HX-Current-URL`, and follows `HX-Redirect`. Attributes no longer inherit, so every embed carries its own.
 - **Serving HTMX:** from the edge at `/_passa/htmx.js` (size against CloudFront Function limits, or from the version bucket) versus the CDN with SRI.
 
 ## Starting values
 
 | Setting | Value |
 | --- | --- |
-| HTMX | 2.x, pinned (the exact version recorded at build time) |
+| HTMX | 4.x (released 2026-08-28), pinned to an exact version at least 14 days old: 4.0.0 now, 4.0.1 from 2026-11-15. npm's `latest` tag is still 2.x until 2027, so it's never left unpinned |
 | Triggers | `load` (default), `revealed`, `click` |
 | Swap | `outerHTML` (the embed is replaced by the fragment) |
 | Login block | `label: Sign in`, `show_user: false` |
