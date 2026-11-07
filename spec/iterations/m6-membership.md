@@ -20,17 +20,25 @@ The paywall (M8) then only has to add "a purchase grants a tier", and scheduled 
 | Term | Meaning | Example |
 | --- | --- | --- |
 | **Rule** | A path, and who may open it | `{ path: /lessons/, access: [gold, silver] }` |
-| **Audience** | One entry in a rule's `access` list: `public`, `private`, or a tier name | `gold` |
+| **Audience** | One entry in a rule's `access` list: `public`, or a tier name | `gold` |
 | **Tier** | A named membership group a site defines; names only, no people | `gold`, `silver` |
 | **Membership** | A grant: one person in one tier | sam@example.com is in `gold` |
 | **Share** | A grant: one person, one path | reviewer@example.com may open `/lessons/` |
 | **Grant** | Either kind: "this email may open something" | |
 
-The owner opens everything, whatever the rules say.
+The owner opens everything, whatever the rules say. Private is the default: a path no rule covers opens only to the owner, and to anyone it's shared with. **`private`** is the keyword for an exception, closing a path inside a more open folder:
+
+```yaml
+access:
+  /lessons/: [silver]
+  /lessons/draft/: private
+```
+
+`/lessons/` and everything under it open to silver members; `/lessons/draft/` is the owner's alone (plus anyone it's shared with).
 
 ## Demo
 
-A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold, silver]` and `/lessons/bonus/` to `[gold]`, and whose `/drafts/` is private; one lesson's front matter says `access: [silver]`. Published with `passa sync` and no access commands. `passa members add` puts one address in `gold` and another in `silver`, from a start date, with an end date; each gets an invite. Signed in, the gold member opens the bonus and the silver member doesn't; neither opens `/drafts/`. `/lessons/` is shared with a third address, who opens every lesson but not the bonus or the silver-only lesson, and the share's result says so. `passa access course --as <email>` shows what each person opens, and why. `passa members remove`, and that person's next request is refused.
+A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold, silver]`, `/lessons/bonus/` to `[gold]` and `/lessons/draft/` to `private`; one lesson's front matter says `access: [silver]`. Published with `passa sync` and no access commands. `passa members add` puts one address in `gold` and another in `silver`, from a start date, with an end date; each gets an invite. Signed in, the gold member opens the bonus and the silver member doesn't; neither opens `/lessons/draft/`. `/lessons/` is shared with a third address, who opens every lesson but not the bonus or the silver-only lesson, and the share's result says so. `passa access course --as <email>` shows what each person opens, and why. `passa members remove`, and that person's next request is refused.
 
 ## Scope
 
@@ -56,14 +64,14 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Rules and tiers
 
-- **R146** A rule is a path and an `access` list of one or more audiences: `public`, `private`, or tier names. A path opens to anyone in any listed audience; the longest matching rule decides, and a path no rule covers is private. `private` stands alone (`[private]`: the owner, and anyone the path is shared with); combined with anything else it's refused, since the owner opens everything anyway. `public` combined with tiers is refused too, since it already opens to everyone.
+- **R146** A rule is a path and its access: a list of one or more audiences (`public`, or tier names), or `private`. A path opens to anyone in any listed audience; the longest matching rule decides, and a path no rule covers is private. `private` isn't an audience: it means no audience (the owner, and anyone the path is shared with), and is only written to close a path inside a more open folder, such as `/lessons/draft/` under a silver `/lessons/`. `public` combined with tiers is refused, since it already opens to everyone.
 - **R147** A site names its tiers in `_site.yml` (`tiers: [gold, silver]`). A rule may only list named tiers; tier names are 1–30 lowercase letters, digits and hyphens, and `public`, `private` and `shared` are reserved.
 - **R148** The owner opens every path of their site, whatever its rules.
 - **R149** A site has at most 20 rules, counting folder rules, page rules and the rules shares create (R156), within the edge record's budget (about 850 bytes). Over it, the change is refused with which rules to merge.
 
 ### Access in the site
 
-- **R150** On a Markdown site, `_site.yml`'s `access` sets rules for folders (`/lessons/: [gold, silver]`), and a page's front matter `access` (`[silver]`) sets a rule for that page's folder. The site's files are the source of truth: publishing or syncing them sets the site's rules, and `set_access` on a Markdown site writes `_site.yml` (making a new version, as rule changes on Markdown sites do now).
+- **R150** On a Markdown site, `_site.yml`'s `access` sets rules for folders (`/lessons/: [gold, silver]`, `/lessons/draft/: private`), and a page's front matter `access` (`[silver]`, or `private`) sets a rule for that page's folder. The site's files are the source of truth: publishing or syncing them sets the site's rules, and `set_access` on a Markdown site writes `_site.yml` (making a new version, as rule changes on Markdown sites do now).
 - **R151** Anything a change would make public still needs `confirm_public` from an agent, or a yes in the terminal (`--confirm-public` in scripts), whether the change comes from `set_access`, `_site.yml` or front matter. Tiers and `private` need no confirmation. This replaces M3 R89 (front matter never grants access) for tiers.
 - **R152** Plain HTML sites keep their rules on the site, set with `set_access` and `passa access`, in the new form.
 
@@ -93,7 +101,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Moving to the new form
 
-- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `[private]`, and M5's `shared` → `[private]` (the people it was shared with keep their shares). Existing shares keep working under R156. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
+- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, or no rule where the folder above is already private (the people it was shared with keep their shares). Existing shares keep working under R156. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
 
 ### CLI and docs
 
@@ -112,7 +120,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ## Design
 
-- **Rules:** `{ path, access: string[] }`, stored on the site as now. The edge record is unchanged: a rule that isn't public or owner-only becomes `[path, "s", id]` as M5's shared rules do, since the edge only needs a rule's ID; audiences stay off the edge.
+- **Rules:** `{ path, access: string[] | 'private' }`, stored on the site as now. The edge record is unchanged: a rule that isn't public or owner-only becomes `[path, "s", id]` as M5's shared rules do, since the edge only needs a rule's ID; audiences stay off the edge.
 - **Viewer cookies:** list the IDs of the rules a person opens: rules listing a tier they're a member of (within its dates), and the rule each of their shares opens (R156). `auth.` works them out at sign-in, as now.
 - **Memberships:** items in the site's partition (`SITE#<site>`, `MEMBER#<tier>#<email>`), with start, end, invite time and a TTL at the end; one person's are found by a second key (`MEMBERSHIP#<email>#<tier>` in the same partition, or an index), so sign-in reads them directly. Listing a tier is a query, a page at a time.
 - **Shares:** as M5 (`GRANT#<email>#<path>`), plus a start date; a share no longer reaches rules under its path.
@@ -156,4 +164,4 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 ## Done when
 
 - The demo works.
-- Tested: rules listing several tiers; `private` and `public` combinations refused; a page's front matter overriding its folder; public access from files needing confirmation; members opening their tiers' paths and nothing else; a share reaching a path whatever its rule, and stopping at a sub-rule (named in the result); start and end dates on memberships and shares; removing a membership and a share; render lists without leaks across tiers; `--as` showing what a person opens and why; M5's rules and shares moved; the CLI matching every tool.
+- Tested: rules listing several tiers; `private` closing a path inside a tier folder and a public one; `public` combined with tiers refused; a page's front matter overriding its folder; public access from files needing confirmation; members opening their tiers' paths and nothing else; a share reaching a path whatever its rule, and stopping at a sub-rule (named in the result); start and end dates on memberships and shares; removing a membership and a share; render lists without leaks across tiers; `--as` showing what a person opens and why; M5's rules and shares moved; the CLI matching every tool.
