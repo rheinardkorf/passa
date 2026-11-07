@@ -90,7 +90,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 - **R146** A rule is a path and its access: a list of one or more audiences (`public`, or tier names), or `private`. A path opens to anyone in any listed audience; the longest matching rule decides, and a path no rule covers is private. `private` isn't an audience: it means no audience (the owner, and anyone the path is shared with), and is only written to close a path inside a more open folder, such as `/lessons/draft/` under a silver `/lessons/`. `public` combined with tiers is refused, since it already opens to everyone.
 - **R147** A site names its tiers in `_site.yml` (`tiers: [gold, silver]`). A rule may only list named tiers; tier names are 1–30 lowercase letters, digits and hyphens, and `public`, `private` and `shared` are reserved.
 - **R148** The owner opens every path of their site, whatever its rules.
-- **R149** A site has at most 20 rules, counting folder rules, page rules and the rules shares create (R156), within the edge record's budget (about 850 bytes). Over it, the change is refused with which rules to merge.
+- **R149** A site has at most 20 rules, counting folder rules, page rules and the rules shares create (R156), within the edge record's budget (about 850 bytes; with long paths, about 10 rules fit). Over it, the change is refused with which rules to merge.
 
 ### Access in the site
 
@@ -200,6 +200,7 @@ Changes to the approved spec are recorded here, each with its date and reason, r
   - **R161, lists.** As approved, lists compared audiences only, and a brute-force check found that pages read through a share could list pages their reader can't open (11 cases in the example), worst when a private page was shared, since owner-only pages list everything. Making lists safe for share readers would have shortened them for members too (pages are built once, for everyone). The owner's call: lists are made for audiences; a share reader may see titles, never content; members come first. Pages under a `private` rule now list only their own rule's pages and public ones, which affects only the owner and keeps every private title off pages a share opens.
   - **R167, new:** links to pages that aren't public carry the target's rule ID, for a later theme or script to tidy links a viewer can't follow. Client-side hiding can't protect titles, only tidy pages.
   - **R162 and the edge.** The dry run on dev's data showed that dropping M5's `shared` rules would cut off their shares, which need a rule at their path; they become `private` rules instead. And `private` rules now go to the edge with an ID, so shares on them open.
+  - **R149, the edge budget (kept, measured).** The bytes run out before 20 rules once paths are long: about 20 fit with short paths (`/lessons/week-12/`), 15 with medium (`/courses/spec-driven/module-3/`) and 10 with long nested ones, which page rules from front matter make likely. The owner's call: keep the limit with a clear refusal, and fix forward when a real site hits it (paths stored relative to the rule above, or a second KeyValueStore entry).
 
 ## Done when
 
