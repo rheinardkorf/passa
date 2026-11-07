@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Draft, for review |
+| **Status** | Approved 2026-11-07 (PR #55), then changed after its early checks (see Changes after approval) |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: named tiers on a site, a new kind of grant, access declared in a site's own files, and a change to how rules and shares are written |
 | **Security-relevant** | Yes: decides who besides the owner opens which paths, lets site files set access, and changes how shares reach paths |
@@ -90,7 +90,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 - **R146** A rule is a path and its access: a list of one or more audiences (`public`, or tier names), or `private`. A path opens to anyone in any listed audience; the longest matching rule decides, and a path no rule covers is private. `private` isn't an audience: it means no audience (the owner, and anyone the path is shared with), and is only written to close a path inside a more open folder, such as `/lessons/draft/` under a silver `/lessons/`. `public` combined with tiers is refused, since it already opens to everyone.
 - **R147** A site names its tiers in `_site.yml` (`tiers: [gold, silver]`). A rule may only list named tiers; tier names are 1–30 lowercase letters, digits and hyphens, and `public`, `private` and `shared` are reserved.
 - **R148** The owner opens every path of their site, whatever its rules.
-- **R149** A site has at most 20 rules, counting folder rules, page rules and the rules shares create (R156), within the edge record's budget (about 850 bytes). Over it, the change is refused with which rules to merge.
+- **R149** A site has at most 20 rules, counting folder rules, page rules and the rules shares create (R156), within the edge record's budget (about 850 bytes; with long paths, about 10 rules fit). Over it, the change is refused with which rules to merge.
 
 ### Access in the site
 
@@ -125,11 +125,12 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Rendering
 
-- **R161** A page's audience is its rule's audience. A page lists, links in lists, backlinks and tags another page only if everyone who can open the first can open the second: public pages always, owner-only pages everything, and otherwise pages whose audience covers the listing page's. Shares don't change what pages list. Pages that aren't public get no social cards. Render's warnings name links a page's readers can't follow, as now.
+- **R161** A page's audience is its rule's audience. A page's lists (pages in a folder, backlinks, tag pages, previous and next) are made for its audience: it lists another page only if everyone in its audience can open that one. Public pages are listed everywhere; a page under a tier rule lists pages whose audience covers its own; a page under a `private` rule lists only pages under that same rule, and public ones; a page with no rule at all (the private default, never shared) lists everything, since only the owner reads it. Shares don't change lists: someone reading a page through a share sees what its audience sees, which can include titles of pages they can't open, but never those pages. Pages that aren't public get no social cards. Render's warnings name links a page's readers can't follow, as now.
+- **R167** Render marks every link to a page that isn't public with that page's rule ID (`data-passa-rule`), so a theme or script can later tidy links a viewer can't follow. Nothing uses the marks in M6, and they reveal only a short hash of a path.
 
 ### Moving to the new form
 
-- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, or no rule where the folder above is already private (the people it was shared with keep their shares). Existing shares keep working under R156, with their dates as they are; R158's default end applies to shares made from now on. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
+- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, kept, since its shares need a rule at their path to open (R156). Existing shares keep working under R156, with their dates as they are; R158's default end applies to shares made from now on. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
 
 ### CLI and docs
 
@@ -142,13 +143,13 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 - **Members are never in site files:** emails stay on the server, never in versions, pulls or folders.
 - **Adding a member is confirmed,** reading the email back, as sharing is (R153).
 - **No bulk email:** invites count against the daily cap (R153).
-- **Lists never leak:** a page lists only pages everyone who can open it can open (R161).
+- **Lists are made for audiences** (R161): a page's lists show its audience only pages they can all open, and nothing private reaches a list on a page someone else reads. Someone reading a page through a share may see titles (never content) of pages in its lists that they can't open: shares are given for that page, and members come first.
 - **Revocation is complete:** removing a membership or share, or its end passing, bumps the access version; site cookies last an hour at most anyway.
 - **The owner is never locked out** of their own site (R148).
 
 ## Design
 
-- **Rules:** `{ path, access: string[] | 'private' }`, stored on the site as now. The edge record is unchanged: a rule that isn't public or owner-only becomes `[path, "s", id]` as M5's shared rules do, since the edge only needs a rule's ID; audiences stay off the edge.
+- **Rules:** `{ path, access: string[] | 'private' }`, stored on the site as now. The edge record's format is unchanged: every rule that isn't public, `private` ones included, becomes `[path, "s", id]` as M5's shared rules do, so shares on any rule can be opened; audiences stay off the edge. (Today private rules go to the edge as `x`, and none are sent when every rule is private; that changes.)
 - **Viewer cookies:** list the IDs of the rules a person opens: rules listing a tier they're a member of (within its dates), and the rule each of their shares opens (R156). `auth.` works them out at sign-in, as now.
 - **Memberships:** items in the site's partition (`SITE#<site>`, `MEMBER#<tier>#<email>`), with start, end, invite time and a TTL at the end; one person's are found by a second key (`MEMBERSHIP#<email>#<tier>` in the same partition, or an index), so sign-in reads them directly. Listing a tier is a query, a page at a time.
 - **Shares:** as M5 (`GRANT#<email>#<path>`), plus a start date and a required end; a share no longer reaches rules under its path. Listing every share across an owner's sites (R165) needs an index by owner (an overloaded key on the share items, as `gsi1` already does for sites by owner), not a scan.
@@ -193,7 +194,13 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ## Changes after approval
 
-Changes to the approved spec are recorded here, each with its date and reason, rather than edited in silently. None yet.
+Changes to the approved spec are recorded here, each with its date and reason, rather than edited in silently.
+
+- **2026-11-07, after the early checks** (`agent-publisher/spikes/membership/`):
+  - **R161, lists.** As approved, lists compared audiences only, and a brute-force check found that pages read through a share could list pages their reader can't open (11 cases in the example), worst when a private page was shared, since owner-only pages list everything. Making lists safe for share readers would have shortened them for members too (pages are built once, for everyone). The owner's call: lists are made for audiences; a share reader may see titles, never content; members come first. Pages under a `private` rule now list only their own rule's pages and public ones, which affects only the owner and keeps every private title off pages a share opens.
+  - **R167, new:** links to pages that aren't public carry the target's rule ID, for a later theme or script to tidy links a viewer can't follow. Client-side hiding can't protect titles, only tidy pages.
+  - **R162 and the edge.** The dry run on dev's data showed that dropping M5's `shared` rules would cut off their shares, which need a rule at their path; they become `private` rules instead. And `private` rules now go to the edge with an ID, so shares on them open.
+  - **R149, the edge budget (kept, measured).** The bytes run out before 20 rules once paths are long: about 20 fit with short paths (`/lessons/week-12/`), 15 with medium (`/courses/spec-driven/module-3/`) and 10 with long nested ones, which page rules from front matter make likely. The owner's call: keep the limit with a clear refusal, and fix forward when a real site hits it (paths stored relative to the rule above, or a second KeyValueStore entry).
 
 ## Done when
 
