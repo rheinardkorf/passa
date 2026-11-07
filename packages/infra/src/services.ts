@@ -43,7 +43,8 @@ export type ServicesProps = StackProps & {
   zone: IHostedZone;
   data: DataStack;
   authCertificate: ICertificate;
-  webAclArn: string;
+  // WAF in front of auth., when the stage has it (config.waf).
+  webAclArn?: string;
 };
 
 // Copies the viewer's host into a header the function can read, since the
@@ -132,7 +133,7 @@ export class ServicesStack extends Stack {
       comment: `Passa ${props.stage} auth.`,
       domainNames: [`auth.${domain}`],
       certificate: props.authCertificate,
-      webAclId: props.webAclArn,
+      ...(props.webAclArn ? { webAclId: props.webAclArn } : {}),
       httpVersion: HttpVersion.HTTP2_AND_3,
       defaultBehavior: {
         origin: new FunctionUrlOrigin(authUrl, { customHeaders: { 'x-origin-verify': originVerify } }),

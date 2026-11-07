@@ -13,7 +13,7 @@ Passa is self-hosted: it runs in your own AWS account, and there's no hosted ser
 | Part | AWS |
 | --- | --- |
 | Sites | S3 behind CloudFront, with access checked at the edge by a CloudFront Function |
-| Sign-in and OAuth (`auth.`) | Lambda behind CloudFront, with WAF |
+| Sign-in and OAuth (`auth.`) | Lambda behind CloudFront, optionally with WAF |
 | MCP server (`mcp.`) | Lambda behind API Gateway, with throttling |
 | Data | DynamoDB |
 | Email | SES, or any SMTP service, for sign-in links and invites (see [[Email]]) |
@@ -63,4 +63,14 @@ You need Node.js 24, pnpm and the AWS CLI, signed in to your accounts.
 
 ## Cost
 
-Passa is built from services that cost nothing when idle and little at personal scale: no servers, containers or databases run all the time. Set an AWS budget alert all the same.
+Passa runs no servers, containers or databases all the time, so traffic costs little at personal scale. Most of the bill is fixed, monthly and per stage:
+
+| | About, per stage |
+| --- | --- |
+| WAF on `auth.`, if turned on (a web ACL and four rules) | US$9 a month |
+| Route 53 hosted zones | US$0.50 a month each |
+| KMS keys and Secrets Manager secrets | about US$1 a month |
+
+WAF is optional and off unless `waf: true` is set in `config.yml` (or for one stage, under `stages.prod`). Passa limits what matters itself either way: sign-in emails per address and per IP (`rateLimits.signinPerEmail`, `signinPerIp`) and client registrations per IP (`registerPerIp`). WAF adds known-bad IP and input blocking, and a per-IP limit on every request to `auth.`. Without it, a flood of requests still reaches CloudFront and Lambda and is billed, which an AWS budget alert catches; set one either way.
+
+To turn WAF off on a stage that has it, deploy its services stack first, which detaches the web ACL, then everything: `pnpm cdk deploy passa-prod-services -c stage=prod --exclusively`, then `pnpm cdk deploy --all -c stage=prod`. CloudFront won't let a web ACL be deleted while it's attached.

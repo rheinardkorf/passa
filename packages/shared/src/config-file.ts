@@ -45,6 +45,7 @@ const domains = z.strictObject({
 
 const stageOverrides = z.strictObject({
   domain: domainName.optional(),
+  waf: z.boolean().optional(),
   siteDomain: domainName.optional(),
   email: email.optional(),
   domains: domains.optional(),
@@ -84,12 +85,20 @@ export const configSchema = z.strictObject({
     // sign-in and client registration endpoints. WAF's minimum is 10.
     authPerIp: z.number().int().min(10),
     authFormsPerIp: z.number().int().min(10),
+    // OAuth client registrations allowed per IP in each window: the app's own
+    // limit, which applies with or without WAF.
+    registerPerIp: z.number().int().positive().default(10),
     // API Gateway throttling on mcp., for the whole endpoint.
     mcpPerSecond: z.number().int().positive(),
     mcpBurst: z.number().int().positive(),
     // Sharing invites each publisher may send in a day (M5 R134).
     invitesPerDay: z.number().int().positive().default(50),
   }),
+  // WAF in front of auth. (rateLimits.authPerIp and authFormsPerIp, IP
+  // reputation and known bad inputs): optional, and off unless turned on. It
+  // costs a fixed amount a month per stage whatever the traffic. Passa limits
+  // sign-in emails and client registrations itself either way.
+  waf: z.boolean().default(false),
   deleteGraceDays: z.number().int().nonnegative(),
   // How long a site's old name is held for its owner after a rename (M2 R46).
   nameHoldDays: z.number().int().nonnegative().default(7),

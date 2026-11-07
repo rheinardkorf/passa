@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { addStage } from './stacks.ts';
 import { exampleConfig, testApp } from './testing.ts';
 
-const config = exampleConfig();
+// WAF is off unless config turns it on; these tests turn it on for prod.
+const config = { ...exampleConfig(), waf: true };
 const stacks = addStage(testApp(), config, 'prod');
 const services = Template.fromStack(stacks.services);
 const global = Template.fromStack(stacks.global);
@@ -23,6 +24,24 @@ describe('global stack', () => {
         Match.objectLike({ Name: 'requests-per-ip', Action: { Block: {} }, Statement: { RateBasedStatement: Match.objectLike({ Limit: config.rateLimits.authPerIp }) } }),
       ]),
     });
+  });
+});
+
+describe('a stage with WAF turned off', () => {
+  // Dev, say: WAF on for the deployment, off for that stage.
+  const off = addStage(testApp(), parseConfig({ ...config, stages: { dev: { waf: false } } }), 'dev');
+
+  it('has no web ACL, and serves auth. without one', () => {
+    Template.fromStack(off.global).resourceCountIs('AWS::WAFv2::WebACL', 0);
+    const auth = Object.values(Template.fromStack(off.services).findResources('AWS::CloudFront::Distribution'))
+      .find((d) => JSON.stringify(d.Properties.DistributionConfig.Aliases ?? []).includes('auth.'));
+    expect(auth?.Properties.DistributionConfig.Aliases).toEqual(['auth.example.com']);
+    expect(auth?.Properties.DistributionConfig.WebACLId).toBeUndefined();
+  });
+
+  it('leaves other stages with WAF', () => {
+    const prod = addStage(testApp(), parseConfig({ ...config, stages: { dev: { waf: false } } }), 'prod');
+    Template.fromStack(prod.global).resourceCountIs('AWS::WAFv2::WebACL', 1);
   });
 });
 

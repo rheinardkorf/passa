@@ -1,6 +1,6 @@
 // The auth. web app: sign-in pages, sessions, the site handoff, and the OAuth
 // authorization server for MCP clients, all on one session.
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDomain, isName, isSiteId, isSitePath } from '@passa/shared';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { CSRF_COOKIE, readCookies, SESSION_COOKIE } from './cookies.ts';
@@ -111,10 +111,25 @@ export function createAuthApp(deps: AuthDeps): express.Express {
     next();
   });
 
+  // Client registration is open, as MCP clients expect, and each one writes a
+  // record, so it's limited per IP in the app, with or without WAF in front
+  // (config.waf). Counters are hashed, so they hold no addresses.
+  const registrationAllowed = async (req: Request) => {
+    const { window, registerPerIp } = deps.config.rateLimits;
+    const windowStart = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000 / window) * window;
+    const count = await deps.store.countRequest(`register-ip:${createHash('sha256').update(ipOf(req)).digest('hex')}`, windowStart, window);
+    return count <= registerPerIp;
+  };
+
   // oidc-provider parses its own request bodies, so this comes before any
   // body parser. Clients look for RFC 8414 metadata, which is the same document.
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (!OIDC_PATHS.test(req.path)) return next();
+    if (req.method === 'POST' && req.path === '/reg' && !(await registrationAllowed(req))) {
+      await event({ action: 'oauth.register', result: 'refused', ip: ipOf(req), detail: 'rate limited' });
+      res.status(429).set('retry-after', String(deps.config.rateLimits.window)).json({ error: 'invalid_request', error_description: 'Too many client registrations from this address. Try again later.' });
+      return;
+    }
     if (req.path === '/.well-known/oauth-authorization-server') req.url = '/.well-known/openid-configuration';
     oidc(req, res);
   });
