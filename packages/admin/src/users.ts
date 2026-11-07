@@ -6,6 +6,17 @@ import { type Config, type Events, newUserId, type Role, type Store, type User }
 
 export class UserRefused extends Error {}
 
+// One @, something before it, a dotted domain after it, no spaces, and at most
+// 254 characters. Checked without a regex, so no input can make it slow.
+export function looksLikeEmail(email: string): boolean {
+  if (email.length > 254 || /\s/.test(email)) return false;
+  const at = email.indexOf('@');
+  if (at < 1 || at !== email.lastIndexOf('@')) return false;
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf('.');
+  return dot > 0 && dot < domain.length - 1;
+}
+
 export type UserReport = { email: string; roles: Role[]; status: User['status']; created_at: string; in_config: boolean };
 
 export type AdminUsersDeps = { store: Store; events: Events; config: Config; now?: () => Date };
@@ -53,7 +64,7 @@ export class AdminUsers {
   // site was shared with keeps their record and gains the roles.
   async add(input: { email: string; admin?: boolean; actor?: string }): Promise<UserReport> {
     const email = input.email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new UserRefused(`${email} isn't an email address.`);
+    if (!looksLikeEmail(email)) throw new UserRefused(`${email} isn't an email address.`);
     const wanted: Role[] = input.admin ? ['admin', 'publisher'] : ['publisher'];
     const existing = await this.#d.store.findUserByEmail(email);
     if (existing) {

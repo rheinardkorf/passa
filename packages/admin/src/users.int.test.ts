@@ -4,7 +4,7 @@ import { PutCommand } from '@aws-sdk/lib-dynamodb';
 import { Publisher } from '@passa/mcp';
 import { addUser, type TestEnv, testEnv } from '@passa/mcp/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AdminUsers } from './users.ts';
+import { AdminUsers, looksLikeEmail } from './users.ts';
 
 let env: TestEnv;
 let users: AdminUsers;
@@ -24,6 +24,9 @@ describe('admin users (R143)', () => {
     await expect(new Publisher(env).assertPublisher({ userId: user?.id ?? '' })).resolves.toBeUndefined();
     await expect(users.add({ email: 'new@example.com' })).rejects.toThrow('already a publisher');
     await expect(users.add({ email: 'not-an-email' })).rejects.toThrow('isn\'t an email address');
+    for (const bad of ['a@b', '@example.com', 'a@@example.com', 'a b@example.com', 'a@example.', `${'a'.repeat(250)}@example.com`]) expect(looksLikeEmail(bad), bad).toBe(false);
+    // The input CodeQL flagged as slow for a regex: answered at once.
+    expect(looksLikeEmail(`!@!.${'!.'.repeat(50_000)}`)).toBe(false);
   });
 
   it('gives someone a site was shared with the publisher role, keeping their record', async () => {
