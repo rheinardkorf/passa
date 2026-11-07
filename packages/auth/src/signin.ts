@@ -13,13 +13,14 @@ import {
   ruleFor,
   ruleId,
   servedPath,
-  sharedRulesFor,
+  isPublicAccess,
   type SigningKey,
   type SiteTiers,
   type Site,
   siteDomain,
   type Store,
   type User,
+  viewerRules,
   viewerTiers,
 } from '@passa/shared';
 import type { Mailer } from './mailer.ts';
@@ -92,12 +93,12 @@ export class SignIn {
   }
 
   // What an email may open on a site: everything as its owner (o), or the
-  // shared rules at or under the paths shared with it (M5 R135, R136).
+  // rules its grants open (M6 R156; memberships come with M6 step 3).
   async #tiersFor(site: Site, user: { id: string; email: string } | undefined, email: string): Promise<SiteTiers | undefined> {
     if (user && site.ownerId === user.id) return 'o';
     const now = new Date(this.#now());
     const paths = (await this.#d.store.grantsFor(site.id, email)).filter((g) => grantIsLive(g, now)).map((g) => g.path);
-    const rules = sharedRulesFor(site.rules ?? [], paths);
+    const rules = viewerRules(site.rules ?? [], { tiers: [], sharePaths: paths });
     return rules.length ? viewerTiers(rules.map((r) => ruleId(r.path))) : undefined;
   }
 
@@ -216,8 +217,8 @@ export class SignIn {
     // Someone the site is shared with is refused paths not shared with them
     // here: a cookie without them would only send them back (M5 R136).
     const rule = viewable ? ruleFor(viewable.site.rules ?? [], servedPath(target.path)) : undefined;
-    const opens = viewable && (viewable.tiers === 'o' || rule?.tier === 'public'
-      || (rule?.tier === 'shared' && viewable.tiers.split('-').includes(ruleId(rule.path))));
+    const opens = viewable && (viewable.tiers === 'o' || (rule && isPublicAccess(rule.access))
+      || (rule && viewable.tiers.split('-').includes(ruleId(rule.path))));
     if (!viewable || !opens) {
       await this.#d.events.record({ action: 'site.view', result: 'refused', userId: user.id, siteId: target.siteId, ip });
       return undefined;

@@ -30,7 +30,7 @@ const claim = (domain: string, siteId: string, role: Domain['role']) => {
 
 const file = (path: string, text: string) => ({ path, content: new TextEncoder().encode(text) });
 
-async function markdownSite(title: string, rules: Rule[] = [{ path: '/', tier: 'public' }]) {
+async function markdownSite(title: string, rules: Rule[] = [{ path: '/', access: ['public'] }]) {
   return publisher.publish(alice, {
     title,
     content: { files: [file('index.md', `---\ntitle: ${title}\n---\n# ${title}\n\nA page about ${title}.`), file('guide.md', '# Guide\n\nHow to.')] },

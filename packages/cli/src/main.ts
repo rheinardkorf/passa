@@ -38,7 +38,8 @@ With a Passa deployment:
   passa sync [folder] [--base]         make the folder's site exactly the folder (asks before removing files);
                                        draws the social cards for its public pages first (--no-cards to skip)
   passa access <site|folder>           show who can open what, and who it's shared with; change it with
-                                       --public, --shared, --private, or --rule <path>=<tier> (repeatable)
+                                       --public, --private, or --rule <path>=<access> (repeatable), where access
+                                       is public, private, or tiers such as gold,silver
   passa share <site|folder> <email>    share it with <email>, who gets an invite and can open it after signing
                                        in; --path /proposals/acme/ shares only that folder (default /),
                                        --expires 2026-12-31 ends it then, --yes skips asking
@@ -302,7 +303,7 @@ async function siteCommand(args: string[]) {
   const rendered = site.files.filter((f) => f.role === 'rendered').length;
   out(`${site.title}  ${site.url}`);
   out(`  site ${site.site_id}${site.name ? `, named ${site.name}` : ''}; ${site.status}${site.delete_at ? `, deleted after ${site.delete_at}` : ''}`);
-  out(`  access: ${site.access}${site.rules?.length ? ` (${site.rules.map((r) => `${r.path} ${r.tier}`).join(', ')})` : ''}`);
+  out(`  access: ${site.access}${site.rules?.length ? ` (${site.rules.map((r) => `${r.path} ${shownAccess(r.access)}`).join(', ')})` : ''}`);
   out(`  files: ${site.files.length}${sources ? ` (${sources} sources, ${rendered} rendered by Passa)` : ''}`);
   out('  versions, newest first:');
   for (const v of site.versions) out(`    ${v.version_id}  ${v.created_at.slice(0, 16).replace('T', ' ')}  ${v.files} files${v.current ? '  (current)' : ''}`);
@@ -352,6 +353,9 @@ const askTerminal = (yes: boolean, skip = '--yes (or --confirm-public)'): Ask =>
   }
 };
 
+// A rule's access as people read it: public, private, or its tiers.
+const shownAccess = (access: string[] | 'private') => (access === 'private' ? 'private' : access.join(', '));
+
 // The server's notes worth showing after a change.
 function notes(result: Record<string, unknown>) {
   const list = (key: string) => (Array.isArray(result[key]) ? (result[key] as string[]) : []);
@@ -399,7 +403,7 @@ async function syncCommand(args: string[]) {
 
 async function accessCommand(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, shared: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' },
+    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' },
   } });
   const target = await targetOf(positionals[0], values.server);
   const rules = parseRules(values);
@@ -407,7 +411,7 @@ async function accessCommand(args: string[]) {
     const site = await listAccess(target);
     if (values.json) return printJson(site), 0;
     out(`${site.url} is ${site.access}.`);
-    for (const r of site.rules) out(`  ${r.path} ${r.tier}`);
+    for (const r of site.rules) out(`  ${r.path} ${shownAccess(r.access)}`);
     if (!site.rules.length) out('  No rules: only you can open it.');
     if (site.shares.length) out(`Shared with:`);
     for (const s of site.shares) out(`  ${s.email}  ${s.path}  since ${s.shared_at.slice(0, 10)}${s.expires_at ? `, until ${s.expires_at.slice(0, 16).replace('T', ' ')} UTC` : ''}${s.invited_at ? '' : ', not invited'}${s.opens_nothing ? ' (opens nothing)' : ''}`);
@@ -419,7 +423,7 @@ async function accessCommand(args: string[]) {
   out(`${String(r.url)} is now ${String(r.access)}.`);
   const made = (key: string) => (Array.isArray(r[key]) ? (r[key] as string[]) : []);
   if (made('made_public').length) out(`  made public: ${made('made_public').join(', ')}`);
-  if (made('made_shared').length) out(`  made shared: ${made('made_shared').join(', ')}`);
+  if (made('made_members').length) out(`  made for members: ${made('made_members').join(', ')}`);
   if (made('made_private').length) out(`  made private: ${made('made_private').join(', ')}`);
   notes(r);
   if (target.folder && target.link && typeof r.current_version === 'string') writeLinkVersion(target, r.current_version);
@@ -437,9 +441,7 @@ async function shareCommand(args: string[]) {
   if (values.json) return printJson(r), 0;
   const shared = r.share as { email: string; path: string; expires_at?: string };
   out(`Shared ${shared.path} on ${target.siteId} with ${shared.email}${shared.expires_at ? ` until ${shared.expires_at.slice(0, 16).replace('T', ' ')} UTC` : ''}.`);
-  const made = Array.isArray(r.made_shared) ? (r.made_shared as string[]) : [];
-  if (made.length) out(`  made shared: ${made.join(', ')}`);
-  for (const u of [`${String(r.url)}${shared.path.slice(1)}`, ...(Array.isArray(r.also_opens) ? (r.also_opens as string[]) : [])]) out(`  they can open ${u}`);
+  out(`  they can open ${String(r.url)}${shared.path.slice(1)}`);
   out(r.invite_sent ? '  invite sent' : `  ${String(r.invite_note ?? 'no invite sent')}`);
   if (typeof r.share_note === 'string') out(`  note: ${r.share_note}`);
   notes(r);

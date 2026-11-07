@@ -200,9 +200,9 @@ describe('changing sites (R106–R110)', () => {
     const target = await resolveTarget(folder, { dir });
 
     const no = answering(false);
-    await expect(setAccess(target, [{ path: '/', tier: 'public' }], { dir, ask: no.ask })).rejects.toThrow('Nothing was changed.');
+    await expect(setAccess(target, [{ path: '/', access: ['public'] }], { dir, ask: no.ask })).rejects.toThrow('Nothing was changed.');
     expect(no.asked[0]).toContain('This would make / public');
-    const made = await setAccess(target, [{ path: '/', tier: 'public' }], { dir, ask: answering(true).ask });
+    const made = await setAccess(target, [{ path: '/', access: ['public'] }], { dir, ask: answering(true).ask });
     expect(made).toMatchObject({ access: 'public', made_public: ['/'] });
 
     // Set public by the access change, which re-rendered: the folder's next sync draws the cards.
@@ -236,14 +236,14 @@ describe('changing sites (R106–R110)', () => {
     expect((await listAccess(target, { dir })).shares).toEqual([]);
 
     const r = await share(target, 'sam@example.com', { dir, ask: answering(true).ask, path: '/plans/', expires: '2027-01-31' });
-    expect(r).toMatchObject({ made_shared: ['/plans/'], invite_sent: true, share: { email: 'sam@example.com', expires_at: '2027-01-31T23:59:59.000Z' } });
+    expect(r).toMatchObject({ invite_sent: true, share: { email: 'sam@example.com', expires_at: '2027-01-31T23:59:59.000Z' } });
     expect(stack.sent.at(-1)?.to).toBe('sam@example.com');
     const listed = await listAccess(target, { dir });
-    expect(listed).toMatchObject({ access: 'mixed', rules: [{ path: '/plans/', tier: 'shared' }], shares: [{ email: 'sam@example.com', path: '/plans/' }] });
+    expect(listed).toMatchObject({ access: 'private', rules: [{ path: '/plans/', access: 'private' }], shares: [{ email: 'sam@example.com', path: '/plans/' }] });
 
     expect(await unshare(target, 'sam@example.com', { dir, path: '/plans/' })).toMatchObject({ unshared: 1, path: '/plans/' });
     expect((await listAccess(target, { dir })).shares).toEqual([]);
-    expect(await setAccess(target, parseRules({ shared: true }) ?? [], { dir, ask: answering(false).ask })).toMatchObject({ access: 'shared' });
+    expect(await setAccess(target, parseRules({ rule: ['/=gold,silver'] }) ?? [], { dir, ask: answering(false).ask })).toMatchObject({ access: 'members', rules: [{ path: '/', access: ['gold', 'silver'] }] });
   });
 
   it('names, rolls back and deletes', async () => {

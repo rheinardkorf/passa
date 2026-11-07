@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import type { Rule } from '@passa/render';
 import { request } from './http.ts';
 import { callTool, type CallOptions, ToolRefused } from './mcp.ts';
 import { buildSite, drawSiteCard, walk } from './site.ts';
@@ -13,7 +14,7 @@ import { readLink, siteDetails, type Target, writeLink } from './sites.ts';
 // the terminal, tests one that answers.
 export type Ask = (question: string) => Promise<boolean>;
 
-export type Rule = { path: string; tier: string };
+export type { Rule } from '@passa/render';
 type FileToSend = { path: string; content: Uint8Array };
 
 const sha256 = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
@@ -24,7 +25,7 @@ const needsConfirm = (err: unknown) => err instanceof ToolRefused && err.message
 // (R108): drawn as Passa would, with the site's rules, address and title.
 async function folderToSend(folder: string, cards: { rules: Rule[]; siteUrl: string; siteTitle: string } | undefined): Promise<{ files: FileToSend[]; cards: number }> {
   const files: FileToSend[] = walk(folder).filter((p) => !p.startsWith('_passa/')).map((path) => ({ path, content: readFileSync(join(folder, path)) }));
-  if (!cards || !cards.rules.some((r) => r.tier === 'public')) return { files, cards: 0 };
+  if (!cards || !cards.rules.some((r) => r.access !== 'private' && r.access.includes('public'))) return { files, cards: 0 };
   const build = buildSite(folder, { rules: cards.rules, siteUrl: cards.siteUrl, siteTitle: cards.siteTitle });
   const drawn = new Map<string, Uint8Array>();
   for (const card of build.cards) {
@@ -190,14 +191,14 @@ export const listAccess = (target: Target, options: CallOptions = {}) =>
   callTool<{ url: string; access: string; rules: Rule[]; shares: Share[]; note?: string }>(target.server, 'list_access', { site_id: target.siteId }, options);
 
 // --rule /docs/=public, --public, --shared, --private: the rules they mean.
-export function parseRules(values: { public?: boolean; shared?: boolean; private?: boolean; rule?: string[] }): Rule[] | undefined {
-  if (values.public) return [{ path: '/', tier: 'public' }];
-  if (values.shared) return [{ path: '/', tier: 'shared' }];
+export function parseRules(values: { public?: boolean; private?: boolean; rule?: string[] }): Rule[] | undefined {
+  if (values.public) return [{ path: '/', access: ['public'] }];
   if (values.private) return [];
   if (!values.rule?.length) return undefined;
   return values.rule.map((r) => {
     const at = r.lastIndexOf('=');
-    if (at < 1) throw new Error(`--rule takes <path>=<tier>, such as /docs/=public, not ${r}`);
-    return { path: r.slice(0, at), tier: r.slice(at + 1) };
+    if (at < 1) throw new Error(`--rule takes <path>=<access>, such as /docs/=public, /lessons/=gold,silver or /drafts/=private, not ${r}`);
+    const access = r.slice(at + 1);
+    return { path: r.slice(0, at), access: access === 'private' ? 'private' : access.split(',').map((a) => a.trim()).filter(Boolean) };
   });
 }

@@ -21,36 +21,25 @@ Each client now sees their own proposal, and neither can open the other's. Witho
 
 Sharing does three things:
 
-1. Gives the path a `shared` rule of its own, if it was private. Sharing never makes anything public, and a path that's public already stays public.
-2. Lets the email open that path, and any shared folders under it.
+1. Lets the email open that path, whatever its rule says, and every folder and page under it that has no rule of its own.
+2. Gives the path a rule, if it had none, copying the access of the folder above it, so nobody else's access changes. Sharing never makes anything public, and a path that's public already stays public.
 3. Emails them an invite: your email address and the link. It never includes the site's title or a sign-in link.
 
 Before anything is shared, the email is read back to you: an agent asks you to check it, and `passa share` asks in the terminal (`--yes` skips the question in scripts). A typo would share private pages with a stranger.
 
-## Folders under folders
+## A share stops at the next rule down
 
-A share opens the shared folders at or under its path. So with `/proposals/acme/` and `/proposals/globex/` both shared:
+A share opens its folder and everything in it, except folders or pages with rules of their own: those are separate decisions. With these rules:
 
-| Shared with | Can open |
+| Path | Access |
 | --- | --- |
-| `/proposals/acme/` | Acme's proposal |
-| `/proposals/globex/` | Globex's proposal |
-| `/proposals/` | Both |
-| `/` | Everything shared on the site |
+| `/lessons/` | `[gold, silver]` |
+| `/lessons/bonus/` | `[gold]` |
+| `/lessons/draft/` | `private` |
 
-When a share opens more than its own folder, Passa says so as you share ("partner@example.com can also open …/proposals/acme/, …/proposals/globex/").
+sharing `/lessons/` with a reviewer lets them open every lesson, but not the bonus or the draft. Passa says what a share leaves out as you share ("Not included: …/lessons/bonus/, …/lessons/draft/ have their own rules"), so you can share those separately if you want them in. Folders added under `/lessons/` later, without rules of their own, are included.
 
-## The shared tier
-
-`shared` is a tier, like `public` and `private`, and it goes in the same rules:
-
-| Tier | Who can open it |
-| --- | --- |
-| `public` | Anyone with the link, without signing in |
-| `shared` | You, and the people it was shared with, after signing in |
-| `private` | Only you |
-
-`passa share` sets the rules for you, but you can set them directly too: `passa access my-site --rule /plans/=shared`. Switching between private and shared needs no confirmation; making anything public still does. A site has at most 20 rules, so at most 20 separately shared folders.
+Shares work whatever a rule's tiers are: a reviewer who isn't a member can still open lessons shared with them. A site has at most 20 rules, including the ones shares add.
 
 ## What the people you share with see
 
@@ -60,9 +49,9 @@ Once signed in, they can open what was shared with them, and anything public. An
 
 People you share with can view, never publish: Passa keeps a record of their email, with no roles, and its MCP server and the CLI turn them away.
 
-On a Markdown site, a shared page's lists, backlinks and tag pages show only public pages and pages in the same shared folder, so nobody sees the title of a page that isn't theirs. The feed lists public pages only. Shared pages get no social cards, since the services that draw link previews can't sign in.
+On a Markdown site, lists of pages are made for each page's audience: someone reading a page through a share sees the same lists as its other readers, which can name pages they can't open (never what's in them). The feed lists public pages only. Pages that aren't public get no social cards, since the services that draw link previews can't sign in.
 
-If a page links to one its readers can't open (such as a shared page's link home to a private page), the link stays, for you, but Passa warns you when you publish: they would only get the no-access page.
+If a page links to one its readers can't open (such as a lesson's link home to a private page), the link stays, for you, but Passa warns you when you publish: they would only get the no-access page.
 
 ## Who has access
 

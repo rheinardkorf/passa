@@ -17,8 +17,8 @@ const site: Site = {
 describe('edgeRecord', () => {
   it('fits in a KeyValueStore value (1 KB) with the longest name and rules allowed', () => {
     // Rules as long as checkRules allows together.
-    const rules: Rule[] = [{ path: '/', tier: 'public' }];
-    const next = (i: number): Rule => ({ path: `/${'a'.repeat(30)}${i}/`, tier: 'private' });
+    const rules: Rule[] = [{ path: '/', access: ['public'] }];
+    const next = (i: number): Rule => ({ path: `/${'a'.repeat(30)}${i}/`, access: 'private' });
     for (let i = 0; checkRules([...rules, next(i)]).length === 0; i++) rules.push(next(i));
     const record = edgeRecord({ ...site, rules, name: 'n'.repeat(40) });
     expect(JSON.stringify(record?.r).length).toBeLessThanOrEqual(MAX_EDGE_RULES_BYTES);

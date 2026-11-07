@@ -32,8 +32,8 @@ import {
   storedPath,
   syncEdge,
   THREATS,
-  sharedRulesFor,
-  tierFor,
+  accessFor,
+  isPublicAccess,
   TooManyShares,
   type UploadSync,
   type Version,
@@ -112,7 +112,7 @@ export type SiteSummary = {
 
 // What a change of rules did, for the response and the event (R48).
 // narrowed: something open to more people before is open to fewer now.
-export type AccessChange = { made_public: string[]; made_shared: string[]; made_private: string[]; narrowed?: boolean };
+export type AccessChange = { made_public: string[]; made_members: string[]; made_private: string[]; narrowed?: boolean };
 
 // A share as list_access shows it (M5 R132).
 export type Share = { email: string; path: string; shared_at: string; expires_at?: string; invited_at?: string };
@@ -209,25 +209,25 @@ export class Publisher {
   #checkAccess(before: Rule[], after: Rule[], confirmPublic: boolean): AccessChange {
     const problems = checkRules(after);
     if (problems.length) throw new PublishRefused(problems);
-    const { madePublic, madeShared, madePrivate } = accessChanges(before, after);
+    const { madePublic, madeMembers, madePrivate } = accessChanges(before, after);
     if (madePublic.length && !confirmPublic) {
       throw new ToolError(`This would make ${madePublic.join(', ')} public: anyone with the link could open ${madePublic.length > 1 ? 'them' : 'it'} without signing in. `
         + 'Check with the person first, then call again with confirm_public set to true.');
     }
-    const narrowed = madePrivate.length > 0 || madeShared.some((p) => tierFor(before, `${p}index.html`) === 'public');
-    return { made_public: madePublic, made_shared: madeShared, made_private: madePrivate, narrowed };
+    const narrowed = madePrivate.length > 0 || madeMembers.some((p) => isPublicAccess(accessFor(before, `${p}index.html`)));
+    return { made_public: madePublic, made_members: madeMembers, made_private: madePrivate, narrowed };
   }
 
   // The public and shared URLs, and a reminder when access was narrowed, since
   // the edge can take up to a minute everywhere (R40).
   #accessResult(site: Site, change: AccessChange) {
-    const { public: open, shared } = regions(site.rules ?? []);
+    const { public: open, members } = regions(site.rules ?? []);
     const { narrowed, ...made } = change;
     return {
       ...made,
       public_urls: open.map((p) => this.#url(site) + p.slice(1)),
-      ...(shared.length ? { shared_urls: shared.map((p) => this.#url(site) + p.slice(1)) } : {}),
-      ...(narrowed ? { note: 'Paths made private or shared can stay open as before at some edge locations for up to a minute.' } : {}),
+      ...(members.length ? { member_urls: members.map((p) => this.#url(site) + p.slice(1)) } : {}),
+      ...(narrowed ? { note: 'Paths made private or for members can stay open as before at some edge locations for up to a minute.' } : {}),
     };
   }
 
@@ -780,10 +780,11 @@ export class Publisher {
     return rendered;
   }
 
-  // Shares a path of a site with an email (M5 R128–R130, R133, R134): the
-  // path gets a shared rule of its own (unless it's public), the email may
-  // open the shared rules at or under it, and an invite goes to the email, at
-  // most hourly per path.
+  // Shares a path of a site with an email (M5 R128–R134, M6 R156): the email
+  // may open the rule at that path, whatever its audiences, and every folder
+  // and page under it without a rule of its own. A path with no rule gets one
+  // copying the access above it, so nobody else's access changes. An invite
+  // goes to the email, at most hourly per path.
   async share(caller: Caller, input: { siteId: string; email: string; path: string; expiresAt?: string; confirmShare: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
@@ -792,7 +793,7 @@ export class Publisher {
     if (email === owner?.email) throw new ToolError('That\'s your own email: you can open every part of the site already.');
     if (email.includes('#')) throw new ToolError('Passa can\'t share with an email that has # in it.');
     if (!input.confirmShare) {
-      throw new ToolError(`This would let ${email} open ${input.path} (and shared folders under it) after signing in, and email them an invite. Read the address back to the person exactly as written here, `
+      throw new ToolError(`This would let ${email} open ${input.path} after signing in, and email them an invite. Read the address back to the person exactly as written here, `
         + 'since a typo shares private pages with a stranger, then call again with confirm_share set to true.');
     }
     const now = this.#now();
@@ -803,12 +804,12 @@ export class Publisher {
     const { mailer, config, store } = this.#d;
     if (!mailer) throw new ToolError('This deployment can\'t send email, so it can\'t send the invite.');
 
-    // The rules first: the path gets a shared rule of its own, so only the
-    // people it's shared with open it, unless it's public already.
+    // The rules first: the share needs a rule at its path to open. One copying
+    // the access above it changes nobody's access; a public path needs none.
     const before = site.rules ?? [];
-    const exact = before.find((r) => r.path === input.path);
-    const isPublic = tierFor(before, `${input.path}index.html`) === 'public';
-    const rules = isPublic || exact?.tier === 'shared' ? before : [...before.filter((r) => r.path !== input.path), { path: input.path, tier: 'shared' as const }];
+    const above = accessFor(before, `${input.path}index.html`);
+    const isPublic = isPublicAccess(above);
+    const rules = isPublic || before.some((r) => r.path === input.path) ? before : [...before, { path: input.path, access: above }];
     const change = this.#checkAccess(before, rules, false);
 
     const existing = await store.getGrant(site.id, email, input.path);
@@ -833,15 +834,16 @@ export class Publisher {
     }
     const rendered = rules === before ? undefined : await this.#saveRules(caller, site, rules, false);
     const updated = (await this.#sync(site.id)) ?? site;
-    // Folders already shared under the path open with it.
-    const also = sharedRulesFor(updated.rules ?? [], [input.path]).filter((r) => r.path !== input.path).map((r) => this.#url(updated) + r.path.slice(1));
+    // Folders and pages under the path with rules of their own aren't part of
+    // the share (R156): say so.
+    const leftOut = (updated.rules ?? []).filter((r) => r.path !== input.path && r.path.startsWith(input.path) && !isPublicAccess(r.access)).map((r) => this.#url(updated) + r.path.slice(1));
     if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(updated) + input.path.slice(1), ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}) }));
     return {
       ...this.#summary(updated),
       ...this.#accessResult(updated, change),
       share: shareOf(grant),
-      ...(also.length ? { also_opens: also, share_note: `${email} can also open ${also.join(', ')}: shared folders under ${input.path} open with it.` } : {}),
-      ...(isPublic ? { share_note: `${input.path} is public, so anyone can open it already; the share matters only if it's made shared later.` } : {}),
+      ...(leftOut.length ? { left_out: leftOut, share_note: `Not included: ${leftOut.join(', ')} ${leftOut.length > 1 ? 'have their own rules' : 'has its own rule'}. Share ${leftOut.length > 1 ? 'them' : 'it'} separately to include ${leftOut.length > 1 ? 'them' : 'it'}.` } : {}),
+      ...(isPublic ? { share_note: `${input.path} is public, so anyone can open it already; the share matters only if it's made restricted later.` } : {}),
       invite_sent: resend,
       ...(resend ? {} : { invite_note: 'An invite for this path went to this email less than an hour ago, so another wasn\'t sent.' }),
       ...(rendered ?? {}),
@@ -877,17 +879,18 @@ export class Publisher {
     const now = this.#now();
     const rules = site.rules ?? [];
     const grants = (await this.#d.store.listGrants(site.id)).filter((g) => grantIsLive(g, now));
-    const { public: open, shared } = regions(rules);
-    const opensNothing = grants.filter((g) => !sharedRulesFor(rules, [g.path]).length);
+    const { public: open, members } = regions(rules);
+    // A share opens the rule at its path (M6 R156); with that rule gone, it opens nothing.
+    const opensNothing = grants.filter((g) => !rules.some((r) => r.path === g.path));
     return {
       site_id: site.id,
       url: this.#url(site),
       access: accessOf(rules),
       rules,
       public_urls: open.map((p) => this.#url(site) + p.slice(1)),
-      shared_urls: shared.map((p) => this.#url(site) + p.slice(1)),
+      member_urls: members.map((p) => this.#url(site) + p.slice(1)),
       shares: grants.map((g) => ({ ...shareOf(g), ...(opensNothing.includes(g) ? { opens_nothing: true } : {}) })),
-      ...(opensNothing.length ? { note: 'Shares marked opens_nothing have no shared path at or under them, so they open nothing until one is made shared again.' } : {}),
+      ...(opensNothing.length ? { note: 'Shares marked opens_nothing have no rule at their path any more, so they open nothing until one is set again.' } : {}),
     };
   }
 

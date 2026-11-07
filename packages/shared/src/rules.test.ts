@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, ruleId, servedPath, sharedRulesFor, tierFor } from './rules.ts';
+import { accessChanges, accessFor, accessOf, checkRules, edgeRules, isTierName, MAX_RULES, regions, type Rule, ruleId, servedPath, toRule, viewerRules } from './rules.ts';
 
-const pub = (path: string): Rule => ({ path, tier: 'public' });
-const priv = (path: string): Rule => ({ path, tier: 'private' });
+const pub = (path: string): Rule => ({ path, access: ['public'] });
+const priv = (path: string): Rule => ({ path, access: 'private' });
+const tiers = (path: string, ...names: string[]): Rule => ({ path, access: names });
 
 describe('checkRules', () => {
   it('accepts / and folders ending in /', () => {
@@ -41,6 +42,17 @@ describe('checkRules', () => {
     expect(checkRules([pub(`/${'a'.repeat(200)}/`)])[0]).toContain('at most 200 characters');
   });
 
+  it('takes [public], tier lists and private, and refuses mixing them (M6 R146, R147)', () => {
+    expect(checkRules([pub('/'), tiers('/lessons/', 'gold', 'silver'), priv('/lessons/draft/')])).toEqual([]);
+    expect(checkRules([tiers('/a/', 'public', 'gold')])).toEqual(['"/a/": public already opens to everyone, so it isn\'t combined with tiers']);
+    expect(checkRules([{ path: '/a/', access: ['private', 'gold'] }])).toEqual(['"/a/": private stands alone: it closes a path, and isn\'t combined with anything']);
+    expect(checkRules([tiers('/a/')])[0]).toContain('access is private, or a list');
+    expect(checkRules([tiers('/a/', 'Gold')])[0]).toContain('"Gold" isn\'t a tier name');
+    expect(checkRules([tiers('/a/', 'shared')])[0]).toContain('isn\'t a tier name');
+    expect(checkRules([tiers('/a/', 'gold', 'gold')])).toEqual(['"/a/": a tier is listed twice']);
+    expect([isTierName('gold'), isTierName('vip-2026'), isTierName('-x'), isTierName('a'.repeat(31)), isTierName('private')]).toEqual([true, true, false, false, false]);
+  });
+
   it('refuses rules too long together for the edge record', () => {
     const long = Array.from({ length: 6 }, (_, i) => pub(`/${String(i).repeat(180)}/`));
     expect(checkRules(long)).toEqual(['the rules are too long together; use fewer or shorter paths']);
@@ -48,87 +60,70 @@ describe('checkRules', () => {
 });
 
 describe('edgeRules', () => {
-  it('sends nothing when nothing is public', () => {
+  it('sends every rule, longest first: public as p, the rest with their ID (M6)', () => {
     expect(edgeRules([])).toEqual([]);
-    expect(edgeRules([priv('/'), priv('/notes/')])).toEqual([]);
-  });
-
-  it('sends every rule, longest first, when something is public', () => {
-    expect(edgeRules([pub('/'), priv('/notes/'), pub('/notes/shared/')])).toEqual([['/notes/shared/', 'p'], ['/notes/', 'x'], ['/', 'p']]);
-  });
-});
-
-describe('tierFor', () => {
-  const rules = [pub('/'), priv('/notes/'), pub('/notes/shared/')];
-
-  it('takes the longest matching prefix', () => {
-    expect(tierFor(rules, '/index.html')).toBe('public');
-    expect(tierFor(rules, '/notes/index.html')).toBe('private');
-    expect(tierFor(rules, '/notes/shared/a.png')).toBe('public');
-    expect(tierFor(rules, '/notes.html')).toBe('public');
-  });
-
-  it('treats anything uncovered as private', () => {
-    expect(tierFor([], '/index.html')).toBe('private');
-    expect(tierFor([pub('/docs/')], '/index.html')).toBe('private');
-    expect(tierFor([pub('/docs/')], '/docs.html')).toBe('private');
-  });
-});
-
-describe('the shared tier (M5)', () => {
-  const shared = (path: string): Rule => ({ path, tier: 'shared' });
-
-  it('sends shared rules to the edge as s, even with nothing public', () => {
-    expect(edgeRules([shared('/plans/')])).toEqual([['/plans/', 's', ruleId('/plans/')]]);
-    expect(edgeRules([pub('/'), shared('/plans/'), priv('/plans/drafts/')])).toEqual([['/plans/drafts/', 'x'], ['/plans/', 's', ruleId('/plans/')], ['/', 'p']]);
+    expect(edgeRules([pub('/'), tiers('/lessons/', 'gold'), priv('/lessons/draft/')])).toEqual([
+      ['/lessons/draft/', 's', ruleId('/lessons/draft/')], ['/lessons/', 's', ruleId('/lessons/')], ['/', 'p'],
+    ]);
+    // A private rule goes too, since a share may open it.
+    expect(edgeRules([priv('/plans/')])).toEqual([['/plans/', 's', ruleId('/plans/')]]);
     expect(ruleId('/plans/')).toMatch(/^[0-9a-f]{8}$/);
     expect(ruleId('/plans/')).not.toBe(ruleId('/plans/acme/'));
-    expect(edgeRules([priv('/a/')])).toEqual([]);
   });
+});
 
-  it('counts shared regions, and calls an all-shared site shared', () => {
-    expect(regions([shared('/plans/')])).toEqual({ public: [], shared: ['/plans/'], private: ['/'] });
-    expect(accessOf([shared('/')])).toBe('shared');
-    expect(accessOf([shared('/plans/')])).toBe('mixed');
+describe('access for a path', () => {
+  const rules = [pub('/'), tiers('/lessons/', 'gold', 'silver'), priv('/lessons/draft/')];
+  it('is the longest matching rule\'s, else private', () => {
+    expect(accessFor(rules, '/index.html')).toEqual(['public']);
+    expect(accessFor(rules, '/lessons/week-1/index.html')).toEqual(['gold', 'silver']);
+    expect(accessFor(rules, '/lessons/draft/index.html')).toBe('private');
+    expect(accessFor([], '/x/index.html')).toBe('private');
   });
+});
 
-  it('reports what becomes shared, and that shared to private is not public', () => {
-    expect(accessChanges([], [shared('/plans/')])).toEqual({ madePublic: [], madeShared: ['/plans/'], madePrivate: [] });
-    expect(accessChanges([shared('/')], [])).toEqual({ madePublic: [], madeShared: [], madePrivate: ['/'] });
-    expect(accessChanges([shared('/')], [pub('/')]).madePublic).toEqual(['/']);
+describe('what a viewer opens (M6 R156)', () => {
+  const rules = [pub('/'), tiers('/lessons/', 'gold', 'silver'), tiers('/lessons/bonus/', 'gold'), priv('/lessons/draft/')];
+  it('opens rules listing one of their tiers, and the rule at each path shared with them', () => {
+    expect(viewerRules(rules, { tiers: ['gold'], sharePaths: [] }).map((r) => r.path)).toEqual(['/lessons/', '/lessons/bonus/']);
+    expect(viewerRules(rules, { tiers: ['silver'], sharePaths: [] }).map((r) => r.path)).toEqual(['/lessons/']);
+    // A share opens exactly its rule: not the bonus under it, whatever the tiers.
+    expect(viewerRules(rules, { tiers: [], sharePaths: ['/lessons/'] }).map((r) => r.path)).toEqual(['/lessons/']);
+    expect(viewerRules(rules, { tiers: [], sharePaths: ['/lessons/draft/'] }).map((r) => r.path)).toEqual(['/lessons/draft/']);
+    expect(viewerRules(rules, { tiers: [], sharePaths: [] })).toEqual([]);
   });
 });
 
 describe('regions and access', () => {
-  it('names each region by its prefix', () => {
-    expect(regions([])).toEqual({ public: [], shared: [], private: ['/'] });
-    expect(regions([pub('/'), priv('/notes/')])).toEqual({ public: ['/'], shared: [], private: ['/notes/'] });
-    expect(regions([pub('/docs/')])).toEqual({ public: ['/docs/'], shared: [], private: ['/'] });
-  });
-
-  it('summarises a site as private, public or mixed', () => {
-    expect(accessOf([])).toBe('private');
-    expect(accessOf([priv('/'), priv('/a/')])).toBe('private');
-    expect(accessOf([pub('/')])).toBe('public');
-    expect(accessOf([pub('/'), pub('/a/')])).toBe('public');
-    expect(accessOf([pub('/'), priv('/a/')])).toBe('mixed');
+  it('splits a site into public, members and private regions, in one word', () => {
+    const rules = [pub('/'), tiers('/lessons/', 'gold'), priv('/lessons/draft/')];
+    expect(regions(rules)).toEqual({ public: ['/'], members: ['/lessons/'], private: ['/lessons/draft/'] });
+    expect([accessOf(rules), accessOf([]), accessOf([pub('/')]), accessOf([tiers('/', 'gold')])]).toEqual(['mixed', 'private', 'public', 'members']);
   });
 });
 
 describe('accessChanges', () => {
-  it('finds what becomes public or private', () => {
-    expect(accessChanges([], [pub('/')])).toEqual({ madePublic: ['/'], madeShared: [], madePrivate: [] });
-    expect(accessChanges([pub('/')], [])).toEqual({ madePublic: [], madeShared: [], madePrivate: ['/'] });
-    expect(accessChanges([pub('/')], [pub('/'), priv('/notes/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: ['/notes/'] });
+  it('names what was made public, opened to members (or other tiers), or made private', () => {
+    expect(accessChanges([], [pub('/')])).toEqual({ madePublic: ['/'], madeMembers: [], madePrivate: [] });
+    expect(accessChanges([pub('/')], [pub('/'), tiers('/docs/', 'gold')])).toEqual({ madePublic: [], madeMembers: ['/docs/'], madePrivate: [] });
+    expect(accessChanges([tiers('/docs/', 'gold')], [tiers('/docs/', 'gold', 'silver')])).toEqual({ madePublic: [], madeMembers: ['/docs/'], madePrivate: [] });
+    expect(accessChanges([pub('/')], [])).toEqual({ madePublic: [], madeMembers: [], madePrivate: ['/'] });
   });
 
-  it('catches a path exposed by removing a private rule', () => {
-    expect(accessChanges([pub('/'), priv('/notes/')], [pub('/')])).toEqual({ madePublic: ['/notes/'], madeShared: [], madePrivate: [] });
+  it('catches a path exposed by removing a rule inside a public folder', () => {
+    expect(accessChanges([pub('/'), priv('/notes/')], [pub('/')])).toEqual({ madePublic: ['/notes/'], madeMembers: [], madePrivate: [] });
   });
 
   it('sees no change when rules are rewritten without changing access', () => {
-    expect(accessChanges([pub('/')], [pub('/'), pub('/docs/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: [] });
-    expect(accessChanges([], [priv('/'), priv('/a/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: [] });
+    expect(accessChanges([tiers('/a/', 'gold', 'silver')], [tiers('/a/', 'silver', 'gold')])).toEqual({ madePublic: [], madeMembers: [], madePrivate: [] });
+    expect(accessChanges([], [priv('/'), priv('/a/')])).toEqual({ madePublic: [], madeMembers: [], madePrivate: [] });
+  });
+});
+
+describe('rules stored before M6', () => {
+  it('read in the new form: public stays public; private and shared become private', () => {
+    expect([toRule({ path: '/', tier: 'public' }), toRule({ path: '/a/', tier: 'shared' }), toRule({ path: '/b/', tier: 'private' }), toRule(pub('/c/'))])
+      .toEqual([pub('/'), priv('/a/'), priv('/b/'), pub('/c/')]);
   });
 });
 
@@ -138,16 +133,5 @@ describe('served paths', () => {
     expect(servedPath('/plans/')).toBe('/plans/index.html');
     expect(servedPath('/plans')).toBe('/plans/index.html');
     expect(servedPath('/plans/q1.pdf')).toBe('/plans/q1.pdf');
-  });
-});
-
-describe('shares by path (M5)', () => {
-  const shared = (path: string): Rule => ({ path, tier: 'shared' });
-  const rules = [pub('/'), shared('/proposals/acme/'), shared('/proposals/globex/'), shared('/plans/'), priv('/plans/hr/')];
-  it('opens the shared rules at or under each path shared', () => {
-    expect(sharedRulesFor(rules, ['/proposals/acme/']).map((r) => r.path)).toEqual(['/proposals/acme/']);
-    expect(sharedRulesFor(rules, ['/proposals/']).map((r) => r.path)).toEqual(['/proposals/acme/', '/proposals/globex/']);
-    expect(sharedRulesFor(rules, ['/']).map((r) => r.path)).toEqual(['/proposals/acme/', '/proposals/globex/', '/plans/']);
-    expect(sharedRulesFor(rules, ['/plans/acme/'])).toEqual([]);
   });
 });

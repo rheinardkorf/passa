@@ -19,7 +19,7 @@ describe('public and private', () => {
     { path: 'notes/launch-plan.md', content: '---\ntitle: Secret launch plan\ndate: 2026-10-20\ntags: [team, launch]\n---\nPrivate. Links to [[About]].' },
     page('notes/salary.md', 'Secret salary review'),
     listLayout,
-  ], [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }]);
+  ], [{ path: '/', access: ['public'] }, { path: '/notes/', access: 'private' }]);
 
   it('never names a private page on a public page', () => {
     const publicPages = site.pages.filter((p) => p.tier === 'public');
@@ -52,30 +52,51 @@ describe('public and private', () => {
   });
 });
 
-describe('tiers beyond public and private (M6)', () => {
+describe('members, the course scenario (M6 R161)', () => {
+  // The spec's scenario: tiers on folders, a page with its own tier, a
+  // private exception, and a page with no rule at all.
   const site = build([
-    page('post.md', 'Public post', 'tags: [garden]\n'),
-    page('notes/plan.md', 'Owner plan', 'tags: [garden]\n'),
-    page('team/brief.md', 'Team brief', 'tags: [garden]\n'),
-    page('team/notes.md', 'Team notes', 'tags: [garden]\n'),
-    page('paid/course.md', 'Paid course', 'tags: [garden]\n'),
+    page('about.md', 'About us', 'tags: [course]\n'),
+    page('lessons/week-1.md', 'Week one', 'tags: [course]\n'),
+    page('lessons/week-3/quiz.md', 'Quiz three', 'tags: [course]\n'),
+    page('lessons/bonus/extra.md', 'Bonus extra', 'tags: [course]\n'),
+    page('lessons/draft/idea.md', 'Draft idea', 'tags: [course]\n'),
+    page('notes/plan.md', 'Owner plan', 'tags: [course]\n'),
     listLayout,
-  ], [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }, { path: '/team/', tier: 'shared' }, { path: '/paid/', tier: 'paid:course' }]);
+  ], [
+    { path: '/about/', access: ['public'] },
+    { path: '/lessons/', access: ['gold', 'silver'] },
+    { path: '/lessons/bonus/', access: ['gold'] },
+    { path: '/lessons/week-3/quiz/', access: ['silver'] },
+    { path: '/lessons/draft/', access: 'private' },
+  ]);
 
-  it('shows a shared page public and shared pages only', () => {
-    const html = site.html('team/brief/index.html');
-    expect(html).toContain('Public post');
-    expect(html).toContain('Team notes');
-    expect(html).not.toMatch(/Owner plan|Paid course/);
+  it('lists on a members page what every one of its tiers can open', () => {
+    const lessons = site.html('lessons/week-1/index.html'); // gold and silver
+    expect(lessons).toContain('About us');
+    expect(lessons).not.toMatch(/Bonus extra|Quiz three|Draft idea|Owner plan/);
+    const bonus = site.html('lessons/bonus/extra/index.html'); // gold only: gold opens the lessons too
+    expect(bonus).toContain('Week one');
+    expect(bonus).not.toMatch(/Quiz three|Draft idea|Owner plan/);
+    const quiz = site.html('lessons/week-3/quiz/index.html'); // silver only
+    expect(quiz).toContain('Week one');
+    expect(quiz).not.toMatch(/Bonus extra|Draft idea/);
   });
 
-  it('never shows a paid page shared or owner-only pages', () => {
-    expect(site.html('paid/course/index.html')).not.toMatch(/Team brief|Team notes|Owner plan/);
+  it('lists on a page under a private rule only that rule\'s pages and public ones', () => {
+    const draft = site.html('lessons/draft/idea/index.html');
+    expect(draft).toContain('About us');
+    expect(draft).not.toMatch(/Week one|Bonus extra|Owner plan/);
   });
 
-  it('shows an owner-only page everything', () => {
-    expect(site.html('notes/plan/index.html')).toMatch(/Team brief/);
-    expect(site.html('notes/plan/index.html')).toMatch(/Paid course/);
+  it('lists everything on an owner-only page with no rule', () => {
+    expect(site.html('notes/plan/index.html')).toMatch(/Week one.*|Bonus extra/s);
+    expect(site.html('notes/plan/index.html')).toContain('Draft idea');
+  });
+
+  it('reports each page as public, members or private', () => {
+    const tier = (path: string) => site.pages.find((p) => p.path === path)?.tier;
+    expect([tier('about/index.html'), tier('lessons/week-1/index.html'), tier('lessons/draft/idea/index.html'), tier('notes/plan/index.html')]).toEqual(['public', 'members', 'private', 'private']);
   });
 });
 
@@ -85,7 +106,7 @@ describe('the home page and hidden pages', () => {
     page('a.md', 'Alpha'),
     page('b.md', 'Beta', 'hidden: true\n'),
     listLayout,
-  ], [{ path: '/', tier: 'public' }]);
+  ], [{ path: '/', access: ['public'] }]);
 
   it('never lists the home page', () => {
     expect(site.html('a/index.html')).not.toContain('[Home]');
@@ -104,7 +125,7 @@ describe('tags with no page', () => {
     page('b.md', 'Beta', 'hidden: true\ntags: [shared, hidden-only]\n'),
     page('notes/c.md', 'Gamma', 'tags: [private-only]\n'),
     { path: '_layouts/default.html', content: '{{#tags}}{{name}}={{url}};{{/tags}}|{{#allTags}}{{name}}={{url}};{{/allTags}}' },
-  ], [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }]);
+  ], [{ path: '/', access: ['public'] }, { path: '/notes/', access: 'private' }]);
 
   it('never links a tag whose page doesn\'t exist', () => {
     expect(site.pages.map((p) => p.path)).not.toContain('tags/hidden-only/index.html');
@@ -122,16 +143,16 @@ describe('a site with no rules', () => {
   });
 });
 
-describe('shared pages (M5 R137)', () => {
+describe('pages under a private rule (M5 R137, M6)', () => {
   const site = build([
     { path: 'index.md', content: '---\ntitle: Home\n---\nSee [[Plans]].' },
     { path: 'plans/index.md', content: '---\ntitle: Plans\ndate: 2026-11-01\n---\nBack to [[Home]].' },
-    page('plans/q1.md', 'Q1 plan', 'access: private\n'),
+    page('plans/q1.md', 'Q1 plan'),
     page('notes/secret.md', 'Secret notes'),
     listLayout,
-  ], [{ path: '/plans/', tier: 'shared' }]);
+  ], [{ path: '/plans/', access: 'private' }]);
 
-  it('lists shared and public pages only, and leaves shared pages out of the feed', () => {
+  it('lists only that rule\'s pages, and leaves them out of the feed', () => {
     expect(site.html('plans/index.html')).toContain('Q1 plan');
     expect(site.html('plans/index.html')).not.toContain('Secret notes');
     expect(site.feed ?? '').not.toMatch(/Plans|Q1 plan/);
@@ -143,30 +164,9 @@ describe('shared pages (M5 R137)', () => {
     expect(site.html('plans/index.html')).toContain('href="/"');
   });
 
-  it('warns when a page that says private is shared, without refusing', () => {
-    expect(site.problems.find((p) => p.kind === 'access-private-made-shared')?.message)
-      .toBe('plans/q1.md says access: private, but the site\'s rules make /plans/q1/ shared, so everyone the site is shared with can open it');
-  });
-});
-
-describe('shared with different people (M5)', () => {
-  const site = build([
-    page('proposals/acme/index.md', 'Acme proposal'),
-    page('proposals/acme/pricing.md', 'Acme pricing'),
-    page('proposals/globex/index.md', 'Globex proposal'),
-    page('about.md', 'About us'),
-    listLayout,
-  ], [{ path: '/', tier: 'public' }, { path: '/proposals/acme/', tier: 'shared' }, { path: '/proposals/globex/', tier: 'shared' }]);
-
-  it('lists only pages under the shared page\'s own rule, and public pages', () => {
-    const acme = site.html('proposals/acme/index.html');
-    expect(acme).toContain('Acme pricing');
-    expect(acme).toContain('About us');
-    expect(acme).not.toContain('Globex');
-    expect(site.html('proposals/globex/index.html')).not.toContain('Acme');
-  });
-
-  it('still reports pages as shared', () => {
-    expect(site.pages.find((p) => p.path === 'proposals/acme/index.html')?.tier).toBe('shared');
+  it('warns when a page that says private is opened to members, without refusing', () => {
+    const members = build([page('lessons/q1.md', 'Q1', 'access: private\n'), listLayout], [{ path: '/lessons/', access: ['gold'] }]);
+    expect(members.problems.find((p) => p.kind === 'access-private-made-members')?.message)
+      .toBe('lessons/q1.md says access: private, but the site\'s rules open /lessons/q1/ to members (gold)');
   });
 });

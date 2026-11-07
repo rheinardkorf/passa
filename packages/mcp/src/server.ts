@@ -27,10 +27,13 @@ const inlineFile = z.strictObject({
   encoding: z.enum(['utf8', 'base64']).default('utf8').describe('base64 for binary files such as images'),
 });
 const inlineFiles = z.array(inlineFile).min(1).max(1000).describe('The files, for sites up to the inline size limit. Use begin_upload for larger sites');
+const rulePath = z.string().min(1).max(MAX_RULE_PATH).describe('/ for the whole site, or a folder ending in /, such as /docs/');
+// M6: access is a list of audiences, or private.
 const rules = z.array(z.strictObject({
-  path: z.string().min(1).max(MAX_RULE_PATH).describe('/ for the whole site, or a folder ending in /, such as /docs/'),
-  tier: z.enum(['private', 'shared', 'public']).describe('public: anyone with the link, without signing in. shared: you and everyone the site is shared with, after signing in. private: only you'),
-})).max(100).describe('Who can open which paths. The longest matching path decides; anything no rule covers is private');
+  path: rulePath,
+  access: z.union([z.literal('private'), z.array(z.string().max(30)).min(1).max(20)])
+    .describe('[public]: anyone with the link, without signing in. A list of tiers, such as [gold, silver]: members of any of them, after signing in. private: only you (and anyone you share it with), to close a path inside a more open folder'),
+})).max(100).describe('Who can open which paths. The longest matching path decides; anything no rule covers is private. You always open everything');
 const confirmPublic = z.boolean().default(false).describe('Must be true when the rules make anything public. Ask the person first');
 
 const edit = z.strictObject({
@@ -134,7 +137,7 @@ function accessDetail(result: object, prefix = ''): { detail?: string } {
   const r: Partial<AccessChange> = result;
   if (!r.made_public && !r.made_private) return prefix ? { detail: prefix.slice(0, 500) } : {};
   const list = (paths: string[] | undefined) => (paths?.length ? paths.join(', ') : 'nothing');
-  return { detail: `${prefix ? `${prefix}; ` : ''}made public: ${list(r.made_public)}; made shared: ${list(r.made_shared)}; made private: ${list(r.made_private)}`.slice(0, 500) };
+  return { detail: `${prefix ? `${prefix}; ` : ''}made public: ${list(r.made_public)}; for members: ${list(r.made_members)}; made private: ${list(r.made_private)}`.slice(0, 500) };
 }
 
 // Text (such as the theme guide) is returned as it is; anything else as JSON.
@@ -171,14 +174,14 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + `A name is 2–40 lowercase letters, digits and single hyphens. When a site's name changes or is removed, the old name is held for ${nameHoldDays} days: it keeps redirecting, and only you can claim it again. `
       + 'Names are first come, first served, so check with the person before choosing one. '
       + 'A named site\'s public pages can appear in search engines; to keep a page out, add <meta name="robots" content="noindex"> to it.',
-    set_access: 'Set who can open which parts of a site, replacing its rules. Each rule is / or a folder ending in /, and a tier: public (anyone with the link, without signing in), shared (you and everyone the site is shared with, after signing in; see share) or private (only you). '
-      + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. '
-      + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. Private and shared need no confirmation. '
+    set_access: 'Set who can open which parts of a site, replacing its rules. Each rule is / or a folder ending in /, and its access: [public] (anyone with the link, without signing in), a list of tiers such as [gold, silver] (members of any of them, after signing in), or private (only you, and anyone you share it with; use it to close a path inside a more open folder). '
+      + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. You always open everything. '
+      + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. Tiers and private need no confirmation. '
       + 'Changes take effect within seconds, and everywhere within about a minute. '
       + 'On a Markdown site, the pages are rendered again with the new rules in the same change, so lists, tags and the feed never name a page the rules make private. '
       + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
     share: `Share part of a site with someone by email, such as one client's proposal: they can then open path (default /, the whole site) after signing in with that email by magic link, and nothing else that isn't public. `
-      + 'The path gets a shared rule of its own, so sharing /proposals/acme/ with one person and /proposals/globex/ with another keeps each from the other. Shared folders under the path open with it (also_opens lists them; tell the person). A public path stays public. '
+      + 'The share opens the path whatever its rule says, and everything under it that has no rule of its own, so sharing /proposals/acme/ with one person and /proposals/globex/ with another keeps each from the other. Folders or pages under the path with rules of their own aren\'t included (left_out lists them; tell the person, and share them separately if wanted). A public path stays public. '
       + 'They get an invite with your email and the address, never the site\'s title; sharing the same path with the same email again resends it, at most once an hour. '
       + `Before sharing, read the email back to the person: confirm_share must be true. A site can be shared with ${limits.sharesPerSite} emails, and ${rateLimits.invitesPerDay} invites can be sent a day. `
       + 'Pass expires_at for a share that stops working at a set time.',

@@ -12,7 +12,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { Domain } from './domains.ts';
-import type { Rule } from './rules.ts';
+import { type LegacyRule, type Rule, toRule } from './rules.ts';
 
 export type Role = 'admin' | 'publisher';
 
@@ -166,6 +166,13 @@ function strip<T>(item: Record<string, unknown>): T {
   return Object.fromEntries(Object.entries(item).filter(([name]) => !KEY_ATTRIBUTES.has(name))) as T;
 }
 
+// A site as stored, with rules from before M6 read in the new form (R162);
+// they're written in the new form the next time they change.
+function siteOf(item: Record<string, unknown>): Site {
+  const site = strip<Site & { rules?: (Rule | LegacyRule)[] }>(item);
+  return site.rules ? { ...site, rules: site.rules.map(toRule) } : site;
+}
+
 function entity<T>(item: Record<string, unknown> | undefined): T | undefined {
   return item ? strip<T>(item) : undefined;
 }
@@ -227,7 +234,7 @@ export class Store {
 
   async getSite(id: string): Promise<Site | undefined> {
     const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: siteKey(id), ConsistentRead: true }));
-    return entity<Site>(Item);
+    return Item ? siteOf(Item) : undefined;
   }
 
   async listSitesByOwner(ownerId: string): Promise<Site[]> {
@@ -242,7 +249,7 @@ export class Store {
         ScanIndexForward: false,
         ExclusiveStartKey,
       }));
-      for (const item of page.Items ?? []) sites.push(strip<Site>(item));
+      for (const item of page.Items ?? []) sites.push(siteOf(item));
       ExclusiveStartKey = page.LastEvaluatedKey;
     } while (ExclusiveStartKey);
     return sites;

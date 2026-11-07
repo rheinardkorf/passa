@@ -54,14 +54,14 @@ describe('share (R128–R130)', () => {
     expect(sent).toEqual([]);
   });
 
-  it('makes a private path shared, stores the share and sends an invite without the title', async () => {
+  it('gives a private path a rule to open, stores the share and sends an invite without the title', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Secret plans', files: page('x') })).json();
     const r = await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true });
     expect(r.isError).toBe(false);
-    expect(r.json()).toMatchObject({ made_shared: ['/plans/'], made_public: [], invite_sent: true, access: 'mixed', share: { email: 'sam@example.com' } });
-    expect(r.json().rules).toEqual([{ path: '/plans/', tier: 'shared' }]);
-    expect(r.json().shared_urls).toEqual([`${site.url}plans/`]);
+    // The rule copies the access above it (the private default), so nobody else's access changes.
+    expect(r.json()).toMatchObject({ made_members: [], made_public: [], made_private: [], invite_sent: true, access: 'private', share: { email: 'sam@example.com', path: '/plans/' } });
+    expect(r.json().rules).toEqual([{ path: '/plans/', access: 'private' }]);
     expect((await edgeRecord(site.site_id)).r).toEqual([['/plans/', 's', ruleId('/plans/')]]);
 
     expect(sent).toHaveLength(1);
@@ -75,46 +75,34 @@ describe('share (R128–R130)', () => {
     }
   });
 
-  it('gives each shared path a rule of its own, and says which shared folders under it open with it', async () => {
+  it('opens exactly the rule at its path, naming rules under it that it leaves out (M6 R156)', async () => {
     const call = await as('alice');
-    const site = (await call('publish', { title: 'Proposals', files: page('x') })).json();
-    const acme = (await call('share', { site_id: site.site_id, email: 'acme@example.com', path: '/proposals/acme/', confirm_share: true })).json();
-    expect(acme).toMatchObject({ made_shared: ['/proposals/acme/'], share: { path: '/proposals/acme/' } });
-    expect(acme.also_opens).toBeUndefined();
-    const globex = (await call('share', { site_id: site.site_id, email: 'globex@example.com', path: '/proposals/globex/', confirm_share: true })).json();
-    expect(globex.also_opens).toBeUndefined();
-    expect(globex.rules).toEqual([{ path: '/proposals/acme/', tier: 'shared' }, { path: '/proposals/globex/', tier: 'shared' }]);
-
-    const all = (await call('share', { site_id: site.site_id, email: 'partner@example.com', path: '/proposals/', confirm_share: true })).json();
-    expect(all.also_opens).toEqual([`${site.url}proposals/acme/`, `${site.url}proposals/globex/`]);
-    expect(all.share_note).toContain('partner@example.com can also open');
+    const rules = [{ path: '/lessons/', access: ['gold', 'silver'] }, { path: '/lessons/bonus/', access: ['gold'] }, { path: '/lessons/draft/', access: 'private' }];
+    const site = (await call('publish', { title: 'Course', files: page('x'), rules })).json();
+    const r = (await call('share', { site_id: site.site_id, email: 'reviewer@example.com', path: '/lessons/', confirm_share: true })).json();
+    expect(r.rules).toEqual(rules); // the rule exists already: nothing changes
+    expect(r.left_out).toEqual([`${site.url}lessons/bonus/`, `${site.url}lessons/draft/`]);
+    expect(r.share_note).toBe(`Not included: ${site.url}lessons/bonus/, ${site.url}lessons/draft/ have their own rules. Share them separately to include them.`);
   });
 
-  it('adds a rule for a path already shared through a folder above it, and leaves a public path public', async () => {
+  it('adds a rule copying the access above, inside a members folder, and leaves a public path public', async () => {
     const call = await as('alice');
-    const whole = (await call('publish', { title: 'All shared', files: page('x'), rules: [{ path: '/', tier: 'shared' }] })).json();
-    const under = (await call('share', { site_id: whole.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
-    expect(under.rules).toEqual([{ path: '/', tier: 'shared' }, { path: '/plans/', tier: 'shared' }]);
-    expect(under.made_shared).toEqual([]);
-    const open = (await call('publish', { title: 'Open', files: page('x'), rules: [{ path: '/', tier: 'public' }], confirm_public: true })).json();
-    const r = (await call('share', { site_id: open.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
-    expect(r).toMatchObject({ rules: [{ path: '/', tier: 'public' }], share_note: expect.stringContaining('is public') });
+    const course = (await call('publish', { title: 'Course', files: page('x'), rules: [{ path: '/lessons/', access: ['gold'] }] })).json();
+    const r = (await call('share', { site_id: course.site_id, email: 'sam@example.com', path: '/lessons/week-1/', confirm_share: true })).json();
+    expect(r.rules).toEqual([{ path: '/lessons/', access: ['gold'] }, { path: '/lessons/week-1/', access: ['gold'] }]);
+    expect(r).toMatchObject({ made_members: [], made_public: [], made_private: [] });
+    const open = (await call('publish', { title: 'Open', files: page('x'), rules: [{ path: '/', access: ['public'] }], confirm_public: true })).json();
+    const pub = (await call('share', { site_id: open.site_id, email: 'sam@example.com', path: '/plans/', confirm_share: true })).json();
+    expect(pub).toMatchObject({ rules: [{ path: '/', access: ['public'] }], share_note: expect.stringContaining('is public') });
   });
 
-  it('leaves shared and public paths as they are, and never needs confirm_public', async () => {
-    const call = await as('alice');
-    const site = (await call('publish', { title: 'Open', files: page('x'), rules: [{ path: '/', tier: 'public' }], confirm_public: true })).json();
-    const r = (await call('share', { site_id: site.site_id, email: 'sam@example.com', confirm_share: true })).json();
-    expect(r).toMatchObject({ made_shared: [], made_public: [], access: 'public', rules: [{ path: '/', tier: 'public' }] });
-  });
-
-  it('switches private and shared with set_access without confirm_public (R138)', async () => {
+  it('opens a path to tiers and back with set_access without confirm_public (M6 R151)', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Tiers', files: page('x') })).json();
-    const shared = (await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'shared' }] })).json();
-    expect(shared).toMatchObject({ access: 'shared', made_shared: ['/'] });
+    const members = (await call('set_access', { site_id: site.site_id, rules: [{ path: '/', access: ['gold'] }] })).json();
+    expect(members).toMatchObject({ access: 'members', made_members: ['/'], member_urls: [site.url] });
+    expect(members.note).toBeUndefined(); // nothing was open to more people before
     const back = (await call('set_access', { site_id: site.site_id, rules: [] })).json();
-    expect(shared.note).toBeUndefined(); // nothing was open to more people before
     expect(back).toMatchObject({ access: 'private', made_private: ['/'] });
     expect(back.note).toContain('up to a minute');
     expect(back.narrowed).toBeUndefined();
@@ -194,7 +182,7 @@ describe('list_access and unshare (R131, R132)', () => {
     expect((await call('unshare', { site_id: site.site_id, email: 'kim@example.com' })).json()).toMatchObject({ unshared: 1 });
     const after = (await call('list_access', { site_id: site.site_id })).json();
     expect(after.shares.map((s: { email: string; path: string }) => `${s.email} ${s.path}`)).toEqual(['sam@example.com /plans/']);
-    expect(after.rules).toEqual([{ path: '/plans/', tier: 'shared' }, { path: '/notes/', tier: 'shared' }]);
+    expect(after.rules).toEqual([{ path: '/plans/', access: 'private' }, { path: '/notes/', access: 'private' }]);
     expect((await call('unshare', { site_id: site.site_id, email: 'kim@example.com' })).text).toContain('isn\'t shared with that email');
   });
 
@@ -234,7 +222,7 @@ describe('expiry (R133)', () => {
 
   it('bumps the access version when a share expires', async () => {
     const call = await as('alice');
-    const site = (await call('publish', { title: 'Expires', files: page('x'), rules: [{ path: '/', tier: 'shared' }] })).json();
+    const site = (await call('publish', { title: 'Expires', files: page('x'), rules: [{ path: '/', access: 'private' }] })).json();
     const before = (await edgeRecord(site.site_id)).v;
     await new Publisher(env).expireShare(site.site_id);
     expect((await edgeRecord(site.site_id)).v).toBe(before + 1);

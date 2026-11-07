@@ -5,7 +5,7 @@ import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { newVersionId, NotFoundOrConflict } from '@passa/shared';
+import { newVersionId, NotFoundOrConflict, ruleId } from '@passa/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Publisher } from './publisher.ts';
 import { createServer } from './server.ts';
@@ -356,7 +356,7 @@ describe('tool descriptions', () => {
 
 describe('public access (M2)', () => {
   const edgeRules = async (siteId: unknown) => JSON.parse(await env.edge.get(`s:${String(siteId)}`)).r;
-  const PUBLIC = [{ path: '/', tier: 'public' }];
+  const PUBLIC = [{ path: '/', access: ['public'] }];
 
   it('makes a site public only when confirmed, and says exactly what is public (R34, R37)', async () => {
     const call = await as('alice');
@@ -367,21 +367,21 @@ describe('public access (M2)', () => {
     expect(unconfirmed.text).toBe('This would make / public: anyone with the link could open it without signing in. Check with the person first, then call again with confirm_public set to true.');
     expect(await edgeRules(site.site_id)).toEqual([]);
 
-    const r = (await call('set_access', { site_id: site.site_id, rules: [...PUBLIC, { path: '/notes/', tier: 'private' }], confirm_public: true })).json();
+    const r = (await call('set_access', { site_id: site.site_id, rules: [...PUBLIC, { path: '/notes/', access: 'private' }], confirm_public: true })).json();
     expect(r).toMatchObject({ access: 'mixed', made_public: ['/'], made_private: [], public_urls: [site.url] });
     expect(r.note).toBeUndefined();
-    expect(await edgeRules(site.site_id)).toEqual([['/notes/', 'x'], ['/', 'p']]);
+    expect(await edgeRules(site.site_id)).toEqual([['/notes/', 's', ruleId('/notes/')], ['/', 'p']]);
 
     // Shown by get_site and find_sites (R36).
     const got = (await call('get_site', { site_id: site.site_id })).json();
-    expect(got).toMatchObject({ access: 'mixed', rules: [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }] });
+    expect(got).toMatchObject({ access: 'mixed', rules: [{ path: '/', access: ['public'] }, { path: '/notes/', access: 'private' }] });
     const found = (await call('find_sites', { query: 'Going public' })).json().sites as { access: string }[];
     expect(found.map((f) => f.access)).toEqual(['mixed']);
   });
 
   it('needs confirming when removing a private rule exposes a folder', async () => {
     const call = await as('alice');
-    const site = (await call('publish', { title: 'Exposed', files: page('x'), rules: [...PUBLIC, { path: '/notes/', tier: 'private' }], confirm_public: true })).json();
+    const site = (await call('publish', { title: 'Exposed', files: page('x'), rules: [...PUBLIC, { path: '/notes/', access: 'private' }], confirm_public: true })).json();
     expect((await call('set_access', { site_id: site.site_id, rules: PUBLIC })).text).toContain('This would make /notes/ public');
     expect((await call('set_access', { site_id: site.site_id, rules: PUBLIC, confirm_public: true })).json()).toMatchObject({ made_public: ['/notes/'], access: 'public' });
   });
@@ -391,7 +391,7 @@ describe('public access (M2)', () => {
     const site = (await call('publish', { title: 'Back to private', files: page('x'), rules: PUBLIC, confirm_public: true })).json();
     expect(site).toMatchObject({ access: 'public', public_urls: [site.url] });
     const r = (await call('set_access', { site_id: site.site_id, rules: [] })).json();
-    expect(r).toMatchObject({ access: 'private', made_private: ['/'], public_urls: [], note: 'Paths made private or shared can stay open as before at some edge locations for up to a minute.' });
+    expect(r).toMatchObject({ access: 'private', made_private: ['/'], public_urls: [], note: 'Paths made private or for members can stay open as before at some edge locations for up to a minute.' });
     expect(r.rules).toBeUndefined();
     expect(await edgeRules(site.site_id)).toEqual([]);
   });
@@ -400,21 +400,22 @@ describe('public access (M2)', () => {
     const call = await as('alice');
     const before = ((await call('find_sites', {})).json().sites as unknown[]).length;
     expect((await call('publish', { title: 'Unconfirmed', files: page('x'), rules: PUBLIC })).text).toContain('confirm_public');
-    expect((await call('publish', { title: 'Bad rule', files: page('x'), rules: [{ path: '/docs', tier: 'public' }], confirm_public: true })).text)
+    expect((await call('publish', { title: 'Bad rule', files: page('x'), rules: [{ path: '/docs', access: ['public'] }], confirm_public: true })).text)
       .toBe('Publish refused: "/docs": use / or a folder ending in /, such as /docs/');
     expect(((await call('find_sites', {})).json().sites as unknown[]).length).toBe(before);
 
     const site = (await call('publish', { title: 'Rules', files: page('x') })).json();
-    const many = Array.from({ length: 21 }, (_, n) => ({ path: `/f${n}/`, tier: 'private' }));
+    const many = Array.from({ length: 21 }, (_, n) => ({ path: `/f${n}/`, access: 'private' }));
     expect((await call('set_access', { site_id: site.site_id, rules: many })).text).toBe('Publish refused: more than 20 rules');
-    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'members' }] })).text).toContain('Input validation error');
+    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/', access: ['public', 'gold'] }] })).text).toBe('Publish refused: "/": public already opens to everyone, so it isn\'t combined with tiers');
+    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'public' }] })).text).toContain('Input validation error');
   });
 
   it('replaces rules with an update, or keeps them when none are sent (R35)', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Update rules', files: page('v1'), rules: PUBLIC, confirm_public: true })).json();
     expect((await call('update', { site_id: site.site_id, files: page('v2') })).json()).toMatchObject({ access: 'public' });
-    const docs = [{ path: '/docs/', tier: 'public' }];
+    const docs = [{ path: '/docs/', access: ['public'] }];
     expect((await call('update', { site_id: site.site_id, files: page('v3'), rules: docs })).json())
       .toMatchObject({ access: 'mixed', made_public: [], made_private: ['/'] });
     expect((await call('update', { site_id: site.site_id, files: page('v4'), rules: PUBLIC })).text).toContain('This would make / public');
@@ -444,14 +445,14 @@ describe('public access (M2)', () => {
     const site = (await call('publish', { title: 'Stale rules', files: page('x') })).json();
     const read = await env.store.getSite(String(site.site_id));
     await call('update', { site_id: site.site_id, files: page('y') });
-    await expect(env.store.setRules('alice', String(site.site_id), [{ path: '/', tier: 'public' }], new Date().toISOString(), read?.updatedAt ?? ''))
+    await expect(env.store.setRules('alice', String(site.site_id), [{ path: '/', access: ['public'] }], new Date().toISOString(), read?.updatedAt ?? ''))
       .rejects.toBeInstanceOf(NotFoundOrConflict);
   });
 
   it('records what each change made public or private (R48)', async () => {
     const events = (await eventsFor('alice')).filter((e) => e.action === 'set_access' && e.result === 'ok');
-    expect(events.map((e) => e.detail)).toContain('made public: /; made shared: nothing; made private: nothing');
-    expect(events.map((e) => e.detail)).toContain('made public: nothing; made shared: nothing; made private: /');
+    expect(events.map((e) => e.detail)).toContain('made public: /; for members: nothing; made private: nothing');
+    expect(events.map((e) => e.detail)).toContain('made public: nothing; for members: nothing; made private: /');
   });
 });
 
@@ -470,7 +471,7 @@ describe('named sites (M2 R44–R48)', () => {
     expect((await call('get_site', { site_id: site.site_id })).json()).toMatchObject({ name: 'my-cv', url: 'https://my-cv.example.com/' });
     expect(((await call('find_sites', { query: 'my-cv' })).json().sites as { site_id: string }[]).map((f) => f.site_id)).toEqual([site.site_id]);
     // Public URLs use the name too.
-    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/docs/', tier: 'public' }], confirm_public: true })).json().public_urls).toEqual(['https://my-cv.example.com/docs/']);
+    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/docs/', access: ['public'] }], confirm_public: true })).json().public_urls).toEqual(['https://my-cv.example.com/docs/']);
   });
 
   it('refuses names that are malformed, reserved, look like IDs, or are taken', async () => {

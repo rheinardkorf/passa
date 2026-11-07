@@ -14,11 +14,12 @@ Mustache.escape = (value: unknown) => escapeHtml(String(value));
 export const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@12.2.0/dist/mermaid.esm.min.mjs';
 
 export type Source = { path: string; content: string };
-export type Rule = { path: string; tier: string };
+// A rule's access is a list of audiences (public, or tier names) or private (M6 R146).
+export type Rule = { path: string; access: string[] | 'private' };
 
 export type RenderInput = {
   sources: Source[];
-  // Access rules, as set_access stores them (any tiers).
+  // Access rules, as set_access stores them.
   rules?: Rule[];
   // The site's address, for the feed's absolute links.
   siteUrl: string;
@@ -40,7 +41,7 @@ export type ProblemKind =
   | 'layout' // R79: a page names a layout that doesn't exist
   | 'access-private-made-public' // R89: front matter says private, the rules make it public
   | 'access-public-kept-private' // R89: front matter says public, the rules keep it private
-  | 'access-private-made-shared' // M5 R137: front matter says private, the rules share it
+  | 'access-private-made-members' // M6: front matter says private, the rules open it to tiers
   | 'link-hidden' // M5 R137: a page links to pages its own visitors can't open
   | 'missing-link' // R73
   | 'widget' // R76: invalid widget data
@@ -63,7 +64,7 @@ export const isSource = (path: string) =>
 // (R88), so a folder taken out of Passa knows what's public.
 export const RULES_FILE = '_passa/access.yml';
 export const rulesFile = (rules: Rule[]) => '# Written by Passa on every publish: the site\'s access rules. Editing this changes nothing; use set_access.\n'
-  + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, tier: ${JSON.stringify(r.tier)} }\n`).join('') : '[]\n');
+  + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, access: ${JSON.stringify(r.access)} }\n`).join('') : '[]\n');
 
 export type RenderedPage ={ path: string; html: string; from: string | null; tier: string };
 
@@ -76,21 +77,31 @@ const CARD_FORMAT = 'passa-card-1';
 // The served name of a card: _card-<hash>.png in its page's folder.
 export const CARD_FILE = /^_card-([0-9a-f]{20})\.png$/;
 
-// The tier for a served path: the longest matching rule, else private (as
-// shared/rules.ts). Each shared rule is its own audience (M5): people are
-// shared paths, not the whole tier, so a shared page's tier names its rule.
+// A page's audience, as a key: public; private (no rule: only the owner reads
+// it); private:<path> (under a private rule, which a share may open); or
+// members:<tiers> (sorted). The longest matching rule decides (shared/rules.ts).
 const tierFor = (rules: Rule[], servedPath: string) => {
   const rule = [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => servedPath.startsWith(r.path));
-  return !rule ? 'private' : rule.tier === 'shared' ? `shared:${rule.path}` : rule.tier;
+  if (!rule) return 'private';
+  if (rule.access === 'private') return `private:${rule.path}`;
+  return rule.access.includes('public') ? 'public' : `members:${[...rule.access].sort().join(',')}`;
 };
-// A tier as people read it.
-const shown = (tier: string) => (tier.startsWith('shared:') ? 'shared' : tier);
+// An audience as people read it.
+const shown = (tier: string) => (tier.startsWith('private:') ? 'private' : tier.startsWith('members:') ? `for ${tier.slice(8).split(',').join(', ')}` : tier);
+// Rendered pages report public, private or members.
+const kind = (tier: string) => (tier.startsWith('members:') ? 'members' : tier.startsWith('private') ? 'private' : tier);
 
-// Who sees what, the one rule for lists, backlinks and tag pages (R82): a page's
-// visitors see public pages and pages of the page's own tier; owner-only
-// (private) pages see everything. No other tier includes another, so a shared
-// page lists only pages under its own rule, which whoever can open it can open.
-const sees = (viewerTier: string, item: { tier: string }) => viewerTier === 'private' || item.tier === 'public' || item.tier === viewerTier;
+// Who sees what, the one rule for lists, backlinks and tag pages (R82, M6
+// R161): a page's lists are made for its audience. Public pages are listed
+// everywhere; owner-only pages (no rule) list everything; a page under a
+// private rule lists only that rule's pages; a members page lists pages every
+// one of its tiers can open. Shares don't change lists.
+const sees = (viewerTier: string, item: { tier: string }) => {
+  if (viewerTier === 'private' || item.tier === 'public' || item.tier === viewerTier) return true;
+  if (!viewerTier.startsWith('members:') || !item.tier.startsWith('members:')) return false;
+  const open = new Set(item.tier.slice(8).split(','));
+  return viewerTier.slice(8).split(',').every((t) => open.has(t));
+};
 
 type FrontMatter = Record<string, unknown>;
 
@@ -165,7 +176,8 @@ const placed = (list: Summary[], from = 1) =>
   list.map((item, i) => Object.assign(Object.create(item) as Summary, { index: i + from, indexPadded: pad(i + from), isFirst: i + from === 1, isLast: i === list.length - 1 }));
 
 export function render(input: RenderInput): RenderResult {
-  const { sources, rules = [], siteUrl, siteTitle = 'Site', files = [] } = input;
+  const { sources, siteUrl, siteTitle = 'Site', files = [] } = input;
+  const rules = input.rules ?? [];
   const problems: Problem[] = [];
   const problem = (kind: ProblemKind, source: string | null, message: string) => problems.push({ kind, source, message });
 
@@ -253,7 +265,7 @@ export function render(input: RenderInput): RenderResult {
   for (const p of pages) {
     const said = typeof p.data.access === 'string' ? p.data.access.toLowerCase() : undefined;
     if (said === 'private' && p.tier === 'public') problem('access-private-made-public', p.source, `${p.source} says access: private, but the site's rules make ${p.url} public`);
-    if (said === 'private' && p.tier.startsWith('shared:')) problem('access-private-made-shared', p.source, `${p.source} says access: private, but the site's rules make ${p.url} shared, so everyone the site is shared with can open it`);
+    if (said === 'private' && p.tier.startsWith('members:')) problem('access-private-made-members', p.source, `${p.source} says access: private, but the site's rules open ${p.url} to members (${p.tier.slice(8).split(',').join(', ')})`);
     if (said === 'public' && p.tier !== 'public') keptPrivate.push(p);
   }
   const [only] = keptPrivate;
@@ -262,7 +274,7 @@ export function render(input: RenderInput): RenderResult {
     const named = keptPrivate.slice(0, 5).map((p) => p.source).join(', ');
     const more = keptPrivate.length > 5 ? ` and ${keptPrivate.length - 5} more` : '';
     const tiers = [...new Set(keptPrivate.map((p) => shown(p.tier)))];
-    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them ${tiers.length === 1 ? tiers[0] : 'private or shared'} (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
+    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them ${tiers.length === 1 ? tiers[0] : 'private or for members'} (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
   }
 
   // Link resolution: by path, by file name, or by title, ignoring case and punctuation (R73).
@@ -574,7 +586,7 @@ export function render(input: RenderInput): RenderResult {
           self.socialImage = view.socialImage = absolute(`${p.url}_card-${card.hash}.png`);
         }
       }
-      out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: shown(p.tier) });
+      out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: kind(p.tier) });
     } catch (err) {
       problem('template', p.source, `${p.source ?? p.file}: layout ${layoutName} failed (${firstLine(err)})`);
     }

@@ -59,7 +59,7 @@ describe('without a rules file (R93)', () => {
 
 describe('with a rules file', () => {
   const root = site({
-    '_passa/access.yml': '- { path: /, tier: public }\n- { path: /notes/, tier: private }\n',
+    '_passa/access.yml': '- { path: /, access: [public] }\n- { path: /notes/, access: private }\n',
     'index.md': '# Home',
     'post.md': '---\ntitle: Post\n---\nPublic.',
     'notes/plan.md': '---\ntitle: Secret plan\naccess: public\n---\nPrivate, whatever the front matter says.',
@@ -86,7 +86,7 @@ describe('refusals, as a publish would', () => {
   });
 
   it('refuses a page marked private that the rules make public, until confirmed', () => {
-    const root = site({ '_passa/access.yml': '- { path: /, tier: public }\n', 'a.md': '---\naccess: private\n---\nA' });
+    const root = site({ '_passa/access.yml': '- { path: /, access: [public] }\n', 'a.md': '---\naccess: private\n---\nA' });
     expect(buildSite(root).refusing.map((p) => p.kind)).toEqual(['access-private-made-public']);
     expect(buildSite(root, { confirmPublic: true }).refusing).toEqual([]);
   });
@@ -147,10 +147,11 @@ describe('the passa command', () => {
 
 describe('access options', () => {
   it('turn --public, --private and --rule into rules', () => {
-    expect(parseRules({ public: true })).toEqual([{ path: '/', tier: 'public' }]);
+    expect(parseRules({ public: true })).toEqual([{ path: '/', access: ['public'] }]);
     expect(parseRules({ private: true })).toEqual([]);
-    expect(parseRules({ rule: ['/=public', '/notes/=private'] })).toEqual([{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }]);
+    expect(parseRules({ rule: ['/=public', '/notes/=private'] })).toEqual([{ path: '/', access: ['public'] }, { path: '/notes/', access: 'private' }]);
     expect(parseRules({})).toBeUndefined();
-    expect(() => parseRules({ rule: ['public'] })).toThrow(/<path>=<tier>/);
+    expect(parseRules({ rule: ['/lessons/=gold, silver'] })).toEqual([{ path: '/lessons/', access: ['gold', 'silver'] }]);
+    expect(() => parseRules({ rule: ['public'] })).toThrow(/<path>=<access>/);
   });
 });

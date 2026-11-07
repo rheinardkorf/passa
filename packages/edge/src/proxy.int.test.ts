@@ -227,7 +227,9 @@ describe('sharing (M5)', () => {
     const site = await publisher.publish(alice, { title: 'Proposals', content: { files: [...page('<h1>Home</h1>'), file('proposals/acme/index.html', 'Acme'), file('proposals/globex/index.html', 'Globex')] } });
     await publisher.share(alice, { siteId: site.site_id, email: 'acme@example.com', path: '/proposals/acme/', confirmShare: true });
     await publisher.share(alice, { siteId: site.site_id, email: 'globex@example.com', path: '/proposals/globex/', confirmShare: true });
-    await publisher.share(alice, { siteId: site.site_id, email: 'partner@example.com', path: '/proposals/', confirmShare: true });
+    // The folder above both: a share stops at the next rule down (M6 R156), so it opens neither proposal, and says so.
+    const above = await publisher.share(alice, { siteId: site.site_id, email: 'partner@example.com', path: '/proposals/', confirmShare: true });
+    expect(above.left_out).toEqual([`${site.url}proposals/acme/`, `${site.url}proposals/globex/`]);
 
     const signedIn = async (email: string, path: string) => {
       const browser = new Browser(port);
@@ -247,8 +249,12 @@ describe('sharing (M5)', () => {
 
     // A share of the folder opens both shared folders under it.
     const partner = await signedIn('partner@example.com', '/proposals/acme/');
-    expect(partner.landed.body).toContain('<h1>Acme</h1>');
-    expect((await partner.browser.follow(`${site.url}proposals/globex/`)).body).toContain('<h1>Globex</h1>');
+    expect(partner.landed.status).toBe(403);
+    // Shared Acme's folder itself, they open it, and still not Globex's.
+    await publisher.unshare(alice, { siteId: site.site_id, email: 'partner@example.com', path: '/proposals/' });
+    await publisher.share(alice, { siteId: site.site_id, email: 'partner@example.com', path: '/proposals/acme/', confirmShare: true });
+    expect((await partner.browser.follow(`${site.url}proposals/acme/`)).body).toContain('<h1>Acme</h1>');
+    expect((await partner.browser.follow(`${site.url}proposals/globex/`)).status).toBe(403);
   });
 
   it('sends no sign-in link to an email a site isn\'t shared with, answering the same (R135)', async () => {
@@ -329,7 +335,7 @@ describe('viewing a public site (M2)', () => {
 
   it('lets search engines index a named site\'s public pages, but not an unnamed site\'s (M2 R42)', async () => {
     const site = await publisher.publish(alice, { title: 'Indexed', content: { files: page('<h1>Find me</h1>') } });
-    await publisher.setAccess(alice, { siteId: site.site_id, rules: [{ path: '/', tier: 'public' }], confirmPublic: true });
+    await publisher.setAccess(alice, { siteId: site.site_id, rules: [{ path: '/', access: ['public'] }], confirmPublic: true });
     const byId = await get(site.site_id, '/');
     expect([byId.status, byId.headers['x-robots-tag']]).toEqual([200, 'noindex']);
     await publisher.setName(alice, { siteId: site.site_id, name: 'find-me' });
@@ -345,7 +351,7 @@ describe('viewing a public site (M2)', () => {
       title: 'Mixed',
       content: { files: [...page('<h1>Public</h1>'), { path: 'notes/index.html', content: new TextEncoder().encode('secret notes') }] },
     });
-    await withRules(site.site_id, [{ path: '/', tier: 'public' }, { path: '/notes/', tier: 'private' }]);
+    await withRules(site.site_id, [{ path: '/', access: ['public'] }, { path: '/notes/', access: 'private' }]);
 
     const home = await get(site.site_id, '/');
     expect(home.status).toBe(200);
@@ -372,9 +378,9 @@ describe('viewing a public site (M2)', () => {
 
   it('serves nothing from a blocked site, whatever its rules (R41)', async () => {
     const site = await publisher.publish(alice, { title: 'Blocked', content: { files: page('x') } });
-    await withRules(site.site_id, [{ path: '/', tier: 'public' }]);
+    await withRules(site.site_id, [{ path: '/', access: ['public'] }]);
     expect((await get(site.site_id, '/')).status).toBe(200);
-    await withRules(site.site_id, [{ path: '/', tier: 'public' }], 'blocked');
+    await withRules(site.site_id, [{ path: '/', access: ['public'] }], 'blocked');
     expect((await get(site.site_id, '/')).status).toBe(302);
   });
 });
