@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { accessToken, LoginNeeded, login, logout, readCredentials } from './auth.ts';
 import { request } from './http.ts';
 import { callTool } from './mcp.ts';
-import { deleteSite, listAccess, parseRules, publishFolder, rollback, setAccess, setName, share, syncFolder, unshare, waitUntilServed } from './deploy.ts';
+import { addMember, deleteSite, listAccess, listMembers, listShares, parseRules, removeMember, publishFolder, rollback, setAccess, setName, share, syncFolder, unshare, waitUntilServed } from './deploy.ts';
 import { pull, readLink, resolveTarget } from './sites.ts';
 
 let stack: Stack;
@@ -200,9 +200,9 @@ describe('changing sites (R106–R110)', () => {
     const target = await resolveTarget(folder, { dir });
 
     const no = answering(false);
-    await expect(setAccess(target, [{ path: '/', tier: 'public' }], { dir, ask: no.ask })).rejects.toThrow('Nothing was changed.');
+    await expect(setAccess(target, [{ path: '/', access: ['public'] }], { dir, ask: no.ask })).rejects.toThrow('Nothing was changed.');
     expect(no.asked[0]).toContain('This would make / public');
-    const made = await setAccess(target, [{ path: '/', tier: 'public' }], { dir, ask: answering(true).ask });
+    const made = await setAccess(target, [{ path: '/', access: ['public'] }], { dir, ask: answering(true).ask });
     expect(made).toMatchObject({ access: 'public', made_public: ['/'] });
 
     // Set public by the access change, which re-rendered: the folder's next sync draws the cards.
@@ -236,14 +236,36 @@ describe('changing sites (R106–R110)', () => {
     expect((await listAccess(target, { dir })).shares).toEqual([]);
 
     const r = await share(target, 'sam@example.com', { dir, ask: answering(true).ask, path: '/plans/', expires: '2027-01-31' });
-    expect(r).toMatchObject({ made_shared: ['/plans/'], invite_sent: true, share: { email: 'sam@example.com', expires_at: '2027-01-31T23:59:59.000Z' } });
+    expect(r).toMatchObject({ invite_sent: true, share: { email: 'sam@example.com', expires_at: '2027-01-31T23:59:59.000Z' } });
     expect(stack.sent.at(-1)?.to).toBe('sam@example.com');
     const listed = await listAccess(target, { dir });
-    expect(listed).toMatchObject({ access: 'mixed', rules: [{ path: '/plans/', tier: 'shared' }], shares: [{ email: 'sam@example.com', path: '/plans/' }] });
+    expect(listed).toMatchObject({ access: 'private', rules: [{ path: '/plans/', access: 'private' }], shares: [{ email: 'sam@example.com', path: '/plans/' }] });
 
     expect(await unshare(target, 'sam@example.com', { dir, path: '/plans/' })).toMatchObject({ unshared: 1, path: '/plans/' });
     expect((await listAccess(target, { dir })).shares).toEqual([]);
-    expect(await setAccess(target, parseRules({ shared: true }) ?? [], { dir, ask: answering(false).ask })).toMatchObject({ access: 'shared' });
+    expect(await setAccess(target, parseRules({ rule: ['/=gold,silver'] }) ?? [], { dir, ask: answering(false).ask })).toMatchObject({ access: 'members', rules: [{ path: '/', access: ['gold', 'silver'] }] });
+  });
+
+  it('adds members once the email is confirmed, lists them and shares across sites, and removes them (M6 R163)', async () => {
+    const { dir } = await signedIn();
+    const folder = folderWith({ 'index.html': '<p>home</p>', 'lessons/index.html': '<p>lessons</p>' });
+    await publishFolder(server, folder, 'Course', { dir, ask: answering(true).ask });
+    const target = await resolveTarget(folder, { dir });
+    await setAccess(target, parseRules({ rule: ['/lessons/=gold'] }) ?? [], { dir, ask: answering(false).ask });
+
+    const no = answering(false);
+    await expect(addMember(target, 'Sam@Example.com', 'gold', { dir, ask: no.ask })).rejects.toThrow('Nobody was added.');
+    expect(no.asked[0]).toContain('Add sam@example.com to gold');
+    const r = await addMember(target, 'sam@example.com', 'gold', { dir, ask: answering(true).ask, for: '30d' });
+    expect(r).toMatchObject({ invite_sent: true, member: { email: 'sam@example.com', tier: 'gold', expires_at: expect.any(String) } });
+    expect(await listMembers(target, { dir })).toMatchObject({ tiers: ['gold'], members: [{ email: 'sam@example.com', last_used: 'never' }] });
+
+    await share(target, 'kim@example.com', { dir, ask: answering(true).ask, path: '/lessons/', from: '2027-01-01' });
+    const shares = await listShares(server, { dir, siteId: target.siteId });
+    expect(shares).toMatchObject([{ email: 'kim@example.com', starts_at: '2027-01-01T00:00:00.000Z', expires_at: '2027-04-01T00:00:00.000Z' }]);
+
+    expect(await removeMember(target, 'sam@example.com', { dir })).toMatchObject({ removed: 1 });
+    expect((await listMembers(target, { dir })).members).toEqual([]);
   });
 
   it('names, rolls back and deletes', async () => {

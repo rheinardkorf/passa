@@ -57,7 +57,7 @@ beforeAll(async () => {
 afterAll(() => stack.close());
 
 const file = (path: string, text: string) => ({ path, content: new TextEncoder().encode(text) });
-async function site(title: string, name: string, rules: Rule[] = [{ path: '/', tier: 'public' }]) {
+async function site(title: string, name: string, rules: Rule[] = [{ path: '/', access: ['public'] }]) {
   const s = await stack.publisher.publish(alice, { title, content: { files: [file('index.md', `# ${title}\n\nHello.`)] }, rules, confirmPublic: true });
   await stack.publisher.setName(alice, { siteId: s.site_id, name });
   return s.site_id;

@@ -64,7 +64,7 @@ export const sitesList = (server: string, query: string | undefined, options: Ca
 
 export type SiteFile = { path: string; size: number; content_type: string; sha256: string; role?: 'source' | 'rendered'; rendered_from?: string; content?: string; download_url?: string };
 export type SiteDetails = Summary & {
-  rules?: { path: string; tier: string }[];
+  rules?: { path: string; access: string[] | 'private' }[];
   version: string;
   versions: { version_id: string; created_at: string; files: number; size: number; current: boolean }[];
   files: SiteFile[];

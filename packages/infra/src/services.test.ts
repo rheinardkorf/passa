@@ -129,7 +129,7 @@ describe('services stack', () => {
     services.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: Match.objectLike({ PASSA_MALWARE_SCAN: '1' }) } });
   });
 
-  it('runs only on TTL removals of PURGE, NAME and GRANT items', () => {
+  it('runs only on TTL removals of PURGE, NAME, GRANT and MEMBER items', () => {
     const mapping = Object.values(services.findResources('AWS::Lambda::EventSourceMapping'))[0];
     const patterns = (mapping?.Properties.FilterCriteria.Filters as { Pattern: string }[]).map((f) => JSON.parse(f.Pattern));
     const ttlRemoval = (image: object) => ({ eventName: ['REMOVE'], userIdentity: { principalId: ['dynamodb.amazonaws.com'] }, dynamodb: { OldImage: image } });
@@ -137,6 +137,7 @@ describe('services stack', () => {
       ttlRemoval({ pk: { S: [{ prefix: 'PURGE#' }] } }),
       ttlRemoval({ pk: { S: [{ prefix: 'NAME#' }] } }),
       ttlRemoval({ sk: { S: [{ prefix: 'GRANT#' }] } }),
+      ttlRemoval({ sk: { S: [{ prefix: 'MEMBER#' }] } }),
     ]);
   });
 

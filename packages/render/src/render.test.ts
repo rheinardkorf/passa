@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CARD_FONTS, drawCard, REFUSING, THEME_GUIDE, render, type Source } from './index.ts';
+import { DEFAULT_CARD_FONTS, drawCard, REFUSING, THEME_GUIDE, render, type Rule, type Source } from './index.ts';
 
-const publicSite = [{ path: '/', tier: 'public' }];
-const build = (sources: Source[], extra: { files?: string[]; rules?: { path: string; tier: string }[] } = {}) => {
+const publicSite: Rule[] = [{ path: '/', access: ['public'] }];
+const build = (sources: Source[], extra: { files?: string[]; rules?: Rule[] } = {}) => {
   const result = render({ sources, rules: extra.rules ?? publicSite, siteUrl: 'https://demo.example/', ...(extra.files ? { files: extra.files } : {}) });
   return { ...result, html: (path: string) => result.pages.find((p) => p.path === path)?.html ?? '', kinds: result.problems.map((p) => p.kind) };
 };
@@ -349,7 +349,7 @@ describe('front matter access (R89)', () => {
 describe('social cards (R94–R97)', () => {
   const sha = (s: string) => s.padEnd(64, '0');
   const files: Record<string, string> = { 'logo.png': sha('a'), '_layouts/fonts/Serif__700__normal.woff': sha('f') };
-  const cards = (sources: Source[], extra: { rules?: { path: string; tier: string }[]; files?: Record<string, string> } = {}) => {
+  const cards = (sources: Source[], extra: { rules?: Rule[]; files?: Record<string, string> } = {}) => {
     const all = { ...files, ...extra.files };
     return render({ sources, rules: extra.rules ?? publicSite, siteUrl: 'https://demo.example/', files: Object.keys(all), cards: { fileHash: (p) => all[p] } });
   };
@@ -372,13 +372,13 @@ describe('social cards (R94–R97)', () => {
   });
 
   it('draws no card for private pages, or pages with their own social image', () => {
-    const r = cards([post('Hidden'), { path: 'own.md', content: '---\nsocialImage: logo.png\n---\nMine.' }], { rules: [{ path: '/', tier: 'public' }, { path: '/post/', tier: 'private' }] });
+    const r = cards([post('Hidden'), { path: 'own.md', content: '---\nsocialImage: logo.png\n---\nMine.' }], { rules: [{ path: '/', access: ['public'] }, { path: '/post/', access: 'private' }] });
     expect(r.cards?.map((c) => c.path).filter((p) => p.startsWith('post/') || p.startsWith('own/'))).toEqual([]);
     expect(r.pages.find((p) => p.path === 'own/index.html')?.html).toContain('content="https://demo.example/logo.png"');
   });
 
   it('draws no card for shared pages, which link previews can\'t sign in to see (M5 R137)', () => {
-    const r = cards([post('Team only')], { rules: [{ path: '/', tier: 'public' }, { path: '/post/', tier: 'shared' }] });
+    const r = cards([post('Team only')], { rules: [{ path: '/', access: ['public'] }, { path: '/post/', access: 'private' }] });
     expect(r.cards?.map((c) => c.path).filter((p) => p.startsWith('post/'))).toEqual([]);
     expect(r.pages.find((p) => p.path === 'post/index.html')?.html).not.toContain('og:image');
   });

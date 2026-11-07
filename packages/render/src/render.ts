@@ -14,11 +14,12 @@ Mustache.escape = (value: unknown) => escapeHtml(String(value));
 export const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@12.2.0/dist/mermaid.esm.min.mjs';
 
 export type Source = { path: string; content: string };
-export type Rule = { path: string; tier: string };
+// A rule's access is a list of audiences (public, or tier names) or private (M6 R146).
+export type Rule = { path: string; access: string[] | 'private' };
 
 export type RenderInput = {
   sources: Source[];
-  // Access rules, as set_access stores them (any tiers).
+  // Access rules, as set_access stores them.
   rules?: Rule[];
   // The site's address, for the feed's absolute links.
   siteUrl: string;
@@ -40,7 +41,8 @@ export type ProblemKind =
   | 'layout' // R79: a page names a layout that doesn't exist
   | 'access-private-made-public' // R89: front matter says private, the rules make it public
   | 'access-public-kept-private' // R89: front matter says public, the rules keep it private
-  | 'access-private-made-shared' // M5 R137: front matter says private, the rules share it
+  | 'access-private-made-members' // M6: front matter says private, the rules open it to tiers
+  | 'access' // M6 R146, R147: access in _site.yml or front matter that can't be used
   | 'link-hidden' // M5 R137: a page links to pages its own visitors can't open
   | 'missing-link' // R73
   | 'widget' // R76: invalid widget data
@@ -53,7 +55,7 @@ export type Problem = { kind: ProblemKind; source: string | null; message: strin
 
 // Problems that refuse a publish in Passa; access-private-made-public refuses
 // only until the change is confirmed with confirm_public.
-export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public', 'card']);
+export const REFUSING: ReadonlySet<ProblemKind> = new Set(['conflict', 'layout', 'access-private-made-public', 'card', 'access']);
 
 // The files a site renders from (R86): Markdown, layouts and the site's settings.
 export const isSource = (path: string) =>
@@ -63,36 +65,103 @@ export const isSource = (path: string) =>
 // (R88), so a folder taken out of Passa knows what's public.
 export const RULES_FILE = '_passa/access.yml';
 export const rulesFile = (rules: Rule[]) => '# Written by Passa on every publish: the site\'s access rules. Editing this changes nothing; use set_access.\n'
-  + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, tier: ${JSON.stringify(r.tier)} }\n`).join('') : '[]\n');
+  + (rules.length ? rules.map((r) => `- { path: ${JSON.stringify(r.path)}, access: ${JSON.stringify(r.access)} }\n`).join('') : '[]\n');
 
 export type RenderedPage ={ path: string; html: string; from: string | null; tier: string };
 
 // cards and cardFonts only with input.cards; cardFonts are the theme's font
 // paths, or empty for the default card's built-in fonts.
-export type RenderResult = { pages: RenderedPage[]; feed?: string; problems: Problem[]; cards?: Card[]; cardFonts?: string[] };
+// rules: only when the site's files declare its access (M6 R150): the rules
+// they make, which are the site's rules from then on.
+export type RenderResult = { pages: RenderedPage[]; feed?: string; problems: Problem[]; cards?: Card[]; cardFonts?: string[]; rules?: Rule[] };
 
 // Changes when the default card or how cards are drawn changes, so every card is drawn again.
 const CARD_FORMAT = 'passa-card-1';
 // The served name of a card: _card-<hash>.png in its page's folder.
 export const CARD_FILE = /^_card-([0-9a-f]{20})\.png$/;
 
-// The tier for a served path: the longest matching rule, else private (as
-// shared/rules.ts). Each shared rule is its own audience (M5): people are
-// shared paths, not the whole tier, so a shared page's tier names its rule.
+// A page's audience, as a key: public; private (no rule: only the owner reads
+// it); private:<path> (under a private rule, which a share may open); or
+// members:<tiers> (sorted). The longest matching rule decides (shared/rules.ts).
 const tierFor = (rules: Rule[], servedPath: string) => {
   const rule = [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => servedPath.startsWith(r.path));
-  return !rule ? 'private' : rule.tier === 'shared' ? `shared:${rule.path}` : rule.tier;
+  if (!rule) return 'private';
+  if (rule.access === 'private') return `private:${rule.path}`;
+  return rule.access.includes('public') ? 'public' : `members:${[...rule.access].sort().join(',')}`;
 };
-// A tier as people read it.
-const shown = (tier: string) => (tier.startsWith('shared:') ? 'shared' : tier);
+// An audience as people read it.
+const shown = (tier: string) => (tier.startsWith('private:') ? 'private' : tier.startsWith('members:') ? `for ${tier.slice(8).split(',').join(', ')}` : tier);
+// Rendered pages report public, private or members.
+const kind = (tier: string) => (tier.startsWith('members:') ? 'members' : tier.startsWith('private') ? 'private' : tier);
 
-// Who sees what, the one rule for lists, backlinks and tag pages (R82): a page's
-// visitors see public pages and pages of the page's own tier; owner-only
-// (private) pages see everything. No other tier includes another, so a shared
-// page lists only pages under its own rule, which whoever can open it can open.
-const sees = (viewerTier: string, item: { tier: string }) => viewerTier === 'private' || item.tier === 'public' || item.tier === viewerTier;
+// Who sees what, the one rule for lists, backlinks and tag pages (R82, M6
+// R161): a page's lists are made for its audience. Public pages are listed
+// everywhere; owner-only pages (no rule) list everything; a page under a
+// private rule lists only that rule's pages; a members page lists pages every
+// one of its tiers can open. Shares don't change lists.
+const sees = (viewerTier: string, item: { tier: string }) => {
+  if (viewerTier === 'private' || item.tier === 'public' || item.tier === viewerTier) return true;
+  if (!viewerTier.startsWith('members:') || !item.tier.startsWith('members:')) return false;
+  const open = new Set(item.tier.slice(8).split(','));
+  return viewerTier.slice(8).split(',').every((t) => open.has(t));
+};
 
 type FrontMatter = Record<string, unknown>;
+
+// Tier names (shared/rules.ts TIER_NAME), and the words rules reserve.
+const TIER_NAME = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/;
+const RESERVED = ['public', 'private', 'shared'];
+const RULE_PATH = /^\/(?:[A-Za-z0-9_~@+-][A-Za-z0-9._~@+-]*\/)*$/;
+
+// One access value from _site.yml or front matter: private, public, or a list
+// of named tiers (or [public]); a reason when it can't be used.
+function accessValue(value: unknown, tiers: string[]): Rule['access'] | { problem: string } {
+  if (value === 'private') return 'private';
+  if (value === 'public') return ['public'];
+  const list = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(list) || !list.length || !list.every((v) => typeof v === 'string')) return { problem: 'use private, public, or a list of tiers such as [gold, silver]' };
+  if (list.includes('public')) return list.length === 1 ? ['public'] : { problem: 'public already opens to everyone, so it isn\'t combined with tiers' };
+  if (list.includes('private')) return { problem: 'private stands alone, and isn\'t combined with tiers' };
+  const unknown = list.filter((t) => !tiers.includes(t));
+  if (unknown.length) return { problem: `${unknown.join(', ')} ${unknown.length > 1 ? 'aren\'t tiers' : 'isn\'t a tier'} this site names (tiers in _site.yml: ${tiers.length ? tiers.join(', ') : 'none'})` };
+  return [...new Set(list)];
+}
+
+const isProblem = (a: Rule['access'] | { problem: string }): a is { problem: string } => typeof a === 'object' && !Array.isArray(a);
+
+// A rule's ID at the edge: the first 8 hex digits of its path's SHA-256. Must
+// match shared/rules.ts ruleId (a test checks).
+export const ruleId = (path: string): string => createHash('sha256').update(path).digest('hex').slice(0, 8);
+
+const sameAccess = (a: Rule['access'], b: Rule['access']) => (a === 'private' || b === 'private' ? a === b : [...a].sort().join() === [...b].sort().join());
+
+// The rules a site's files declare: _site.yml's access by folder, then each
+// page whose front matter access differs from what covers it (a page is its
+// own folder, so its rule is longer and wins). Pages that agree add nothing.
+function accessRules(siteData: FrontMatter, pages: { source: string | null; url: string; data: FrontMatter }[], problem: (kind: ProblemKind, source: string | null, message: string) => void): Rule[] {
+  const tiers = Array.isArray(siteData.tiers) ? siteData.tiers.map(String) : [];
+  for (const t of tiers) if (!TIER_NAME.test(t) || RESERVED.includes(t)) problem('access', '_site.yml', `_site.yml: tier ${JSON.stringify(t)} isn't a valid name: 1–30 lowercase letters, digits and hyphens, and not public, private or shared`);
+  const rules: Rule[] = [];
+  const declared = siteData.access;
+  if (declared !== null && declared !== undefined && (typeof declared !== 'object' || Array.isArray(declared))) {
+    problem('access', '_site.yml', '_site.yml: access is a list of folders and who may open them, such as /lessons/: [gold, silver]');
+  } else {
+    for (const [path, value] of Object.entries((declared ?? {}) as FrontMatter)) {
+      const access = accessValue(value, tiers);
+      if (!RULE_PATH.test(path)) problem('access', '_site.yml', `_site.yml: access for ${JSON.stringify(path)}: use / or a folder ending in /, such as /lessons/`);
+      else if (isProblem(access)) problem('access', '_site.yml', `_site.yml: access for ${path}: ${access.problem}`);
+      else rules.push({ path, access });
+    }
+  }
+  const covering = (url: string) => [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => `${url}index.html`.startsWith(r.path))?.access ?? 'private';
+  for (const p of pages) {
+    if (p.data.access === undefined) continue;
+    const access = accessValue(p.data.access, tiers);
+    if (isProblem(access)) problem('access', p.source, `${p.source}: access: ${access.problem}`);
+    else if (!sameAccess(access, covering(p.url)) && !rules.some((r) => r.path === p.url)) rules.push({ path: p.url, access });
+  }
+  return rules;
+}
 
 // A Markdown source's front matter and body, and why the front matter can't be
 // read when it can't. The passa command uses it too, to decide access the same way.
@@ -165,7 +234,8 @@ const placed = (list: Summary[], from = 1) =>
   list.map((item, i) => Object.assign(Object.create(item) as Summary, { index: i + from, indexPadded: pad(i + from), isFirst: i + from === 1, isLast: i === list.length - 1 }));
 
 export function render(input: RenderInput): RenderResult {
-  const { sources, rules = [], siteUrl, siteTitle = 'Site', files = [] } = input;
+  const { sources, siteUrl, siteTitle = 'Site', files = [] } = input;
+  let rules = input.rules ?? [];
   const problems: Problem[] = [];
   const problem = (kind: ProblemKind, source: string | null, message: string) => problems.push({ kind, source, message });
 
@@ -246,14 +316,24 @@ export function render(input: RenderInput): RenderResult {
     else rendersTo.set(file, p.source ?? '');
   }
 
+  // Access from the site's own files (M6 R147, R150): a site whose _site.yml
+  // declares access has its rules made from it and from pages' front matter,
+  // which then win over the rules it was given. Without it, the rules given
+  // apply, and front matter access is only checked against them (M3 R89).
+  const fromFiles = siteSource !== undefined && 'access' in siteData;
+  if (fromFiles) {
+    rules = accessRules(siteData, pages, problem);
+    for (const p of pages) p.tier = tierFor(rules, `${p.url}index.html`);
+  }
+
   // Front matter access never grants access (R89), but disagreements are reported.
   // Pages kept private are one warning, however many: a site published private
   // with pages meant to be public would otherwise warn once per page.
   const keptPrivate: Page[] = [];
-  for (const p of pages) {
+  for (const p of fromFiles ? [] : pages) {
     const said = typeof p.data.access === 'string' ? p.data.access.toLowerCase() : undefined;
     if (said === 'private' && p.tier === 'public') problem('access-private-made-public', p.source, `${p.source} says access: private, but the site's rules make ${p.url} public`);
-    if (said === 'private' && p.tier.startsWith('shared:')) problem('access-private-made-shared', p.source, `${p.source} says access: private, but the site's rules make ${p.url} shared, so everyone the site is shared with can open it`);
+    if (said === 'private' && p.tier.startsWith('members:')) problem('access-private-made-members', p.source, `${p.source} says access: private, but the site's rules open ${p.url} to members (${p.tier.slice(8).split(',').join(', ')})`);
     if (said === 'public' && p.tier !== 'public') keptPrivate.push(p);
   }
   const [only] = keptPrivate;
@@ -262,7 +342,7 @@ export function render(input: RenderInput): RenderResult {
     const named = keptPrivate.slice(0, 5).map((p) => p.source).join(', ');
     const more = keptPrivate.length > 5 ? ` and ${keptPrivate.length - 5} more` : '';
     const tiers = [...new Set(keptPrivate.map((p) => shown(p.tier)))];
-    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them ${tiers.length === 1 ? tiers[0] : 'private or shared'} (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
+    problem('access-public-kept-private', null, `${keptPrivate.length} pages say access: public, but the site's rules keep them ${tiers.length === 1 ? tiers[0] : 'private or for members'} (${named}${more}). Front matter never makes a page public: change the site's rules to.`);
   }
 
   // Link resolution: by path, by file name, or by title, ignoring case and punctuation (R73).
@@ -574,13 +654,31 @@ export function render(input: RenderInput): RenderResult {
           self.socialImage = view.socialImage = absolute(`${p.url}_card-${card.hash}.png`);
         }
       }
-      out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: shown(p.tier) });
+      out.push({ path: p.file, html: Mustache.render(layout, view, partials), from: p.source, tier: kind(p.tier) });
     } catch (err) {
       problem('template', p.source, `${p.source ?? p.file}: layout ${layoutName} failed (${firstLine(err)})`);
     }
   }
 
-  const result: RenderResult = { pages: out, problems, ...(cardHashes ? { cards, cardFonts } : {}) };
+  // Links to pages that aren't public carry their rule's ID (M6 R167), or
+  // owner for pages no rule covers, so a theme or script can later tidy links
+  // a viewer can't follow. They reveal only a short hash of a path.
+  const marks = new Map<string, string>();
+  for (const p of pages) {
+    if (p.tier === 'public') continue;
+    const rule = [...rules].sort((a, b) => b.path.length - a.path.length).find((r) => `${p.url}index.html`.startsWith(r.path));
+    marks.set(p.url, rule ? ruleId(rule.path) : 'owner');
+  }
+  if (marks.size) {
+    for (const page of out) {
+      page.html = page.html.replace(/<a\b([^>]*?)\shref="(\/[^"?#]*)([^"]*)"/g, (whole, before: string, path: string, rest: string) => {
+        const mark = marks.get(path.endsWith('/') ? path : `${path}/`);
+        return mark && !whole.includes('data-passa-rule') ? `<a${before} data-passa-rule="${mark}" href="${path}${rest}"` : whole;
+      });
+    }
+  }
+
+  const result: RenderResult = { pages: out, problems, ...(cardHashes ? { cards, cardFonts } : {}), ...(fromFiles ? { rules } : {}) };
   if (feedItems.length && !taken.has('feed.xml')) {
     const abs = (url: string) => new URL(url, siteUrl).href;
     result.feed = `<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0"><channel><title>${escapeHtml(site.title)}</title><link>${abs('/')}</link><description>${escapeHtml(String(site.description ?? site.title))}</description>\n`

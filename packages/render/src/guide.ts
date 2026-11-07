@@ -49,6 +49,7 @@ Mustache has no "or" and no "first N": use the values Passa provides (\`hasPager
 - \`date\` (ISO), \`dateText\` (YYYY-MM-DD), \`dateLong\` ("31 October 2026"), \`dateShort\` ("31 Oct 2026"), \`year\`, formatted in \`site.locale\`
 - \`description\`, \`excerpt\` (the description, or the first paragraph that reads as prose, up to about 220 characters)
 - \`readingTime\` (minutes), \`words\` (prose only: code and widgets don't count), \`kind\` (front matter \`kind:\`, else \`deck\` for \`layout: deck\`, else \`essay\` at 350 prose words or more, else \`note\`), \`isEssay\`, \`isNote\`, \`isDeck\`
+- Access (M6): \`_site.yml\` may name the site's tiers (\`tiers: [gold, silver]\`) and declare who opens which folders (\`access: { /: [public], /lessons/: [gold, silver], /lessons/draft/: private }\`); a page's front matter \`access\` (\`[silver]\`, \`private\` or \`public\`) can then differ from its folder. Once \`_site.yml\` declares \`access\`, the files are the site's access and set_access is refused. Lists on a page show only pages its audience can open, and links to pages that aren't public carry \`data-passa-rule\`, which a theme may use to style or hide links a viewer can't follow (it doesn't protect them)
 - \`author\` (front matter, else \`site.author\`)
 - \`cover\` (an image from front matter, path resolved), \`accent\` (a colour from front matter)
 - \`tags\`: \`[{ name, url }]\`

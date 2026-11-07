@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import type { Rule } from '@passa/render';
 import { request } from './http.ts';
 import { callTool, type CallOptions, ToolRefused } from './mcp.ts';
 import { buildSite, drawSiteCard, walk } from './site.ts';
@@ -13,7 +14,7 @@ import { readLink, siteDetails, type Target, writeLink } from './sites.ts';
 // the terminal, tests one that answers.
 export type Ask = (question: string) => Promise<boolean>;
 
-export type Rule = { path: string; tier: string };
+export type { Rule } from '@passa/render';
 type FileToSend = { path: string; content: Uint8Array };
 
 const sha256 = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
@@ -24,7 +25,7 @@ const needsConfirm = (err: unknown) => err instanceof ToolRefused && err.message
 // (R108): drawn as Passa would, with the site's rules, address and title.
 async function folderToSend(folder: string, cards: { rules: Rule[]; siteUrl: string; siteTitle: string } | undefined): Promise<{ files: FileToSend[]; cards: number }> {
   const files: FileToSend[] = walk(folder).filter((p) => !p.startsWith('_passa/')).map((path) => ({ path, content: readFileSync(join(folder, path)) }));
-  if (!cards || !cards.rules.some((r) => r.tier === 'public')) return { files, cards: 0 };
+  if (!cards || !cards.rules.some((r) => r.access !== 'private' && r.access.includes('public'))) return { files, cards: 0 };
   const build = buildSite(folder, { rules: cards.rules, siteUrl: cards.siteUrl, siteTitle: cards.siteTitle });
   const drawn = new Map<string, Uint8Array>();
   for (const card of build.cards) {
@@ -169,35 +170,104 @@ export async function rollback(target: Target, version: string | undefined, opti
 export const deleteSite = (target: Target, now: boolean, options: CallOptions = {}) =>
   callTool<Record<string, unknown>>(target.server, 'delete', { site_id: target.siteId, now }, options);
 
+// When a grant begins and ends (M6 R158), from --from, --expires and --for. A
+// date alone begins at the start of that day and ends at its end (UTC); --for
+// (30d, 12w, 6m, 1y) counts from the start, or from now.
+export type GrantDates = { from?: string; expires?: string; for?: string };
+export function grantDates(dates: GrantDates, now = new Date()): { starts_at?: string; expires_at?: string } {
+  if (dates.expires && dates.for) throw new Error('Choose one: --expires <date> or --for <duration>.');
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  const startsAt = dates.from && day.test(dates.from) ? `${dates.from}T00:00:00Z` : dates.from;
+  let expiresAt = dates.expires && day.test(dates.expires) ? `${dates.expires}T23:59:59Z` : dates.expires;
+  if (dates.for) {
+    const m = /^(\d{1,4})([dwmy])$/.exec(dates.for);
+    if (!m) throw new Error(`--for takes a number and d, w, m or y, such as 30d or 1y, not ${dates.for}`);
+    const n = Number(m[1]);
+    const end = new Date(startsAt ? Date.parse(startsAt) : now.getTime());
+    if (Number.isNaN(end.getTime())) throw new Error(`--from takes a date such as 2026-12-01, not ${dates.from}`);
+    if (m[2] === 'd' || m[2] === 'w') end.setUTCDate(end.getUTCDate() + n * (m[2] === 'w' ? 7 : 1));
+    else end.setUTCMonth(end.getUTCMonth() + n * (m[2] === 'y' ? 12 : 1));
+    expiresAt = end.toISOString();
+  }
+  return { ...(startsAt ? { starts_at: startsAt } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}) };
+}
+
 // M5 R129: the person checks the email before anything is shared, as an agent
-// reads it back. A date alone expires at the end of that day (UTC).
-export async function share(target: Target, email: string, options: CallOptions & { ask: Ask; path?: string; expires?: string }) {
+// reads it back.
+export async function share(target: Target, email: string, options: CallOptions & GrantDates & { ask: Ask; path?: string }) {
   const address = email.trim().toLowerCase();
-  const expiresAt = options.expires && /^\d{4}-\d{2}-\d{2}$/.test(options.expires) ? `${options.expires}T23:59:59Z` : options.expires;
+  const dates = grantDates(options);
   const what = options.path && options.path !== '/' ? `${options.path} on ${target.siteId}` : target.siteId;
   const question = `Share ${what} with ${address}? They'll get an email inviting them to sign in with that address and open it.`;
   if (!(await options.ask(question))) throw new Error('Nothing was shared.');
   return callTool<Record<string, unknown>>(target.server, 'share', {
-    site_id: target.siteId, email: address, confirm_share: true, ...(options.path ? { path: options.path } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}),
+    site_id: target.siteId, email: address, confirm_share: true, ...(options.path ? { path: options.path } : {}), ...dates,
   }, options);
 }
 
 export const unshare = (target: Target, email: string, options: CallOptions & { path?: string } = {}) =>
   callTool<Record<string, unknown>>(target.server, 'unshare', { site_id: target.siteId, email: email.trim().toLowerCase(), ...(options.path ? { path: options.path } : {}) }, options);
 
-export type Share = { email: string; path: string; shared_at: string; expires_at?: string; invited_at?: string; opens_nothing?: boolean };
-export const listAccess = (target: Target, options: CallOptions = {}) =>
-  callTool<{ url: string; access: string; rules: Rule[]; shares: Share[]; note?: string }>(target.server, 'list_access', { site_id: target.siteId }, options);
+type Dates = { starts_at?: string; expires_at?: string; invited_at?: string; last_used: string };
+export type Share = { email: string; path: string; shared_at: string; opens_nothing?: boolean } & Dates;
+export type PathAccess = { path: string; url: string; why: string };
+export const listAccess = (target: Target, options: CallOptions & { as?: string } = {}) =>
+  callTool<{ url: string; access: string; rules: Rule[]; tiers: string[]; shares: Share[]; note?: string; as?: { email: string; opens: PathAccess[]; closed: PathAccess[] } }>(
+    target.server, 'list_access', { site_id: target.siteId, ...(options.as ? { email: options.as.trim().toLowerCase() } : {}) }, options);
+
+// M6 R153: as sharing, the person checks the email first.
+export async function addMember(target: Target, email: string, tier: string, options: CallOptions & GrantDates & { ask: Ask }) {
+  const address = email.trim().toLowerCase();
+  const dates = grantDates(options);
+  const question = `Add ${address} to ${tier} on ${target.siteId}? They'll get an email inviting them to sign in with that address.`;
+  if (!(await options.ask(question))) throw new Error('Nobody was added.');
+  return callTool<Record<string, unknown> & { member: Member }>(target.server, 'add_member', { site_id: target.siteId, email: address, tier, confirm_member: true, ...dates }, options);
+}
+
+export const removeMember = (target: Target, email: string, options: CallOptions & { tier?: string } = {}) =>
+  callTool<{ email: string; tier?: string; removed: number }>(target.server, 'remove_member', { site_id: target.siteId, email: email.trim().toLowerCase(), ...(options.tier ? { tier: options.tier } : {}) }, options);
+
+export type Member = { email: string; tier: string; added_at: string } & Dates;
+// Every page of a site's members (or one tier's).
+export async function listMembers(target: Target, options: CallOptions & { tier?: string } = {}) {
+  const members: Member[] = [];
+  let cursor: string | undefined;
+  let tiers: string[];
+  do {
+    const page = await callTool<{ tiers: string[]; members: Member[]; next_cursor?: string }>(target.server, 'list_members', {
+      site_id: target.siteId, ...(options.tier ? { tier: options.tier } : {}), ...(cursor ? { cursor } : {}),
+    }, options);
+    members.push(...page.members);
+    tiers = page.tiers;
+    cursor = page.next_cursor;
+  } while (cursor);
+  return { tiers, members };
+}
+
+export type OwnerShare = Share & { site_id: string; url: string };
+// Every share across the caller's sites, soonest end first (M6 R165).
+export async function listShares(server: string, options: CallOptions & { siteId?: string; endingWithinDays?: number } = {}) {
+  const shares: OwnerShare[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await callTool<{ shares: OwnerShare[]; next_cursor?: string }>(server, 'list_shares', {
+      ...(options.siteId ? { site_id: options.siteId } : {}), ...(options.endingWithinDays ? { ending_within_days: options.endingWithinDays } : {}), ...(cursor ? { cursor } : {}),
+    }, options);
+    shares.push(...page.shares);
+    cursor = page.next_cursor;
+  } while (cursor);
+  return shares;
+}
 
 // --rule /docs/=public, --public, --shared, --private: the rules they mean.
-export function parseRules(values: { public?: boolean; shared?: boolean; private?: boolean; rule?: string[] }): Rule[] | undefined {
-  if (values.public) return [{ path: '/', tier: 'public' }];
-  if (values.shared) return [{ path: '/', tier: 'shared' }];
+export function parseRules(values: { public?: boolean; private?: boolean; rule?: string[] }): Rule[] | undefined {
+  if (values.public) return [{ path: '/', access: ['public'] }];
   if (values.private) return [];
   if (!values.rule?.length) return undefined;
   return values.rule.map((r) => {
     const at = r.lastIndexOf('=');
-    if (at < 1) throw new Error(`--rule takes <path>=<tier>, such as /docs/=public, not ${r}`);
-    return { path: r.slice(0, at), tier: r.slice(at + 1) };
+    if (at < 1) throw new Error(`--rule takes <path>=<access>, such as /docs/=public, /lessons/=gold,silver or /drafts/=private, not ${r}`);
+    const access = r.slice(at + 1);
+    return { path: r.slice(0, at), access: access === 'private' ? 'private' : access.split(',').map((a) => a.trim()).filter(Boolean) };
   });
 }

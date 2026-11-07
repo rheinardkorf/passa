@@ -81,13 +81,15 @@ function frontMatter(content: string): Record<string, unknown> {
   }
 }
 
-// The rules file Passa writes on every publish: a list of { path, tier }.
+// The rules file Passa writes on every publish: a list of { path, access }.
 export function readRules(content: string): Rule[] {
   const parsed: unknown = parseYaml(content);
-  if (!Array.isArray(parsed) || !parsed.every((r) => r && typeof r === 'object' && typeof r.path === 'string' && typeof r.tier === 'string')) {
-    throw new Error(`${RULES_FILE} must be a list of { path, tier }`);
+  const valid = (r: unknown): r is Rule => !!r && typeof r === 'object' && typeof (r as Rule).path === 'string'
+    && ((r as Rule).access === 'private' || (Array.isArray((r as Rule).access) && ((r as Rule).access as unknown[]).every((a) => typeof a === 'string')));
+  if (!Array.isArray(parsed) || !parsed.every(valid)) {
+    throw new Error(`${RULES_FILE} must be a list of { path, access }. Pull the site again for a current copy.`);
   }
-  return parsed.map((r: Rule) => ({ path: r.path, tier: r.tier }));
+  return parsed.map((r) => ({ path: r.path, access: r.access }));
 }
 
 // Site paths a page or stylesheet refers to: href, src, srcset, poster and
@@ -114,14 +116,16 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
 
   // How access is decided (R93): the rules file wins; without one, only pages
   // marked access: public are built; --include-private builds everything.
-  const hasRules = existsSync(join(root, RULES_FILE));
+  // A site whose _site.yml declares access has its rules from its files (M6
+  // R150), which render works out; the rules file is then only a copy.
+  const hasRules = existsSync(join(root, RULES_FILE)) || 'access' in siteYml;
   const access: Build['access'] = options.includePrivate ? 'everything' : hasRules || options.rules ? 'rules' : 'front-matter';
-  let rules: Rule[] = [{ path: '/', tier: 'public' }];
+  let rules: Rule[] = [{ path: '/', access: ['public'] }];
   let skippedPages: string[] = [];
   // A page whose front matter can't be read can't say it's public, so it's
   // left out: said as a problem, not hidden among the pages that aren't public.
   const unreadable: Problem[] = [];
-  if (access === 'rules') rules = options.rules ?? readRules(read(RULES_FILE));
+  if (access === 'rules') rules = options.rules ?? ('access' in siteYml ? [] : readRules(read(RULES_FILE)));
   if (access === 'front-matter') {
     skippedPages = sources.filter((s) => {
       if (!markdown(s)) return false;

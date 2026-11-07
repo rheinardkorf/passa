@@ -62,9 +62,13 @@ There's no default server: you always name the deployment you sign in to.
 | `passa publish <folder> --title <title>` | Publishes a folder as a new private site, and links the folder to it |
 | `passa sync [folder]` | Makes the folder's site exactly the folder; asks before removing files |
 | `passa pull <site> [folder]` | Writes a site's sources into a folder, linked to the site |
-| `passa access <site>` | Shows who can open what, and who it's shared with; change it with `--public`, `--shared`, `--private` or `--rule /docs/=public` |
-| `passa share <site> <email>` | Shares the site, or with `--path /proposals/acme/` one folder, with an email, and sends them an invite; `--expires 2026-12-31` ends it then. See [[Sharing]] |
+| `passa access <site>` | Shows who can open what, and who it's shared with; change it with `--public`, `--private` or `--rule <path>=<access>`, such as `--rule /docs/=public` or `--rule /lessons/=gold,silver`; `--as <email>` shows what one person opens and why |
+| `passa share <site> <email>` | Shares the site, or with `--path /proposals/acme/` one folder, with an email, and sends them an invite. It ends after 90 days, or `--expires 2026-12-31` or `--for 30d` (a year at most); `--from 2026-12-01` begins it later. See [[Sharing]] |
 | `passa unshare <site> <email>` | Stops sharing with an email, from their next request; `--path` for one folder |
+| `passa shares` | Every share across your sites, soonest end first, with when each was last used; `--ending 30d`, `--site <site>` |
+| `passa members add <site> <email> <tier>` | Adds an email to a tier, such as `gold`, and sends them an invite; `--from`, `--expires` and `--for` as for `share`, and without an end it lasts until removed |
+| `passa members remove <site> <email>` | Removes them from every tier, or `--tier gold` from one, from their next request |
+| `passa members list <site>` | The site's members, their tiers, dates and when they last used it; `--tier gold` for one tier |
 | `passa name <site> <name>` | Gives a site a name; `--none` removes it |
 | `passa rollback <site> [version]` | Restores a version; by default, the one before the current one |
 | `passa delete <site> [--now]` | Deletes a site, after a grace period or at once |

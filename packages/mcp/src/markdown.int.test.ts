@@ -6,7 +6,7 @@ import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-s
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { DEFAULT_CARD_FONTS, drawCard, render } from '@passa/render';
-import { newSiteId, newVersionId } from '@passa/shared';
+import { newSiteId, newVersionId, type Rule } from '@passa/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Publisher } from './publisher.ts';
 import { createServer } from './server.ts';
@@ -34,7 +34,7 @@ type Folder = Record<string, string>;
 type Listed = { path: string; sha256: string; role?: string; rendered_from?: string };
 const filesOf = (folder: Folder) => Object.entries(folder).map(([path, content]) => ({ path, content }));
 const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
-const PUBLIC = [{ path: '/', tier: 'public' as const }];
+const PUBLIC: Rule[] = [{ path: '/', access: ['public'] }];
 
 const site: Folder = {
   'index.md': '---\ntitle: Home\n---\n# Welcome\n\nSee [[Plan]] and [about](about.html).',
@@ -145,7 +145,7 @@ describe('publishing a Markdown site (M3 R67, R70, R86, R88)', () => {
 });
 
 describe('access (M3 R82, R88, R89)', () => {
-  const rules = [...PUBLIC, { path: '/notes/', tier: 'private' }];
+  const rules = [...PUBLIC, { path: '/notes/', access: 'private' }];
   const mixed: Folder = {
     'index.md': '# Home',
     'post.md': '---\ntitle: Post\ndate: 2026-10-02\ntags: [open]\n---\nSee [[Secret plan|my notes]].',
@@ -162,7 +162,7 @@ describe('access (M3 R82, R88, R89)', () => {
     }
     // The author's own link is kept, as an HTML link would be.
     expect(await read(r.site_id, r.current_version, 'post/index.html')).toContain('href="/notes/secret/"');
-    expect(await read(r.site_id, r.current_version, '_passa/access.yml')).toContain('- { path: "/notes/", tier: "private" }');
+    expect(await read(r.site_id, r.current_version, '_passa/access.yml')).toContain('- { path: "/notes/", access: "private" }');
   });
 
   it('refuses a page marked access: private that the rules make public, until confirmed', async () => {
@@ -176,10 +176,60 @@ describe('access (M3 R82, R88, R89)', () => {
   });
 
   it('ignores a rules file sent with the site: only set_access changes access', async () => {
-    const r = (await call('publish', { title: 'Sent rules', files: [...filesOf({ 'index.md': '# Home' }), { path: '_passa/access.yml', content: '- { path: /, tier: public }\n' }] })).json();
+    const r = (await call('publish', { title: 'Sent rules', files: [...filesOf({ 'index.md': '# Home' }), { path: '_passa/access.yml', content: '- { path: /, access: [public] }\n' }] })).json();
     expect(r.skipped).toEqual(['_passa/access.yml']);
     expect(r.access).toBe('private');
     expect(await read(r.site_id, r.current_version, '_passa/access.yml')).toContain('[]');
+  });
+});
+
+describe('access from the site\'s files (M6 R150, R151)', () => {
+  const course = (access: string) => filesOf({
+    '_site.yml': `title: Course\ntiers: [gold, silver]\naccess:\n${access}`,
+    'index.md': '# Home',
+    'lessons/week-1.md': '# Week one',
+    'lessons/quiz.md': '---\naccess: [silver]\n---\n# Quiz',
+  });
+
+  it('takes the site\'s rules from _site.yml and front matter, confirming anything public', async () => {
+    const refused = await call('publish', { title: 'Course', files: course('  /: [public]\n  /lessons/: [gold, silver]\n') });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('This would make / public');
+    const site = (await call('publish', { title: 'Course', files: course('  /: [public]\n  /lessons/: [gold, silver]\n'), confirm_public: true })).json();
+    expect(site.rules).toEqual([{ path: '/', access: ['public'] }, { path: '/lessons/', access: ['gold', 'silver'] }, { path: '/lessons/quiz/', access: ['silver'] }]);
+    expect(site).toMatchObject({ access: 'mixed', made_public: ['/'], made_members: ['/lessons/', '/lessons/quiz/'] });
+    expect(await read(site.site_id, site.current_version, '_passa/access.yml')).toContain('- { path: "/lessons/quiz/", access: ["silver"] }');
+    expect((await env.store.getSite(String(site.site_id)))?.accessFromFiles).toBe(true);
+  });
+
+  it('refuses set_access and passed rules on such a site, and keeps the rules when the files stop declaring them', async () => {
+    const site = (await call('publish', { title: 'Course', files: course('  /lessons/: [gold]\n') })).json();
+    expect((await call('set_access', { site_id: site.site_id, rules: [] })).text).toContain('access comes from its files');
+    expect((await call('update', { site_id: site.site_id, files: filesOf({ 'more.md': '# More' }), rules: [] })).text).toContain('rules can\'t be passed as well');
+    // Tiers change in the file, and the rules with them.
+    const changed = (await call('update', { site_id: site.site_id, files: filesOf({ '_site.yml': 'title: Course\ntiers: [gold, silver]\naccess:\n  /lessons/: [silver]\n' }) })).json();
+    expect(changed.rules).toEqual([{ path: '/lessons/', access: ['silver'] }]);
+    // No access in _site.yml any more: the rules stay as they were, and set_access works again.
+    const stopped = (await call('update', { site_id: site.site_id, files: filesOf({ '_site.yml': 'title: Course\n' }) })).json();
+    expect(stopped.rules).toEqual([{ path: '/lessons/', access: ['silver'] }]);
+    expect((await env.store.getSite(String(site.site_id)))?.accessFromFiles).toBe(false);
+    expect((await call('set_access', { site_id: site.site_id, rules: [] })).isError).toBe(false);
+  });
+
+  it('refuses a share needing a rule the files don\'t have, saying what to add', async () => {
+    const shared = createServer({ ...env, mailer: { kind: 'memory', send: async () => undefined } }, { userId: 'alice' }, () => undefined);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([shared.connect(b), client.connect(a)]);
+    const site = (await call('publish', { title: 'Course', files: course('  /lessons/: [gold]\n') })).json();
+    const share = async (path: string) => ((await client.callTool({ name: 'share', arguments: { site_id: site.site_id, email: 'reviewer@example.com', path, confirm_share: true } })).content as { text: string }[])[0]?.text ?? '';
+    expect(await share('/lessons/week-1/')).toContain('has no rule of its own for the share to open. Add one there with the access it has now ([gold])');
+    expect(JSON.parse(await share('/lessons/')).share.path).toBe('/lessons/');
+  });
+
+  it('refuses tiers the site doesn\'t name', async () => {
+    const r = await call('publish', { title: 'Bad tier', files: course('  /lessons/: [platinum]\n') });
+    expect(r.text).toContain('platinum isn\'t a tier this site names');
   });
 });
 
@@ -233,7 +283,7 @@ describe('changes that re-render (M3 R71, R84, R85)', () => {
     expect(await read(r.site_id, r.current_version, 'index.html')).toContain('Secret plan');
     expect(await read(r.site_id, r.current_version, 'tags/hush/index.html')).toBeDefined();
 
-    const changed = (await call('set_access', { site_id: r.site_id, rules: [...PUBLIC, { path: '/notes/', tier: 'private' }] })).json();
+    const changed = (await call('set_access', { site_id: r.site_id, rules: [...PUBLIC, { path: '/notes/', access: 'private' }] })).json();
     expect(changed).toMatchObject({ made_private: ['/notes/'], access: 'mixed' });
     expect(changed.current_version).not.toBe(r.current_version);
     expect(changed.version_id).toBe(changed.current_version);
@@ -263,7 +313,7 @@ describe('changes that re-render (M3 R71, R84, R85)', () => {
   it('rolls back by rendering the old sources with the current rules', async () => {
     const r = (await call('publish', { title: 'Rollback', files: filesOf(blog), rules: PUBLIC, confirm_public: true })).json();
     const first = r.current_version;
-    await call('set_access', { site_id: r.site_id, rules: [...PUBLIC, { path: '/notes/', tier: 'private' }] });
+    await call('set_access', { site_id: r.site_id, rules: [...PUBLIC, { path: '/notes/', access: 'private' }] });
     const back = (await call('rollback', { site_id: r.site_id, version_id: first })).json();
     expect(back.restored_from).toBe(first);
     expect(back.current_version).not.toBe(first);
@@ -273,7 +323,7 @@ describe('changes that re-render (M3 R71, R84, R85)', () => {
   it('refuses a rollback that would make a page marked private public, until confirmed', async () => {
     const r = (await call('publish', {
       title: 'Marked', files: filesOf({ 'diary.md': '---\naccess: private\n---\nDear diary', 'index.md': '# Home' }),
-      rules: [...PUBLIC, { path: '/diary/', tier: 'private' }], confirm_public: true,
+      rules: [...PUBLIC, { path: '/diary/', access: 'private' }], confirm_public: true,
     })).json();
     const first = r.current_version;
     // Removing the page, then opening the folder: rolling back would publish it.

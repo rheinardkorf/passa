@@ -213,7 +213,7 @@ export class ServicesStack extends Stack {
     new AaaaRecord(this, 'McpAaaa', { zone, recordName: 'mcp', target: mcpTarget });
 
     // Hard deletes, expired held names and expired shares (M5 R133): the table
-    // stream, filtered to TTL removals of PURGE, NAME and GRANT items.
+    // stream, filtered to TTL removals of PURGE, NAME, GRANT and MEMBER items.
     const purge = nodeFunction(this, 'PurgeFunction', {
       entry: 'packages/mcp/src/purge.ts',
       environment,
@@ -244,6 +244,10 @@ export class ServicesStack extends Stack {
         eventName: FilterRule.isEqual('REMOVE'),
         userIdentity: { principalId: FilterRule.isEqual('dynamodb.amazonaws.com') },
         dynamodb: { OldImage: { sk: { S: FilterRule.beginsWith('GRANT#') } } },
+      }), FilterCriteria.filter({
+        eventName: FilterRule.isEqual('REMOVE'),
+        userIdentity: { principalId: FilterRule.isEqual('dynamodb.amazonaws.com') },
+        dynamodb: { OldImage: { sk: { S: FilterRule.beginsWith('MEMBER#') } } },
       })],
     }));
 
