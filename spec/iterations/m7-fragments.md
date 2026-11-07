@@ -13,7 +13,7 @@ A **fragment** is a piece of a Markdown site that pages load after they arrive, 
 
 A ```` ```login ```` block puts a sign-in link on a page. Once the viewer is signed in to the site, it shows who they are, or nothing, as the author chooses.
 
-Fragments only display. They don't send anything back (no forms, no posts); that belongs to the later site APIs, which this prepares for.
+Fragments only display. They don't send anything back (no forms, no posts); that belongs to site APIs, starting with forms in M8, which this prepares for.
 
 ## Terms
 
@@ -59,7 +59,7 @@ On dev: a public home page embedding a family fragment. A stranger in a private 
 
 **Out:**
 
-- Sending data (forms, `hx-post`, polls): later, with site APIs. `form-action 'none'` stays.
+- Sending data (forms, `hx-post`, polls): M8 and later site APIs. `form-action 'none'` stays.
 - Fragments in plain HTML sites; HTML files as fragments.
 - Cross-site anything: embedding another site's fragments, or tiers that span sites. A card linking to another site is just a link.
 - The apex domain for a home site (a custom-domain question, solved separately).
@@ -118,7 +118,7 @@ On dev: a public home page embedding a family fragment. A stranger in a private 
 1. **A fragment is a page with a path,** so the rules, the edge and caching need nothing new for access: where it's embedded doesn't matter.
 2. **Refusals are quiet for HTMX,** with no sign-in redirect and no cached answer; a stranger never gets bounced to sign-in by a fragment.
 3. **Expired cookies refresh through `auth.`,** with a full-page round trip (about once an hour for an open page), because a fragment's request can't follow a redirect to another origin.
-4. **Display only.** Anything that sends data waits for site APIs.
+4. **Display only.** Anything that sends data waits for site APIs (forms in M8).
 5. **Same-site cards, plain links.** Tiers stay per site (M6); a card is a link, and following it may need another sign-in.
 6. **Sign-in is a block the author places,** not something themes add on their own. The link is in the HTML; whether to swap it out is the edge's answer to the viewer, so pages stay cacheable and the same for everyone.
 
