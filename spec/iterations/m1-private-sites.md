@@ -92,7 +92,7 @@ Publish a page from claude.ai, open the returned link, sign in with a magic link
 - **Cookies** are host-only, `HttpOnly`, `Secure` and `SameSite=Lax`.
 - **Errors** are generic: no stack traces, and nothing that reveals whether an email or site exists.
 - **Logs** never contain tokens. Emails in application logs are masked. The edge never logs personal data.
-- **Rate limits:** AWS WAF on `auth.` (sign-in and OAuth endpoints), and API Gateway throttling on `mcp.`. *Amended 2026-11-07:* WAF is optional and off unless `waf: true` (per stage or for all), since it costs about US$9 a month per stage whatever the traffic, and the self-hosted target (M6) has none. Passa enforces the limits that matter itself either way: sign-in emails per email and per IP (R20), and client registrations per IP (`rateLimits.registerPerIp`).
+- **Rate limits:** AWS WAF on `auth.` (sign-in and OAuth endpoints), and API Gateway throttling on `mcp.`. *Amended 2026-11-07:* WAF is optional and off unless `waf: true` (per stage or for all), since it costs about US$9 a month per stage whatever the traffic, and the self-hosted target (M7) has none. Passa enforces the limits that matter itself either way: sign-in emails per email and per IP (R20), and client registrations per IP (`rateLimits.registerPerIp`).
 - **No hardcoded secrets or environment branching.** Lifetimes, limits and flags are config values.
 - **Data access** goes through one module using key-condition queries only. Scans are only for standalone maintenance jobs.
 
