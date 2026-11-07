@@ -188,7 +188,9 @@ export function createAuthApp(deps: AuthDeps): express.Express {
     const target = parseTarget(req.query.site, req.query.path);
     if (!target) return html(res, errorPage(400), 400);
     const current = await sessionOf(res);
-    res.redirect(302, await signin.siteRefresh(current?.user, target, ipOf(req)));
+    const location = await signin.siteRefresh(current?.user, target, ipOf(req));
+    if (!location) return html(res, errorPage(404), 404);
+    res.redirect(302, location);
   });
 
   app.post('/signin', form, checkPost, async (req, res) => {

@@ -255,6 +255,9 @@ describe('signing in to view a site', () => {
     // No such site: its address, where the edge treats it as private.
     const missing = newSiteId();
     expect((await new Browser().request(`/site/refresh?site=${missing}&path=%2F`)).location).toBe(`https://${missing}.example.com/`);
+    expect((await new Browser().request('/site/refresh?site=never-named&path=%2F')).location).toBe('https://never-named.example.com/');
+    // Never to a domain no site has: that would be an open redirect.
+    expect((await new Browser().request('/site/refresh?site=evil.example&path=%2F')).status).toBe(404);
     expect((await new Browser().request('/site/refresh?site=Nope&path=%2F')).status).toBe(400);
   });
 
