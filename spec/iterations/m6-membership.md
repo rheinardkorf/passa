@@ -88,7 +88,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Start and end dates
 
-- **R158** Every grant, membership or share, may have a start (`starts_at`, `--from`) and an end (`expires_at`, `--expires`, or `--for` a duration turned into a date when added). Before its start and after its end a grant opens nothing: sign-in and cookie refresh check both, and an ended grant is removed (DynamoDB TTL), bumping the access version, as shares' expiry does now. An end is at most a year after the grant is made (or after its start).
+- **R158** Every grant, membership or share, may have a start (`starts_at`, `--from`) and an end (`expires_at`, `--expires`, or `--for` a duration turned into a date when added). Before its start and after its end a grant opens nothing: sign-in and cookie refresh check both, and an ended grant is removed (DynamoDB TTL), bumping the access version, as shares' expiry does now. Without an end, a grant lasts until it's removed (a lifetime membership, say). An end can be any time in the future, after the start if there is one; one in the past, or not after the start, is refused as almost certainly a mistake. This lifts M5's one-year limit on a share's expiry (R133).
 
 ### Seeing who has access
 
@@ -150,7 +150,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 | --- | --- |
 | Rules per site | 20 (edge budget ~850 bytes) |
 | Tier names | 1–30 lowercase letters, digits, hyphens; `public`, `private`, `shared` reserved |
-| Grant end | at most a year after the grant (or its start) |
+| Grant end | optional (none: until removed); any future time after the start |
 | Invites | count against `rateLimits.invitesPerDay`; at most hourly per email and tier or path |
 | Member list page | 100 |
 
