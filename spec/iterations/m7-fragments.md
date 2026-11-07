@@ -66,7 +66,7 @@ On dev: a public home page embedding a family fragment. A stranger in a private 
 
 ## Requirements
 
-### M7: Fragments and sign-in
+### Fragments
 
 - **R168** A Markdown page whose front matter says `fragment: true` is a fragment. It renders to its pretty URL (`family/cards.md` → `/family/cards/`) as its content inside a wrapper (`<div class="passa-fragment">…</div>`), with no layout, `<html>`, navigation or theme assets. It can use everything a page's content can: widgets, wikilinks, callouts.
 - **R169** A fragment's access is its path's, decided by the site's rules like any page; its front matter `access` makes a rule for it when it differs from its folder (M6 R150). Where it's embedded doesn't change who opens it.
