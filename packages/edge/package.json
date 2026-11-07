@@ -18,9 +18,12 @@
     "@aws-sdk/lib-dynamodb": "3.1155.0",
     "@passa/auth": "workspace:*",
     "@passa/mcp": "workspace:*",
-    "@passa/shared": "workspace:*"
+    "@passa/shared": "workspace:*",
+    "esbuild": "0.28.2",
+    "htmx.org": "4.0.0"
   },
   "devDependencies": {
+    "@passa/render": "workspace:*",
     "playwright-core": "1.64.1"
   }
 }

@@ -27,7 +27,11 @@ function viewerResponse(event, options) {
   const suffix = '.' + options.sites;
   const label = host.endsWith(suffix) ? host.slice(0, -suffix.length) : '';
   const custom = !label && host !== options.sites && host.indexOf('.') > 0;
-  if (!custom && (!label || SITE_ID.test(label))) response.headers['x-robots-tag'] = { value: 'noindex' };
+  // A fragment is never indexed, wherever it's served (M7 R170).
+  // Passa stores fragments with this metadata (shared/storage.ts, FRAGMENT_MARK).
+  const fragment = response.headers['x-amz-meta-passa-fragment'];
+  delete response.headers['x-amz-meta-passa-fragment'];
+  if (fragment || (!custom && (!label || SITE_ID.test(label)))) response.headers['x-robots-tag'] = { value: 'noindex' };
   const tier = event.request.headers[TIER];
   if (tier && tier.value === 'public') {
     response.headers['cross-origin-resource-policy'] = { value: 'cross-origin' };

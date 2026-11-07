@@ -166,7 +166,7 @@ type FileAccess = { fileRules?: Rule[]; fileChange?: AccessChange };
 const FROM_FILES = 'This site\'s access comes from its files (access in _site.yml, and pages\' front matter)';
 
 // A file Passa rendered for a version, and whether the base version has it already.
-type RenderedFile = { entry: FileEntry; content: Uint8Array; unchanged: boolean };
+type RenderedFile = { entry: FileEntry; content: Uint8Array; unchanged: boolean; fragment?: boolean };
 
 const isText = (f: FileEntry) => f.contentType.includes('charset=utf-8');
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -320,7 +320,7 @@ export class Publisher {
     };
     // New content, including changed rendered pages, is staged and scanned.
     const written = [...checked.map((f: CheckedFile) => ({ entry: withRole(f), content: f.content })), ...rendered.filter((r) => !r.unchanged)];
-    await inBatches(written, ({ entry, content: body }) => this.#d.files.putVersionFile(siteId, version.id, storedPath(entry), body, entry.contentType));
+    await inBatches(written, (file) => this.#d.files.putVersionFile(siteId, version.id, storedPath(file.entry), file.content, file.entry.contentType, { fragment: 'fragment' in file && file.fragment === true }));
     if (base) {
       const copies = [...kept.map((f) => ({ from: f, to: withRole(f) })), ...rendered.filter((r) => r.unchanged).map((r) => ({ from: r.entry, to: r.entry }))];
       await inBatches(copies, ({ from, to }) => this.#d.files.copyVersionFile(siteId, base.id, version.id, storedPath(from), storedPath(to)), COPY_PARALLEL);
@@ -357,11 +357,12 @@ export class Publisher {
     if (fileRules && changes.rulesGiven) throw new ToolError(`${FROM_FILES}, so rules can't be passed as well. Change _site.yml instead.`);
     const fileChange = fileRules ? this.#checkAccess(rules, fileRules, confirmPublic) : undefined;
     const outputs = [
-      ...result.pages.map((p) => ({ path: p.path, content: encode(p.html), from: p.from })),
+      ...result.pages.map((p) => ({ path: p.path, content: encode(p.html), from: p.from, fragment: p.fragment === true })),
       ...(result.feed ? [{ path: 'feed.xml', content: encode(result.feed), from: null }] : []),
       { path: RULES_FILE, content: encode(rulesFile(fileRules ?? rules)), from: null },
     ];
     const fromOf = new Map(outputs.map((o) => [o.path, o.from]));
+    const fragments = new Set(outputs.filter((o) => 'fragment' in o && o.fragment).map((o) => o.path));
     // Rendered pages pass the same checks as any file.
     const checked = await checkContent(outputs.map(({ path, content }) => ({ path, content })));
     const before = new Map((base?.files ?? []).filter((f) => f.role === 'rendered').map((f) => [f.path, f]));
@@ -369,7 +370,7 @@ export class Publisher {
       rendered: checked.map((f) => {
         const from = fromOf.get(f.path);
         const entry: FileEntry = { path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256, role: 'rendered', ...(from ? { from } : {}) };
-        return { entry, content: f.content, unchanged: before.get(f.path)?.sha256 === f.sha256 };
+        return { entry, content: f.content, unchanged: before.get(f.path)?.sha256 === f.sha256, ...(fragments.has(f.path) ? { fragment: true } : {}) };
       }),
       problems: result.problems.filter((p) => !REFUSING.has(p.kind)).map((p) => p.message),
       cards: { cards: result.cards ?? [], fonts: result.cardFonts ?? [] },

@@ -153,6 +153,8 @@ From the early checks (2026-11-07, all passed in Chromium, WebKit and Firefox):
 - **The edge build minifies** its function code (esbuild, keeping `handler`). M7's edge changes would otherwise leave 239 of CloudFront's 10,240 bytes. Minified, the current code is 4,555 bytes, and gives identical answers in CloudFront's TestFunction. The tests run against the built code too.
 - **`HX-Redirect` is sent on the `204`.** HTMX 4 follows it there in all three engines.
 - **Layouts get `htmx`** (the script's URL, or null), as they get `mermaid`, rather than `hasFragments`.
+- **Refusals' cache header on CloudFront** (found on dev, step 2): the sites' response headers policy overrides `cache-control` with `private, no-cache`, also on the function's `204` (the local proxy shows the function's own `no-store`). Kept: CloudFront never caches a response a viewer-request function generates (`x-cache: FunctionGeneratedResponse`), and `no-cache` makes browsers revalidate, so no stale refusal is ever used. HTMX loses its `immutable` the same way, so browsers revalidate it.
+- **Fragments are stored with a marker** (S3 metadata `passa-fragment`), which the viewer-response function turns into `noindex` and removes.
 - **An embed takes `class`** (2026-11-08, user): class names added to `div.passa-embed`, for themes. Render refuses anything but plain class names. So the class stays when the fragment loads, the swap is `innerHTML`, not `outerHTML`: the fragment's `div.passa-fragment` goes inside the embed, replacing the fallback.
 - **`passa serve`** answers an HTMX request for a page it isn't showing with a `204`, as the edge does, since HTMX 4 swaps a 404 into the page.
 
