@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Approved 2026-11-05 (PR #44) |
+| **Status** | Done 2026-11-07, in production (PRs #45, #50; follow-ups #51–#53); approved 2026-11-05 (PR #44) |
 | **Owner** | Rheinard Korf (product and technical decisions) |
 | **Spec depth** | Full: viewers other than the owner for the first time, a new tier at the edge, cookies that carry tiers, email to people who aren't publishers, and a mail provider chosen in config |
 | **Security-relevant** | Yes: decides who besides the owner can open private pages, sends email on a publisher's behalf, and adds publisher management |
@@ -139,6 +139,6 @@ While SES is in sandbox, the second address must be verified in SES; with the SM
 
 ## Done when
 
-- The demo works in production.
+- The demo works in production. *Closed 2026-11-07 on the dev demo, which the owner accepted in its place: every step ran on dev (sharing by path, the invite, viewer sign-in, unsharing, `passa share` / `access`, `passa admin users`), and the same build is deployed to production.*
 - Every MCP tool, old and new, has a CLI command (R139).
 - Tested: sharing a private path (made `shared`) and a path already shared; two people shared different paths of one site, each refused the other's; `confirm_share` refused and read back; the invite (no title, no token, resend limit); a viewer's sign-in and what they see (shared paths, not private; lists without private titles; no cards on shared pages); unshare and expiry (refused on the next request, others unaffected); the share and invite limits; a viewer can't publish; SES and SMTP sending, and switching between them in config; `passa admin users` add, disable (MCP refused) and the last-admin guard.
