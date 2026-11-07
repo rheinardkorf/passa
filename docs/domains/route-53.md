@@ -48,7 +48,7 @@ If the zone is in a different AWS account, Passa can't reach it: follow [[Domain
 
 ```sh
 AWS_PROFILE=prod AWS_REGION=ap-southeast-2 \
-  passa admin domain add docs.example.com my-docs --new-tenant --stage prod
+  passa admin domain add docs.example.com my-docs --new-tenant
 ```
 
 ```
@@ -69,7 +69,7 @@ There's nothing to add by hand. For the zone's own name (an apex, such as `examp
 ## Remove it
 
 ```sh
-passa admin domain remove docs.example.com --stage prod
+passa admin domain remove docs.example.com
 ```
 
 The site moves to its next address first, then the domain is detached, and Passa deletes the records it wrote. Records you added yourself are left alone.

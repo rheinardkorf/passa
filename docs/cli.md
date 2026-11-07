@@ -88,7 +88,7 @@ So a folder published to one deployment always syncs back to it, whatever else i
 
 ## Admin commands
 
-Admins of a deployment use its AWS credentials rather than a Passa sign-in, and every command takes `--stage`:
+Admins of a deployment use its AWS credentials rather than a Passa sign-in. The first time, `passa admin` asks which AWS profile reaches the deployment you're signed in to (or takes `--profile`), finds the deployment's admin function in that account, and remembers both. After that, admin commands need nothing extra. When the AWS sign-in has expired, it says how to sign in again with that profile. `--profile` chooses the profile again, `--server` picks another deployment, and `--stage` names its admin function directly (for when the CLI can't find it: finding it needs permission to list the account's Lambda functions):
 
 - `passa admin domain add | list | status | remove` manage custom domains. See [[Custom domains]].
 - `passa admin users add | list | disable | enable` manage who can publish. See [[Publishers and admins]].

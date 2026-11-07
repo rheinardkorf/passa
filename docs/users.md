@@ -25,11 +25,11 @@ Running the deployment (custom domains, and who can publish) takes its AWS crede
 ## Managing users
 
 ```sh
-passa admin users list --stage prod
-passa admin users add sam@example.com --stage prod
-passa admin users add alex@example.com --admin --stage prod
-passa admin users disable sam@example.com --stage prod
-passa admin users enable sam@example.com --stage prod
+passa admin users list
+passa admin users add sam@example.com
+passa admin users add alex@example.com --admin
+passa admin users disable sam@example.com
+passa admin users enable sam@example.com
 ```
 
 - **`add`** lets an email publish. With `--admin`, they're an admin too: a bounced email never disables them, and they count towards the last active admin. Someone a site was already shared with keeps their account, and their shares.
@@ -37,12 +37,12 @@ passa admin users enable sam@example.com --stage prod
 - **`enable`** lets them back in.
 - **`list`** shows everyone: admins, publishers and viewers, and whether they're active.
 
-Each change is recorded, with the computer it was made from. Every command takes `--stage` (which deployment), and `--json` for scripts.
+Each change is recorded, with the computer it was made from. The first time, `passa admin` asks which AWS profile reaches the deployment you're signed in to (or takes `--profile`), finds the deployment's admin function in that account, and remembers both. After that, admin commands need nothing extra. When the AWS sign-in has expired, it says how to sign in again with that profile. `--server` picks another deployment, `--stage` names its admin function directly, and `--json` is for scripts.
 
 ## After upgrading
 
 Passa lists users through an index that came with sharing. On a deployment from before then, run this once after upgrading, so `list` shows everyone who signed up earlier:
 
 ```sh
-passa admin users reindex --stage prod
+passa admin users reindex
 ```

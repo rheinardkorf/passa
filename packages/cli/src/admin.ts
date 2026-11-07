@@ -3,6 +3,7 @@
 // passa-<stage>-admin: for domains, repeating a step until the domain is live
 // or gone, showing progress; for users, once. The function decides everything;
 // this only asks and reports.
+import { signInHint } from './admin-link.ts';
 
 export type DnsRecord = { name: string; type: string; value: string; purpose: 'pointer' | 'validation'; alias?: boolean };
 export type DomainReport = {
@@ -28,23 +29,31 @@ export class AdminRefused extends Error {}
 
 export const adminFunctionName = (stage: string) => `passa-${stage}-admin`;
 
-// Invokes the function with the AWS SDK's usual credentials (AWS_PROFILE, SSO,
-// environment). Loaded only for admin commands, so the rest of passa stays light.
-export async function lambdaInvoker(functionName: string, region?: string): Promise<Invoke> {
+// What went wrong reaching AWS, in words an admin can act on: expired
+// credentials get the profile's own sign-in command.
+export function awsRefusal(err: unknown, functionName: string, profile: string | undefined): Error {
+  const name = (err as { name?: string }).name ?? '';
+  const message = String((err as Error).message ?? err);
+  if (name === 'ResourceNotFoundException') return new AdminRefused(`There's no ${functionName} here. Check --stage, and the region (AWS_REGION or --region).`, { cause: err });
+  if (/Credential|Token|Expired|SSO/i.test(name) || /credential|token|expired|sso/i.test(message)) {
+    return new AdminRefused(`Couldn't use your AWS credentials${profile ? ` (profile ${profile})` : ''}: ${message}\n${signInHint(profile)}`, { cause: err });
+  }
+  if (name === 'AccessDeniedException') return new AdminRefused(`Your AWS credentials${profile ? ` (profile ${profile})` : ''} can't reach ${functionName}: only admins can.`, { cause: err });
+  return err instanceof Error ? err : new Error(message);
+}
+
+// Invokes the function with the given AWS profile, or the AWS SDK's usual
+// credentials (AWS_PROFILE, SSO, environment). Loaded only for admin
+// commands, so the rest of passa stays light.
+export async function lambdaInvoker(functionName: string, options: { region?: string; profile?: string } = {}): Promise<Invoke> {
   const { LambdaClient, InvokeCommand } = await import('@aws-sdk/client-lambda');
-  const client = new LambdaClient(region ? { region } : {});
+  const client = new LambdaClient({ ...(options.region ? { region: options.region } : {}), ...(options.profile ? { profile: options.profile } : {}) });
   return async (payload) => {
     let reply;
     try {
       reply = await client.send(new InvokeCommand({ FunctionName: functionName, Payload: new TextEncoder().encode(JSON.stringify(payload)) }));
     } catch (err) {
-      const name = (err as { name?: string }).name ?? '';
-      if (name === 'ResourceNotFoundException') throw new AdminRefused(`There's no ${functionName} here. Check --stage, and the region (AWS_REGION or --region).`, { cause: err });
-      if (/Credential|Token|Expired|SSO/i.test(name) || /credential|token|expired/i.test(String((err as Error).message))) {
-        throw new AdminRefused(`Couldn't use your AWS credentials (${(err as Error).message}). Sign in first, such as aws sso login, or set AWS_PROFILE.`, { cause: err });
-      }
-      if (name === 'AccessDeniedException') throw new AdminRefused(`Your AWS credentials can't invoke ${functionName}: only admins can.`, { cause: err });
-      throw err;
+      throw awsRefusal(err, functionName, options.profile);
     }
     const body = JSON.parse(new TextDecoder().decode(reply.Payload ?? new Uint8Array())) as { ok?: boolean; result?: unknown; refused?: string; errorMessage?: string };
     if (reply.FunctionError) throw new Error(`The admin function failed: ${body.errorMessage ?? 'unknown error'}. Its logs are in CloudWatch.`);
