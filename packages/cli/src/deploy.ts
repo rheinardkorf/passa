@@ -210,8 +210,10 @@ export const unshare = (target: Target, email: string, options: CallOptions & { 
 
 type Dates = { starts_at?: string; expires_at?: string; invited_at?: string; last_used: string };
 export type Share = { email: string; path: string; shared_at: string; opens_nothing?: boolean } & Dates;
-export const listAccess = (target: Target, options: CallOptions = {}) =>
-  callTool<{ url: string; access: string; rules: Rule[]; tiers: string[]; shares: Share[]; note?: string }>(target.server, 'list_access', { site_id: target.siteId }, options);
+export type PathAccess = { path: string; url: string; why: string };
+export const listAccess = (target: Target, options: CallOptions & { as?: string } = {}) =>
+  callTool<{ url: string; access: string; rules: Rule[]; tiers: string[]; shares: Share[]; note?: string; as?: { email: string; opens: PathAccess[]; closed: PathAccess[] } }>(
+    target.server, 'list_access', { site_id: target.siteId, ...(options.as ? { email: options.as.trim().toLowerCase() } : {}) }, options);
 
 // M6 R153: as sharing, the person checks the email first.
 export async function addMember(target: Target, email: string, tier: string, options: CallOptions & GrantDates & { ask: Ask }) {

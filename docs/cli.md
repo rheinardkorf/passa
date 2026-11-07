@@ -62,7 +62,7 @@ There's no default server: you always name the deployment you sign in to.
 | `passa publish <folder> --title <title>` | Publishes a folder as a new private site, and links the folder to it |
 | `passa sync [folder]` | Makes the folder's site exactly the folder; asks before removing files |
 | `passa pull <site> [folder]` | Writes a site's sources into a folder, linked to the site |
-| `passa access <site>` | Shows who can open what, and who it's shared with; change it with `--public`, `--private` or `--rule <path>=<access>`, such as `--rule /docs/=public` or `--rule /lessons/=gold,silver` |
+| `passa access <site>` | Shows who can open what, and who it's shared with; change it with `--public`, `--private` or `--rule <path>=<access>`, such as `--rule /docs/=public` or `--rule /lessons/=gold,silver`; `--as <email>` shows what one person opens and why |
 | `passa share <site> <email>` | Shares the site, or with `--path /proposals/acme/` one folder, with an email, and sends them an invite. It ends after 90 days, or `--expires 2026-12-31` or `--for 30d` (a year at most); `--from 2026-12-01` begins it later. See [[Sharing]] |
 | `passa unshare <site> <email>` | Stops sharing with an email, from their next request; `--path` for one folder |
 | `passa shares` | Every share across your sites, soonest end first, with when each was last used; `--ending 30d`, `--site <site>` |

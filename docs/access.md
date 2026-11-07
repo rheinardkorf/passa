@@ -1,6 +1,6 @@
 ---
 title: Access
-description: Private by default; rules make folders or whole sites public, or share them with people you name.
+description: Private by default; rules make folders or whole sites public, open them to members' tiers, or keep them private.
 access: public
 ---
 
@@ -27,7 +27,7 @@ You always open everything on your own sites. The longest matching rule decides,
 
 makes the whole site public except `/drafts/`. You only write `private` to close a folder inside one that's more open, like `/drafts/` here; anywhere no rule covers is private already. An empty list makes the whole site private again.
 
-Tiers are groups of members, such as `gold` and `silver`. Adding people to them is coming soon.
+Tiers are groups of members, such as `gold` and `silver`: rules name them, and you add people to them. See [[Membership]]. To let one person into one path, share it instead: see [[Sharing]].
 
 Changes take effect within seconds, and everywhere within about a minute.
 
@@ -65,6 +65,15 @@ access: [silver]
 A site whose `_site.yml` doesn't declare `access` keeps the rules set with `set_access` or `passa access`. On those sites, front matter can't make a page public: a page marked `access: private` that a rule would make public is refused until you fix one or the other, or confirm it.
 
 Passa writes the rules into the site as `_passa/access.yml`, a read-only copy. It's there for when the folder is taken out of Passa: `passa render` and `passa serve` use it to build only the public pages.
+
+## Who can open what
+
+```sh
+passa access my-site
+passa access my-site --as sam@example.com
+```
+
+The first lists the rules, the tiers they name, and every share. The second shows what one person opens and why (public, a membership of which tier, or a share of which path), and the restricted paths they don't, including grants that haven't begun yet. Agents use `list_access`, with `email` for the second.
 
 ## Names and search engines
 

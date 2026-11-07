@@ -8,6 +8,8 @@ access: public
 
 A private site is yours alone. Sharing lets named people open parts of it too: each person signs in with the email you shared with, and sees what you shared with them, and nothing else that isn't public.
 
+A share is one person and one path, for a while: a client's proposal, a reviewer looking over a course. For groups of people who stay, such as a course's students, use tiers instead: see [[Membership]].
+
 ## Sharing a path
 
 Ask your agent to share it, or use the `passa` command:

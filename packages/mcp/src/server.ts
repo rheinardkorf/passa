@@ -111,7 +111,10 @@ const schemas = {
     email: z.email().max(254),
     path: z.string().max(MAX_RULE_PATH).optional().describe('One shared path to take away; without it, every path shared with the email'),
   }),
-  list_access: z.strictObject({ site_id: siteId }),
+  list_access: z.strictObject({
+    site_id: siteId,
+    email: email.optional().describe('Also list what this person opens and why (public, a membership of which tier, or a share of which path), and the restricted paths they don\'t'),
+  }),
   add_member: z.strictObject({
     site_id: siteId,
     email: email.describe('The email to add, exactly as the person gave it'),
@@ -216,7 +219,7 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + `Before sharing, read the email back to the person: confirm_share must be true. A site can be shared with ${limits.sharesPerSite} emails, and ${rateLimits.invitesPerDay} invites can be sent a day. `
       + 'A share ends 90 days after it begins unless given expires_at (at most a year ahead); starts_at delays it. Sharing again renews it.',
     unshare: 'Stop sharing a path of a site with an email, or with no path, everything shared with them. Their next request is refused, while everyone else keeps their access. The rules don\'t change.',
-    list_access: 'List who can open a site: its rules, the tiers they name, its public and members\' URLs, and its shares: each email and path, when it was shared, begins and ends, when the invite was sent and when it was last used. list_members lists the members.',
+    list_access: 'List who can open a site: its rules, the tiers they name, its public and members\' URLs, and its shares: each email and path, when it was shared, begins and ends, when the invite was sent and when it was last used. list_members lists the members. With email, it also says what that person opens and why, and what they don\'t.',
     add_member: 'Add someone to a tier of a site by email, such as gold: they can then open every path whose rule lists that tier, after signing in with that email by magic link. '
       + 'A tier needs no setting up: rules name tiers (set_access, or access in a Markdown site\'s _site.yml), and memberships put people in them. Tiers are separate: gold doesn\'t include silver, so a rule lists every tier it opens to. '
       + 'starts_at and expires_at limit when it works; without an end it lasts until removed. Adding again replaces the dates. '
@@ -342,7 +345,7 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
   });
 
   tool('list_access', describe.list_access, { readOnlyHint: true }, schemas.list_access, async (i) => ({
-    result: await publisher.listAccess(caller, { siteId: i.site_id }),
+    result: await publisher.listAccess(caller, { siteId: i.site_id, ...(i.email ? { email: i.email } : {}) }),
   }));
 
   tool('add_member', describe.add_member, { openWorldHint: true }, schemas.add_member, async (i) => {

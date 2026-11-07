@@ -35,6 +35,7 @@ import {
   isPublicAccess,
   TooManyShares,
   BadCursor,
+  grantIsLive,
   isTierName,
   type Membership,
   tiersOf,
@@ -134,6 +135,9 @@ const datesOf = (g: Grant | Membership): GrantDates => ({
 // A share as list_access shows it (M5 R132).
 export type Share = { email: string; path: string; shared_at: string } & GrantDates;
 const shareOf = (g: Grant): Share => ({ email: g.email, path: g.path, shared_at: g.createdAt, ...datesOf(g) });
+
+// A path one email can or can't open, and why (M6 R159).
+export type PathAccess = { path: string; url: string; why: string };
 
 // A membership as list_members shows it (M6 R155).
 export type Member = { email: string; tier: string; added_at: string } & GrantDates;
@@ -1054,7 +1058,7 @@ export class Publisher {
 
   // The site's rules and who it's shared with (M5 R132). Expired shares
   // DynamoDB hasn't removed yet are left out: they no longer open anything.
-  async listAccess(caller: Caller, input: { siteId: string }) {
+  async listAccess(caller: Caller, input: { siteId: string; email?: string }) {
     const site = await this.#ownSite(caller, input.siteId);
     const now = this.#now();
     const rules = site.rules ?? [];
@@ -1072,7 +1076,42 @@ export class Publisher {
       member_urls: members.map((p) => this.#url(site) + p.slice(1)),
       shares: grants.map((g) => ({ ...shareOf(g), ...(opensNothing.includes(g) ? { opens_nothing: true } : {}) })),
       ...(opensNothing.length ? { note: 'Shares marked opens_nothing have no rule at their path any more, so they open nothing until one is set again.' } : {}),
+      ...(input.email ? { as: await this.#accessAs(site, input.email.trim().toLowerCase()) } : {}),
     };
+  }
+
+  // What one email opens on a site and why, and the restricted paths it
+  // doesn't (M6 R159): each rule's path, and / when no rule covers it.
+  async #accessAs(site: Site, email: string): Promise<{ email: string; opens: PathAccess[]; closed: PathAccess[] }> {
+    const owner = await this.#d.store.getUser(site.ownerId);
+    const rules = site.rules ?? [];
+    const paths = [...(rules.some((r) => r.path === '/') ? [] : [{ path: '/', access: 'private' as const, ruleless: true }]), ...rules].sort((a, b) => a.path.localeCompare(b.path));
+    const url = (path: string) => this.#url(site) + path.slice(1);
+    if (email === owner?.email) return { email, opens: paths.map((r) => ({ path: r.path, url: url(r.path), why: 'owner: opens everything' })), closed: [] };
+    const now = this.#now();
+    const [shares, memberships] = await Promise.all([this.#d.store.grantsFor(site.id, email), this.#d.store.membershipsFor(site.id, email)]);
+    const ended = (g: { expiresAt?: string }) => !!g.expiresAt && g.expiresAt <= now.toISOString();
+    const opens: PathAccess[] = [];
+    const closed: PathAccess[] = [];
+    for (const r of paths) {
+      const at = { path: r.path, url: url(r.path) };
+      if (isPublicAccess(r.access)) {
+        opens.push({ ...at, why: 'public' });
+        continue;
+      }
+      const tiers = memberships.filter((m) => !ended(m) && r.access !== 'private' && r.access.includes(m.tier));
+      const share = shares.find((g) => !ended(g) && g.path === r.path);
+      const live = [...tiers.filter((m) => grantIsLive(m, now)).map((m) => `member of ${m.tier}`), ...(share && grantIsLive(share, now) ? [`shared ${share.path}`] : [])];
+      if (live.length) {
+        opens.push({ ...at, why: live.join('; ') });
+        continue;
+      }
+      // Grants that would open it but haven't begun yet.
+      const later = [...tiers.map((m) => ({ what: `member of ${m.tier}`, at: m.startsAt })), ...(share ? [{ what: `shared ${share.path}`, at: share.startsAt }] : [])];
+      const audience = 'ruleless' in r ? 'no rule: only you' : r.access === 'private' ? 'private' : `for ${r.access.join(', ')}`;
+      closed.push({ ...at, why: later.length ? `${audience}; ${later.map((l) => `${l.what} from ${l.at ?? ''}`).join('; ')}` : audience });
+    }
+    return { email, opens, closed };
   }
 
 

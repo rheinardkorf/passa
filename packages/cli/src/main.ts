@@ -39,7 +39,8 @@ With a Passa deployment:
                                        draws the social cards for its public pages first (--no-cards to skip)
   passa access <site|folder>           show who can open what, and who it's shared with; change it with
                                        --public, --private, or --rule <path>=<access> (repeatable), where access
-                                       is public, private, or tiers such as gold,silver
+                                       is public, private, or tiers such as gold,silver; --as <email> shows
+                                       what one person opens and why
   passa share <site|folder> <email>    share it with <email>, who gets an invite and can open it after signing
                                        in; --path /proposals/acme/ shares only that folder (default /);
                                        it ends after 90 days, or --expires 2026-12-31 or --for 30d (a year at
@@ -410,10 +411,21 @@ async function syncCommand(args: string[]) {
 
 async function accessCommand(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' },
+    ...DEPLOY_OPTIONS, public: { type: 'boolean' }, private: { type: 'boolean' }, rule: { type: 'string', multiple: true }, 'confirm-public': { type: 'boolean' }, as: { type: 'string' },
   } });
   const target = await targetOf(positionals[0], values.server);
   const rules = parseRules(values);
+  if (values.as && rules) throw new Error('--as only shows access; change it in a separate command.');
+  if (values.as) {
+    const site = await listAccess(target, { as: values.as });
+    if (values.json) return printJson(site.as), 0;
+    const as = site.as;
+    if (!as) throw new Error('This deployment doesn\'t support --as yet.');
+    out(`${as.email} on ${site.url}:`);
+    for (const p of as.opens) out(`  opens   ${p.path}  (${p.why})`);
+    for (const p of as.closed) out(`  closed  ${p.path}  (${p.why})`);
+    return 0;
+  }
   if (!rules) {
     const site = await listAccess(target);
     if (values.json) return printJson(site), 0;

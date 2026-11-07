@@ -221,3 +221,29 @@ describe('list_shares (R165) and last used (R166)', () => {
     expect((await call('list_access', { site_id: site.site_id })).json()).toMatchObject({ tiers: ['gold', 'silver'], shares: [{ last_used: '2026-11-02' }] });
   });
 });
+
+describe('list_access with an email (R159)', () => {
+  it('says what a person opens and why, and what they don\'t', async () => {
+    const t0 = new Date();
+    const call = await as('alice', t0);
+    const site = (await call('publish', { title: 'Course', files, rules: [{ path: '/', access: ['public'] }, ...rules, { path: '/lessons/draft/', access: 'private' }], confirm_public: true })).json();
+    await call('add_member', { site_id: site.site_id, email: 'sam@example.com', tier: 'silver', confirm_member: true });
+    await call('add_member', { site_id: site.site_id, email: 'sam@example.com', tier: 'gold', starts_at: '2030-01-01T00:00:00Z', confirm_member: true });
+    await call('share', { site_id: site.site_id, email: 'sam@example.com', path: '/lessons/draft/', confirm_share: true });
+
+    const r = (await call('list_access', { site_id: site.site_id, email: 'Sam@example.com' })).json().as;
+    expect(r.email).toBe('sam@example.com');
+    expect(r.opens.map((p: { path: string; why: string }) => `${p.path} ${p.why}`)).toEqual(['/ public', '/lessons/ member of silver', '/lessons/draft/ shared /lessons/draft/']);
+    expect(r.closed.map((p: { path: string; why: string }) => `${p.path} ${p.why}`)).toEqual(['/lessons/bonus/ for gold; member of gold from 2030-01-01T00:00:00.000Z']);
+
+    const stranger = (await call('list_access', { site_id: site.site_id, email: 'kim@example.com' })).json().as;
+    expect(stranger.opens.map((p: { path: string }) => p.path)).toEqual(['/']);
+    expect(stranger.closed.map((p: { path: string; why: string }) => `${p.path} ${p.why}`)).toEqual(['/lessons/ for gold, silver', '/lessons/bonus/ for gold', '/lessons/draft/ private']);
+
+    const owner = (await call('list_access', { site_id: site.site_id, email: 'alice@example.com' })).json().as;
+    expect(owner.closed).toEqual([]);
+    // With no rule at /, the root is closed to everyone but the owner.
+    const plain = (await call('publish', { title: 'Plain', files, rules })).json();
+    expect((await call('list_access', { site_id: plain.site_id, email: 'kim@example.com' })).json().as.closed[0]).toMatchObject({ path: '/', why: 'no rule: only you' });
+  });
+});
