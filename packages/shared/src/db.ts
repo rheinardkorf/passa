@@ -125,10 +125,13 @@ export class DomainTaken extends Error {}
 // A site is shared with as many emails as it may be (M5 R134).
 export class TooManyShares extends Error {}
 
-// A site shared with an email (M5 R128): it gives that email the site's tier
-// (shared), until expiresAt if set. invitedAt: when the last invite went (R130).
-// One path of a site shared with one email (M5): it opens the site's shared
-// rules at or under that path.
+// A paging cursor that this store didn't hand out.
+export class BadCursor extends Error {}
+
+// One path of a site shared with one email (M5, M6 R156): it opens the rule
+// at that path, from startsAt (if set) until expiresAt. invitedAt: when the
+// last invite went (R130); lastUsedAt: the last sign-in it opened something in
+// (M6 R166). Shares made before M6 may have no end.
 export type Grant = {
   siteId: string;
   email: string;
@@ -136,11 +139,33 @@ export type Grant = {
   tier: 'shared';
   source: 'share';
   createdAt: string;
+  startsAt?: string;
   expiresAt?: string;
   invitedAt?: string;
+  lastUsedAt?: string;
 };
 
-export const grantIsLive = (grant: Grant, now: Date) => !grant.expiresAt || grant.expiresAt > now.toISOString();
+// One email in one tier of a site (M6 R153), from startsAt until expiresAt
+// when they're set; without an end it lasts until removed.
+export type Membership = {
+  siteId: string;
+  email: string;
+  tier: string;
+  createdAt: string;
+  startsAt?: string;
+  expiresAt?: string;
+  invitedAt?: string;
+  lastUsedAt?: string;
+};
+
+// Whether a grant opens anything now: after its start, before its end (M6 R158).
+export const grantIsLive = (grant: { startsAt?: string; expiresAt?: string }, now: Date) => {
+  const at = now.toISOString();
+  return (!grant.startsAt || grant.startsAt <= at) && (!grant.expiresAt || grant.expiresAt > at);
+};
+
+// A page of results and where the next one starts, if there is one.
+export type Page<T> = { items: T[]; cursor?: string };
 
 const userKey = (id: string) => ({ pk: `USER#${id}`, sk: 'PROFILE' });
 const siteKey = (id: string) => ({ pk: `SITE#${id}`, sk: 'META' });
@@ -154,6 +179,15 @@ const domainKey = (domain: string) => ({ pk: `DOMAIN#${domain}`, sk: 'META' });
 // and one email's are a prefix of it. Emails with # are refused, and paths
 // start with /, so GRANT#<email>#/ never matches another email's shares.
 const grantKey = (siteId: string, email: string, path: string) => ({ pk: `SITE#${siteId}`, sk: `GRANT#${email}#${path}` });
+// Every share is also listed under its owner by end date, for the audit
+// across sites (M6 R165); shares from before M6 without an end aren't.
+const shareIndex = (ownerId: string, grant: Grant) => (grant.expiresAt
+  ? { gsi1pk: `OWNER#${ownerId}`, gsi1sk: `SHARE#${grant.expiresAt}#${grant.siteId}#${grant.email}#${grant.path}` } : {});
+// A membership sits with its site under the email, so one person's are a
+// prefix query at sign-in (M6 R153); a tier's members are listed through
+// gsi2, by email.
+const memberKey = (siteId: string, email: string, tier: string) => ({ pk: `SITE#${siteId}`, sk: `MEMBER#${email}#${tier}` });
+const tierIndex = (siteId: string, tier: string, email: string) => ({ gsi2pk: `TIER#${siteId}#${tier}`, gsi2sk: `EMAIL#${email}` });
 // One per name a site has claimed, so a purge can find its current and held names.
 const siteNameKey = (siteId: string, name: string) => ({ pk: `SITE#${siteId}`, sk: `NAME#${name}` });
 const tokenKey = (hash: string) => ({ pk: `TOKEN#${hash}`, sk: 'META' });
@@ -161,6 +195,17 @@ const sessionKey = (hash: string) => ({ pk: `SESSION#${hash}`, sk: 'META' });
 const rateKey = (name: string, windowStart: number) => ({ pk: `RATE#${name}`, sk: `W#${windowStart}` });
 
 const epochSeconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+
+// Paging cursors are the query's last key, opaque to callers.
+const toCursor = (key: Record<string, unknown> | undefined) => (key ? Buffer.from(JSON.stringify(key)).toString('base64url') : undefined);
+function fromCursor(cursor: string | undefined): Record<string, unknown> | undefined {
+  if (!cursor) return undefined;
+  try {
+    const key: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString());
+    if (key && typeof key === 'object' && Object.values(key).every((v) => typeof v === 'string')) return key as Record<string, unknown>;
+  } catch { /* falls through */ }
+  throw new BadCursor();
+}
 
 const KEY_ATTRIBUTES = new Set(['pk', 'sk', 'gsi1pk', 'gsi1sk', 'gsi2pk', 'gsi2sk', 'ttl']);
 
@@ -634,12 +679,12 @@ export class Store {
 
   // Shares a site with an email, or updates the share (M5 R128, R133). Refused
   // when the site already has max shares and this email isn't one of them.
-  async putGrant(grant: Grant, max: number): Promise<void> {
+  async putGrant(grant: Grant, ownerId: string, max: number): Promise<void> {
     if (grant.email.includes('#')) throw new Error('emails with # can\'t be shared with');
     if (!(await this.getGrant(grant.siteId, grant.email, grant.path)) && (await this.listGrants(grant.siteId)).length >= max) throw new TooManyShares(grant.siteId);
     await this.#db.send(new PutCommand({
       TableName: this.#table,
-      Item: { ...grantKey(grant.siteId, grant.email, grant.path), ...grant, ...(grant.expiresAt ? { ttl: epochSeconds(grant.expiresAt) } : {}) },
+      Item: { ...grantKey(grant.siteId, grant.email, grant.path), ...shareIndex(ownerId, grant), ...grant, ...(grant.expiresAt ? { ttl: epochSeconds(grant.expiresAt) } : {}) },
     }));
   }
 
@@ -679,6 +724,97 @@ export class Store {
       if (Attributes) removed++;
     }
     return removed;
+  }
+
+  // Every share across an owner's sites, soonest end first, ending before
+  // `before` if given (M6 R165). Eventually consistent, as indexes are.
+  async listOwnerShares(ownerId: string, options: { before?: string; siteId?: string; limit: number; cursor?: string }): Promise<Page<Grant>> {
+    const ExclusiveStartKey = fromCursor(options.cursor);
+    const { Items, LastEvaluatedKey } = await this.#db.send(new QueryCommand({
+      TableName: this.#table,
+      IndexName: 'gsi1',
+      KeyConditionExpression: options.before ? 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to' : 'gsi1pk = :pk AND begins_with(gsi1sk, :from)',
+      ...(options.siteId ? { FilterExpression: 'siteId = :site' } : {}),
+      ExpressionAttributeValues: {
+        ':pk': `OWNER#${ownerId}`, ':from': 'SHARE#',
+        ...(options.before ? { ':to': `SHARE#${options.before}` } : {}),
+        ...(options.siteId ? { ':site': options.siteId } : {}),
+      },
+      Limit: options.limit,
+      ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}),
+    }));
+    const cursor = toCursor(LastEvaluatedKey);
+    return { items: (Items ?? []).map((item) => strip<Grant>(item)), ...(cursor ? { cursor } : {}) };
+  }
+
+  // Adds an email to a tier, or replaces its dates (M6 R153).
+  async putMembership(m: Membership): Promise<void> {
+    if (m.email.includes('#')) throw new Error('emails with # can\'t be members');
+    await this.#db.send(new PutCommand({
+      TableName: this.#table,
+      Item: { ...memberKey(m.siteId, m.email, m.tier), ...tierIndex(m.siteId, m.tier, m.email), ...m, ...(m.expiresAt ? { ttl: epochSeconds(m.expiresAt) } : {}) },
+    }));
+  }
+
+  async getMembership(siteId: string, email: string, tier: string): Promise<Membership | undefined> {
+    const { Item } = await this.#db.send(new GetCommand({ TableName: this.#table, Key: memberKey(siteId, email, tier), ConsistentRead: true }));
+    return entity<Membership>(Item);
+  }
+
+  // One email's memberships of a site, for sign-in (M6 R153).
+  async membershipsFor(siteId: string, email: string): Promise<Membership[]> {
+    if (email.includes('#')) return [];
+    const { Items } = await this.#db.send(new QueryCommand({
+      TableName: this.#table,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
+      ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': `MEMBER#${email}#` },
+      ConsistentRead: true,
+    }));
+    return (Items ?? []).map((item) => strip<Membership>(item));
+  }
+
+  // A site's memberships a page at a time, by email; one tier's through gsi2
+  // (M6 R155). There's no member limit, so this is always paged.
+  async listMemberships(siteId: string, options: { tier?: string; limit: number; cursor?: string }): Promise<Page<Membership>> {
+    const ExclusiveStartKey = fromCursor(options.cursor);
+    const { Items, LastEvaluatedKey } = await this.#db.send(new QueryCommand({
+      TableName: this.#table,
+      ...(options.tier
+        ? { IndexName: 'gsi2', KeyConditionExpression: 'gsi2pk = :pk', ExpressionAttributeValues: { ':pk': `TIER#${siteId}#${options.tier}` } }
+        : { KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)', ExpressionAttributeValues: { ':pk': `SITE#${siteId}`, ':sk': 'MEMBER#' }, ConsistentRead: true }),
+      Limit: options.limit,
+      ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}),
+    }));
+    const cursor = toCursor(LastEvaluatedKey);
+    return { items: (Items ?? []).map((item) => strip<Membership>(item)), ...(cursor ? { cursor } : {}) };
+  }
+
+  // Removes one membership, or with no tier every membership of the email;
+  // how many were removed (M6 R154).
+  async deleteMemberships(siteId: string, email: string, tier?: string): Promise<number> {
+    const tiers = tier ? [tier] : (await this.membershipsFor(siteId, email)).map((m) => m.tier);
+    let removed = 0;
+    for (const t of tiers) {
+      const { Attributes } = await this.#db.send(new DeleteCommand({ TableName: this.#table, Key: memberKey(siteId, email, t), ReturnValues: 'ALL_OLD' }));
+      if (Attributes) removed++;
+    }
+    return removed;
+  }
+
+  // Records the day a grant last opened something (M6 R166). Only if it still
+  // exists: one removed meanwhile isn't written back.
+  async markUsed(grant: { kind: 'share'; siteId: string; email: string; path: string } | { kind: 'member'; siteId: string; email: string; tier: string }, at: string): Promise<void> {
+    try {
+      await this.#db.send(new UpdateCommand({
+        TableName: this.#table,
+        Key: grant.kind === 'share' ? grantKey(grant.siteId, grant.email, grant.path) : memberKey(grant.siteId, grant.email, grant.tier),
+        UpdateExpression: 'SET lastUsedAt = :at',
+        ConditionExpression: 'attribute_exists(pk)',
+        ExpressionAttributeValues: { ':at': at },
+      }));
+    } catch (err) {
+      if (!isConditionFailure(err)) throw err;
+    }
   }
 
   // Who may view the site has changed (an unshare, an expiry): every cookie

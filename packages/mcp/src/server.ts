@@ -20,6 +20,10 @@ const uploadId = z.string().max(64).describe('From begin_upload, after finish_up
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/).describe('The file\'s SHA-256, in lowercase hex');
 const limit = (what: string, fallback: number) => z.number().int().min(1).max(MAX_PAGE).default(fallback).describe(`How many ${what} to return, up to ${MAX_PAGE}`);
 const cursor = z.string().max(64).optional().describe('next_cursor from the previous call, to get the next page');
+// Members and shares page by their last key, which holds emails and paths.
+const keyCursor = z.string().max(2048).optional().describe('next_cursor from the previous call, to get the next page');
+const email = z.email().max(254);
+const startsAt = z.iso.datetime({ offset: true }).optional();
 
 const inlineFile = z.strictObject({
   path,
@@ -98,7 +102,8 @@ const schemas = {
     site_id: siteId,
     email: z.email().max(254).describe('The email to share with, exactly as the person gave it'),
     path: z.string().max(MAX_RULE_PATH).regex(/^\/(?:[^/]+\/)*$/).default('/').describe('/ or a folder ending in /: what the email may open, with shared folders under it. It gets a shared rule of its own unless it\'s public'),
-    expires_at: z.iso.datetime({ offset: true }).optional().describe('When the share stops working: at least an hour and at most a year ahead. Without it, it lasts until unshared'),
+    starts_at: startsAt.describe('When the share begins; without it, at once'),
+    expires_at: z.iso.datetime({ offset: true }).optional().describe('When the share ends: at least an hour and at most a year ahead. Without it, 90 days after it begins. Sharing again renews it'),
     confirm_share: z.boolean().default(false).describe('Must be true. Read the email back to the person first, since a typo shares private pages with a stranger'),
   }),
   unshare: z.strictObject({
@@ -107,6 +112,31 @@ const schemas = {
     path: z.string().max(MAX_RULE_PATH).optional().describe('One shared path to take away; without it, every path shared with the email'),
   }),
   list_access: z.strictObject({ site_id: siteId }),
+  add_member: z.strictObject({
+    site_id: siteId,
+    email: email.describe('The email to add, exactly as the person gave it'),
+    tier: z.string().max(30).describe('The tier, such as gold: 1 to 30 lowercase letters, digits and hyphens. Rules list the tiers that open each path'),
+    starts_at: startsAt.describe('When the membership begins; without it, at once'),
+    expires_at: z.iso.datetime({ offset: true }).optional().describe('When the membership ends; without it, it lasts until removed'),
+    confirm_member: z.boolean().default(false).describe('Must be true. Read the email back to the person first, since a typo gives members\' pages to a stranger'),
+  }),
+  remove_member: z.strictObject({
+    site_id: siteId,
+    email,
+    tier: z.string().max(30).optional().describe('One tier to remove them from; without it, every tier'),
+  }),
+  list_members: z.strictObject({
+    site_id: siteId,
+    tier: z.string().max(30).optional().describe('Only this tier\'s members'),
+    limit: limit('members', 100),
+    cursor: keyCursor,
+  }),
+  list_shares: z.strictObject({
+    site_id: siteId.optional().describe('Only this site\'s shares; without it, every site\'s'),
+    ending_within_days: z.number().int().min(1).max(366).optional().describe('Only shares ending within this many days'),
+    limit: limit('shares', 100),
+    cursor: keyCursor,
+  }),
   set_name: z.strictObject({
     site_id: siteId,
     name: z.string().max(40).nullable().describe('The new name, such as cv for cv.<site domain>; null removes the name'),
@@ -184,9 +214,18 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + 'The share opens the path whatever its rule says, and everything under it that has no rule of its own, so sharing /proposals/acme/ with one person and /proposals/globex/ with another keeps each from the other. Folders or pages under the path with rules of their own aren\'t included (left_out lists them; tell the person, and share them separately if wanted). A public path stays public. '
       + 'They get an invite with your email and the address, never the site\'s title; sharing the same path with the same email again resends it, at most once an hour. '
       + `Before sharing, read the email back to the person: confirm_share must be true. A site can be shared with ${limits.sharesPerSite} emails, and ${rateLimits.invitesPerDay} invites can be sent a day. `
-      + 'Pass expires_at for a share that stops working at a set time.',
+      + 'A share ends 90 days after it begins unless given expires_at (at most a year ahead); starts_at delays it. Sharing again renews it.',
     unshare: 'Stop sharing a path of a site with an email, or with no path, everything shared with them. Their next request is refused, while everyone else keeps their access. The rules don\'t change.',
-    list_access: 'List who can open a site: its rules, its public and shared URLs, and its shares: each email and path, when it was shared, when it expires and when the invite was sent.',
+    list_access: 'List who can open a site: its rules, the tiers they name, its public and members\' URLs, and its shares: each email and path, when it was shared, begins and ends, when the invite was sent and when it was last used. list_members lists the members.',
+    add_member: 'Add someone to a tier of a site by email, such as gold: they can then open every path whose rule lists that tier, after signing in with that email by magic link. '
+      + 'A tier needs no setting up: rules name tiers (set_access, or access in a Markdown site\'s _site.yml), and memberships put people in them. Tiers are separate: gold doesn\'t include silver, so a rule lists every tier it opens to. '
+      + 'starts_at and expires_at limit when it works; without an end it lasts until removed. Adding again replaces the dates. '
+      + 'They get an invite with your email and the address, never the site\'s title or the tier; at most one an hour per email and tier, counting against the daily invite limit. '
+      + 'Before adding, read the email back to the person: confirm_member must be true.',
+    remove_member: 'Remove someone from one tier of a site, or with no tier, from every tier. Their next request is refused; everyone else keeps their access.',
+    list_members: 'List a site\'s members, a page at a time: each email, tier, when they were added, begin and end, and when they last used it. If next_cursor is returned, pass it as cursor for the next page.',
+    list_shares: 'List every share across your sites, soonest end first: site, path, email, when it was shared, begins and ends, and when it was last used, so forgotten or unused shares are easy to find and remove with unshare. '
+      + 'ending_within_days narrows it to shares ending soon. If next_cursor is returned, pass it as cursor for the next page.',
     get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. On a Markdown site, sources have role source, and pages made from them have role rendered and rendered_from; _passa/access.yml is a read-only copy of the rules, for folders taken out of Passa. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
     find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
@@ -291,7 +330,8 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
 
   tool('share', describe.share, { openWorldHint: true }, schemas.share, async (i) => {
     const r = await publisher.share(caller, {
-      siteId: i.site_id, email: i.email, path: i.path, confirmShare: i.confirm_share, ...(i.expires_at ? { expiresAt: i.expires_at } : {}),
+      siteId: i.site_id, email: i.email, path: i.path, confirmShare: i.confirm_share,
+      ...(i.starts_at ? { startsAt: i.starts_at } : {}), ...(i.expires_at ? { expiresAt: i.expires_at } : {}),
     });
     return { result: r, siteId: r.site_id, ...accessDetail(r, `shared ${r.share.path} with ${r.share.email}${r.invite_sent ? ', invited' : ''}`) };
   });
@@ -303,6 +343,29 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
 
   tool('list_access', describe.list_access, { readOnlyHint: true }, schemas.list_access, async (i) => ({
     result: await publisher.listAccess(caller, { siteId: i.site_id }),
+  }));
+
+  tool('add_member', describe.add_member, { openWorldHint: true }, schemas.add_member, async (i) => {
+    const r = await publisher.addMember(caller, {
+      siteId: i.site_id, email: i.email, tier: i.tier, confirmMember: i.confirm_member,
+      ...(i.starts_at ? { startsAt: i.starts_at } : {}), ...(i.expires_at ? { expiresAt: i.expires_at } : {}),
+    });
+    return { result: r, siteId: r.site_id, detail: `added ${r.member.email} to ${r.member.tier}${r.invite_sent ? ', invited' : ''}` };
+  });
+
+  tool('remove_member', describe.remove_member, { destructiveHint: true, idempotentHint: true }, schemas.remove_member, async (i) => {
+    const r = await publisher.removeMember(caller, { siteId: i.site_id, email: i.email, ...(i.tier ? { tier: i.tier } : {}) });
+    return { result: r, siteId: r.site_id, detail: `removed ${r.email} from ${r.tier ?? 'every tier'}` };
+  });
+
+  tool('list_members', describe.list_members, { readOnlyHint: true }, schemas.list_members, async (i) => ({
+    result: await publisher.listMembers(caller, { siteId: i.site_id, limit: i.limit, ...(i.tier ? { tier: i.tier } : {}), ...(i.cursor ? { cursor: i.cursor } : {}) }),
+  }));
+
+  tool('list_shares', describe.list_shares, { readOnlyHint: true }, schemas.list_shares, async (i) => ({
+    result: await publisher.listShares(caller, {
+      limit: i.limit, ...(i.site_id ? { siteId: i.site_id } : {}), ...(i.ending_within_days ? { endingWithinDays: i.ending_within_days } : {}), ...(i.cursor ? { cursor: i.cursor } : {}),
+    }),
   }));
 
   tool('get_site', describe.get_site, { readOnlyHint: true }, schemas.get_site, async (i) => ({

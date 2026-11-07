@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   type Config,
   type Events,
+  type Grant,
   grantIsLive,
   handoffUrl,
   isDomain,
@@ -14,6 +15,7 @@ import {
   ruleId,
   servedPath,
   isPublicAccess,
+  type Membership,
   type SigningKey,
   type SiteTiers,
   type Site,
@@ -45,6 +47,9 @@ export type SignInDeps = {
 };
 
 export type SessionUser = { user: User; sessionId: string };
+
+// A grant that opened something at sign-in, and when it was last marked used.
+type Used = { grant: Parameters<Store['markUsed']>[0]; lastUsedAt: string | undefined };
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
@@ -93,19 +98,34 @@ export class SignIn {
   }
 
   // What an email may open on a site: everything as its owner (o), or the
-  // rules its grants open (M6 R156; memberships come with M6 step 3).
-  async #tiersFor(site: Site, user: { id: string; email: string } | undefined, email: string): Promise<SiteTiers | undefined> {
-    if (user && site.ownerId === user.id) return 'o';
+  // rules its live memberships and shares open (M6 R156, R158), and the grants
+  // that opened something.
+  async #access(site: Site, user: { id: string; email: string } | undefined, email: string): Promise<{ tiers: SiteTiers; used: Used[] } | undefined> {
+    if (user && site.ownerId === user.id) return { tiers: 'o', used: [] };
     const now = new Date(this.#now());
-    const paths = (await this.#d.store.grantsFor(site.id, email)).filter((g) => grantIsLive(g, now)).map((g) => g.path);
-    const rules = viewerRules(site.rules ?? [], { tiers: [], sharePaths: paths });
-    return rules.length ? viewerTiers(rules.map((r) => ruleId(r.path))) : undefined;
+    const [shares, memberships] = await Promise.all([this.#d.store.grantsFor(site.id, email), this.#d.store.membershipsFor(site.id, email)]);
+    const live = { shares: shares.filter((g) => grantIsLive(g, now)), memberships: memberships.filter((m) => grantIsLive(m, now)) };
+    const rules = viewerRules(site.rules ?? [], { tiers: live.memberships.map((m) => m.tier), sharePaths: live.shares.map((g) => g.path) });
+    if (!rules.length) return undefined;
+    const opens = (one: Pick<Grant, 'path'> | Pick<Membership, 'tier'>) => rules.some((r) => ('path' in one ? r.path === one.path : r.access !== 'private' && r.access.includes(one.tier)));
+    const used: Used[] = [
+      ...live.shares.filter(opens).map((g) => ({ grant: { kind: 'share' as const, siteId: site.id, email, path: g.path }, lastUsedAt: g.lastUsedAt })),
+      ...live.memberships.filter(opens).map((m) => ({ grant: { kind: 'member' as const, siteId: site.id, email, tier: m.tier }, lastUsedAt: m.lastUsedAt })),
+    ];
+    return { tiers: viewerTiers(rules.map((r) => ruleId(r.path))), used };
   }
 
-  async #viewableSite(user: User, label: string): Promise<{ site: Site; tiers: SiteTiers } | undefined> {
+  async #viewableSite(user: User, label: string): Promise<{ site: Site; tiers: SiteTiers; used: Used[] } | undefined> {
     const site = await this.#site(label);
-    const tiers = site ? await this.#tiersFor(site, user, user.email) : undefined;
-    return site && tiers ? { site, tiers } : undefined;
+    const access = site ? await this.#access(site, user, user.email) : undefined;
+    return site && access ? { site, ...access } : undefined;
+  }
+
+  // Records the day each grant last opened something (M6 R166): at most a
+  // write per grant per day, never per page.
+  async #markUsed(used: Used[]) {
+    const today = new Date(this.#now()).toISOString().slice(0, 10);
+    await Promise.all(used.filter((u) => u.lastUsedAt?.slice(0, 10) !== today).map((u) => this.#d.store.markUsed(u.grant, today)));
   }
 
   // Always resolves the same way, whether or not an email is sent (R15).
@@ -134,7 +154,7 @@ export class SignIn {
     // no roles, which can sign in to view but never publish (M5 R135).
     if (!user && next && 'site' in next) {
       const site = await this.#site(next.site.siteId);
-      if (site && (await this.#tiersFor(site, undefined, email))) {
+      if (site && (await this.#access(site, undefined, email))) {
         user = { id: newUserId(), email, roles: [], status: 'active', createdAt: new Date(now).toISOString() };
         await store.putUser(user);
       }
@@ -224,6 +244,7 @@ export class SignIn {
       return undefined;
     }
     const { site, tiers } = viewable;
+    await this.#markUsed(viewable.used);
     return handoffUrl({
       key: await this.#d.siteKey(),
       siteId: site.id,

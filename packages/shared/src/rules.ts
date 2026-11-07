@@ -60,6 +60,10 @@ export const TIER_NAME = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/;
 export const RESERVED_TIERS = ['public', 'private', 'shared'];
 export const isTierName = (name: string): boolean => TIER_NAME.test(name) && !RESERVED_TIERS.includes(name);
 
+// The tiers a site's rules name, sorted (M6 R160).
+export const tiersOf = (rules: Rule[]): string[] =>
+  [...new Set(rules.flatMap((r) => (r.access === 'private' ? [] : r.access.filter((a) => a !== 'public'))))].sort();
+
 // What's wrong with one rule's access (M6 R146), or nothing.
 function accessProblem(access: unknown): string | undefined {
   if (access === 'private') return undefined;

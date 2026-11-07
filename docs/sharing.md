@@ -59,7 +59,14 @@ If a page links to one its readers can't open (such as a lesson's link home to a
 passa access my-site
 ```
 
-lists the rules, and every share: the email and path, when it was shared, when it expires, and whether the invite went out. A share whose folder was later made private opens nothing, and is marked so. Agents use the `list_access` tool.
+lists the rules, the tiers they name, and every share: the email and path, when it was shared, when it begins and ends, whether the invite went out, and when it was last used (`never` until the person first signs in with it). A share whose folder was later made private opens nothing, and is marked so. Agents use the `list_access` tool.
+
+```sh
+passa shares
+passa shares --ending 30d
+```
+
+lists every share across all your sites, soonest end first, so ones you've forgotten, or that nobody uses, are easy to find and unshare. `--site my-site` narrows it to one site. Agents use the `list_shares` tool.
 
 ## Unsharing
 
@@ -70,13 +77,17 @@ passa unshare my-site acme@example.com
 
 The first takes away one path; the second, everything shared with that email. Their next request is refused, even with the page already open: every sign-in to the site is checked again, and everyone else carries on without noticing. The rules don't change.
 
-## Shares that end
+## When a share begins and ends
+
+Every share ends, since shares are easy to forget: 90 days after it begins, unless you choose the end.
 
 ```sh
 passa share my-site acme@example.com --path /proposals/acme/ --expires 2026-12-31
+passa share my-site acme@example.com --path /proposals/acme/ --for 2w
+passa share my-site reviewer@example.com --path /lessons/ --from 2026-12-01
 ```
 
-ends the share then (a date alone lasts until the end of that day, UTC; agents pass a time with `expires_at`). An expiry is between an hour and a year ahead. When it passes, the share stops working exactly as if you'd unshared it.
+`--expires` ends it on a date (a date alone lasts until the end of that day, UTC), `--for` after a time (`30d`, `2w`, `6m`), and `--from` makes it begin later (from the start of that day); agents pass times with `starts_at` and `expires_at`. An end is between an hour and a year ahead. Sharing again renews a share, with new dates. Before it begins and once it ends, a share opens nothing, exactly as if you'd unshared it.
 
 ## Invites
 

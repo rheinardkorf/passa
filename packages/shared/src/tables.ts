@@ -18,6 +18,7 @@ export const mainTable = (TableName: string): CreateTableCommandInput => ({
   ],
   GlobalSecondaryIndexes: [
     {
+      // SITE# lists an owner's sites, SHARE# their shares by end (M6 R165).
       IndexName: 'gsi1',
       KeySchema: [
         { AttributeName: 'gsi1pk', KeyType: 'HASH' },
@@ -26,7 +27,7 @@ export const mainTable = (TableName: string): CreateTableCommandInput => ({
       Projection: { ProjectionType: 'ALL' },
     },
     // Overloaded and sparse: only items that set gsi2pk are in it. USERS lists
-    // every user by email (M5 R143).
+    // every user by email (M5 R143); TIER#<site>#<tier> a tier's members (M6 R155).
     {
       IndexName: 'gsi2',
       KeySchema: [

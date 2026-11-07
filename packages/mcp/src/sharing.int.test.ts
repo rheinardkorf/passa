@@ -6,7 +6,7 @@ import type { Email } from '@passa/shared';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ruleId } from '@passa/shared';
-import { expiredShares } from './purge.ts';
+import { expiredGrants } from './purge.ts';
 import { Publisher } from './publisher.ts';
 import { createServer } from './server.ts';
 import { addUser, type TestEnv, testEnv } from './testing/moto.ts';
@@ -212,19 +212,20 @@ describe('expiry (R133)', () => {
     dynamodb: { OldImage: { pk: { S: pk }, sk: { S: sk }, siteId: { S: siteId } } },
   });
 
-  it('finds the sites of shares DynamoDB removed, once each', () => {
+  it('finds the sites of shares and memberships DynamoDB removed, once each (M6 R158)', () => {
     const event = { Records: [
       removal('SITE#a', 'GRANT#x@example.com', 'a'), removal('SITE#a', 'GRANT#y@example.com', 'a'),
       removal('SITE#b', 'GRANT#x@example.com', 'b', false), removal('SITE#c', 'SITE', 'c'),
+      removal('SITE#d', 'MEMBER#x@example.com#gold', 'd'), removal('SITE#a', 'MEMBER#x@example.com#gold', 'a'),
     ] } as unknown as DynamoDBStreamEvent;
-    expect(expiredShares(event)).toEqual(['a']);
+    expect(expiredGrants(event)).toEqual(['a', 'd']);
   });
 
-  it('bumps the access version when a share expires', async () => {
+  it('bumps the access version when a grant expires', async () => {
     const call = await as('alice');
     const site = (await call('publish', { title: 'Expires', files: page('x'), rules: [{ path: '/', access: 'private' }] })).json();
     const before = (await edgeRecord(site.site_id)).v;
-    await new Publisher(env).expireShare(site.site_id);
+    await new Publisher(env).expireGrant(site.site_id);
     expect((await edgeRecord(site.site_id)).v).toBe(before + 1);
   });
 });

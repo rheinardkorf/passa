@@ -10,7 +10,6 @@ import {
   type Events,
   type FileEntry,
   type Grant,
-  grantIsLive,
   isSiteId,
   isUploadId,
   isVersionId,
@@ -35,6 +34,10 @@ import {
   accessFor,
   isPublicAccess,
   TooManyShares,
+  BadCursor,
+  isTierName,
+  type Membership,
+  tiersOf,
   type UploadSync,
   type Version,
 } from '@passa/shared';
@@ -85,6 +88,11 @@ export class ToolError extends Error {}
 const NOT_FOUND = 'No site with that ID.';
 const HOUR_MS = 3_600_000;
 const DAY_S = 86_400;
+// Shares end 90 days after they begin unless given an end, and at most a year
+// ahead (M6 R158). Memberships needn't end.
+const SHARE_DAYS = 90;
+const MAX_GRANT_MS = 366 * DAY_S * 1000;
+const MEMBERS_PAGE = 100;
 const BAD_CURSOR = 'That cursor doesn\'t match this list. Call again without it to start from the beginning.';
 const PARALLEL = 16;
 // Copies within S3 move no data through the function, so more run at once,
@@ -114,9 +122,22 @@ export type SiteSummary = {
 // narrowed: something open to more people before is open to fewer now.
 export type AccessChange = { made_public: string[]; made_members: string[]; made_private: string[]; narrowed?: boolean };
 
+// When a grant begins and ends, and when it was last used (M6 R158, R166).
+type GrantDates = { starts_at?: string; expires_at?: string; invited_at?: string; last_used: string };
+const datesOf = (g: Grant | Membership): GrantDates => ({
+  ...(g.startsAt ? { starts_at: g.startsAt } : {}),
+  ...(g.expiresAt ? { expires_at: g.expiresAt } : {}),
+  ...(g.invitedAt ? { invited_at: g.invitedAt } : {}),
+  last_used: g.lastUsedAt ?? 'never',
+});
+
 // A share as list_access shows it (M5 R132).
-export type Share = { email: string; path: string; shared_at: string; expires_at?: string; invited_at?: string };
-const shareOf = (g: Grant): Share => ({ email: g.email, path: g.path, shared_at: g.createdAt, ...(g.expiresAt ? { expires_at: g.expiresAt } : {}), ...(g.invitedAt ? { invited_at: g.invitedAt } : {}) });
+export type Share = { email: string; path: string; shared_at: string } & GrantDates;
+const shareOf = (g: Grant): Share => ({ email: g.email, path: g.path, shared_at: g.createdAt, ...datesOf(g) });
+
+// A membership as list_members shows it (M6 R155).
+export type Member = { email: string; tier: string; added_at: string } & GrantDates;
+const memberOf = (m: Membership): Member => ({ email: m.email, tier: m.tier, added_at: m.createdAt, ...datesOf(m) });
 
 export type SiteFile = {
   path: string; size: number; content_type: string; sha256: string; role?: FileEntry['role']; rendered_from?: string; content?: string; download_url?: string;
@@ -807,7 +828,7 @@ export class Publisher {
   // and page under it without a rule of its own. A path with no rule gets one
   // copying the access above it, so nobody else's access changes. An invite
   // goes to the email, at most hourly per path.
-  async share(caller: Caller, input: { siteId: string; email: string; path: string; expiresAt?: string; confirmShare: boolean }) {
+  async share(caller: Caller, input: { siteId: string; email: string; path: string; startsAt?: string; expiresAt?: string; confirmShare: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
     const email = input.email.trim().toLowerCase();
@@ -819,10 +840,7 @@ export class Publisher {
         + 'since a typo shares private pages with a stranger, then call again with confirm_share set to true.');
     }
     const now = this.#now();
-    if (input.expiresAt) {
-      const at = Date.parse(input.expiresAt);
-      if (!(at >= now.getTime() + HOUR_MS && at <= now.getTime() + 366 * DAY_S * 1000)) throw new ToolError('expires_at must be at least an hour and at most a year from now.');
-    }
+    const dates = this.#grantDates(input, true);
     const { mailer, config, store } = this.#d;
     if (!mailer) throw new ToolError('This deployment can\'t send email, so it can\'t send the invite.');
 
@@ -838,31 +856,28 @@ export class Publisher {
     const change = this.#checkAccess(before, rules, false);
 
     const existing = await store.getGrant(site.id, email, input.path);
-    const resend = !existing?.invitedAt || Date.parse(existing.invitedAt) <= now.getTime() - HOUR_MS;
-    if (resend) {
-      const dayStart = Math.floor(now.getTime() / 1000 / DAY_S) * DAY_S;
-      if ((await store.countRequest(`invites:${caller.userId}`, dayStart, DAY_S)) > config.rateLimits.invitesPerDay) {
-        throw new ToolError(`You've sent ${config.rateLimits.invitesPerDay} invites today, the most allowed. Try again tomorrow.`);
-      }
-    }
+    const resend = await this.#mayInvite(caller, existing);
     const grant: Grant = {
       siteId: site.id, email, path: input.path, tier: 'shared', source: 'share',
       createdAt: existing?.createdAt ?? now.toISOString(),
-      ...(input.expiresAt ? { expiresAt: new Date(input.expiresAt).toISOString() } : {}),
+      ...dates,
       ...(resend ? { invitedAt: now.toISOString() } : existing?.invitedAt ? { invitedAt: existing.invitedAt } : {}),
+      ...(existing?.lastUsedAt ? { lastUsedAt: existing.lastUsedAt } : {}),
     };
     try {
-      await store.putGrant(grant, config.limits.sharesPerSite);
+      await store.putGrant(grant, site.ownerId, config.limits.sharesPerSite);
     } catch (err) {
       if (!(err instanceof TooManyShares)) throw err;
       throw new ToolError(`This site has ${config.limits.sharesPerSite} shares, the most allowed. Unshare one first.`);
     }
+    // A share sharing again with a later start or an earlier end narrows it.
+    if (existing) await store.bumpAccessVersion(site.id, now.toISOString());
     const rendered = rules === before ? undefined : await this.#saveRules(caller, site, rules, false);
     const updated = (await this.#sync(site.id)) ?? site;
     // Folders and pages under the path with rules of their own aren't part of
     // the share (R156): say so.
     const leftOut = (updated.rules ?? []).filter((r) => r.path !== input.path && r.path.startsWith(input.path) && !isPublicAccess(r.access)).map((r) => this.#url(updated) + r.path.slice(1));
-    if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(updated) + input.path.slice(1), ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}) }));
+    if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(updated) + input.path.slice(1), ...this.#inviteDates(grant) }));
     return {
       ...this.#summary(updated),
       ...this.#accessResult(updated, change),
@@ -873,6 +888,145 @@ export class Publisher {
       ...(resend ? {} : { invite_note: 'An invite for this path went to this email less than an hour ago, so another wasn\'t sent.' }),
       ...(rendered ?? {}),
     };
+  }
+
+  // A grant's start and end from the caller's (M6 R158): an end in the past,
+  // or not after the start, is refused as a mistake. A share always ends: 90
+  // days after it begins unless given an end, and at most a year ahead.
+  #grantDates(input: { startsAt?: string; expiresAt?: string }, share: boolean): { startsAt?: string; expiresAt?: string } {
+    const now = this.#now().getTime();
+    const startsAt = input.startsAt ? Date.parse(input.startsAt) : undefined;
+    const begins = Math.max(now, startsAt ?? now);
+    let expiresAt = input.expiresAt ? Date.parse(input.expiresAt) : undefined;
+    if (expiresAt !== undefined && expiresAt <= now) throw new ToolError('expires_at is in the past. Give an end ahead of now.');
+    if (expiresAt !== undefined && expiresAt <= begins) throw new ToolError('expires_at must be after starts_at.');
+    if (share) {
+      expiresAt ??= Math.min(begins + SHARE_DAYS * DAY_S * 1000, now + MAX_GRANT_MS);
+      if (expiresAt < now + HOUR_MS || expiresAt > now + MAX_GRANT_MS) throw new ToolError('A share ends at least an hour and at most a year from now.');
+      if (expiresAt <= begins) throw new ToolError('A share ends at most a year from now, so starts_at must be before then.');
+    }
+    return {
+      ...(startsAt !== undefined && startsAt > now ? { startsAt: new Date(startsAt).toISOString() } : {}),
+      ...(expiresAt !== undefined ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
+    };
+  }
+
+  // Whether a grant's invite goes again: at most hourly per grant, and within
+  // the caller's daily cap (M5 R130, M6 R153).
+  async #mayInvite(caller: Caller, existing: { invitedAt?: string } | undefined): Promise<boolean> {
+    const now = this.#now().getTime();
+    if (existing?.invitedAt && Date.parse(existing.invitedAt) > now - HOUR_MS) return false;
+    const { store, config } = this.#d;
+    const dayStart = Math.floor(now / 1000 / DAY_S) * DAY_S;
+    if ((await store.countRequest(`invites:${caller.userId}`, dayStart, DAY_S)) > config.rateLimits.invitesPerDay) {
+      throw new ToolError(`You've sent ${config.rateLimits.invitesPerDay} invites today, the most allowed. Try again tomorrow.`);
+    }
+    return true;
+  }
+
+  #inviteDates(g: { startsAt?: string; expiresAt?: string }) {
+    return { ...(g.startsAt ? { startsAt: g.startsAt } : {}), ...(g.expiresAt ? { expiresAt: g.expiresAt } : {}) };
+  }
+
+  // Adds an email to a tier of a site, or replaces its dates (M6 R153). They
+  // may then open every rule listing the tier, after signing in, within the
+  // dates. An invite goes to the email, at most hourly per tier.
+  async addMember(caller: Caller, input: { siteId: string; email: string; tier: string; startsAt?: string; expiresAt?: string; confirmMember: boolean }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    this.#assertChangeable(site);
+    const email = input.email.trim().toLowerCase();
+    const owner = await this.#d.store.getUser(caller.userId);
+    if (email === owner?.email) throw new ToolError('That\'s your own email: you can open every part of the site already.');
+    if (email.includes('#')) throw new ToolError('Passa can\'t add an email that has # in it.');
+    if (!isTierName(input.tier)) throw new ToolError('A tier is 1 to 30 lowercase letters, digits and hyphens, such as gold; public, private and shared are taken.');
+    if (!input.confirmMember) {
+      throw new ToolError(`This would let ${email} open every part of the site open to ${input.tier} after signing in, and email them an invite. Read the address back to the person exactly as written here, `
+        + 'since a typo gives members\' pages to a stranger, then call again with confirm_member set to true.');
+    }
+    const dates = this.#grantDates(input, false);
+    const { mailer, store } = this.#d;
+    if (!mailer) throw new ToolError('This deployment can\'t send email, so it can\'t send the invite.');
+    const now = this.#now();
+    const existing = await store.getMembership(site.id, email, input.tier);
+    const resend = await this.#mayInvite(caller, existing);
+    const membership: Membership = {
+      siteId: site.id, email, tier: input.tier,
+      createdAt: existing?.createdAt ?? now.toISOString(),
+      ...dates,
+      ...(resend ? { invitedAt: now.toISOString() } : existing?.invitedAt ? { invitedAt: existing.invitedAt } : {}),
+      ...(existing?.lastUsedAt ? { lastUsedAt: existing.lastUsedAt } : {}),
+    };
+    await store.putMembership(membership);
+    // New dates may begin later or end sooner: cookies check again.
+    if (existing) await this.#revoke(site.id);
+    const rules = (site.rules ?? []).filter((r) => r.access !== 'private' && r.access.includes(input.tier));
+    if (resend) await mailer.send(inviteEmail({ to: email, from: owner?.email ?? 'Someone', url: this.#url(site), member: true, ...this.#inviteDates(membership) }));
+    return {
+      site_id: site.id,
+      url: this.#url(site),
+      member: memberOf(membership),
+      tier_urls: rules.map((r) => this.#url(site) + r.path.slice(1)),
+      ...(rules.length ? {} : { tier_note: `No rule lists ${input.tier} yet, so this membership opens nothing until one does.` }),
+      invite_sent: resend,
+      ...(resend ? {} : { invite_note: 'An invite for this tier went to this email less than an hour ago, so another wasn\'t sent.' }),
+    };
+  }
+
+  // Removes one membership, or every membership of the email, and makes every
+  // cookie for the site check again, so their next request is refused (M6 R154).
+  async removeMember(caller: Caller, input: { siteId: string; email: string; tier?: string }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    const email = input.email.trim().toLowerCase();
+    const removed = await this.#d.store.deleteMemberships(site.id, email, input.tier);
+    if (!removed) throw new ToolError(input.tier ? `That email isn't a member of ${input.tier}.` : 'That email isn\'t a member of any tier of the site.');
+    await this.#revoke(site.id);
+    return { site_id: site.id, email, ...(input.tier ? { tier: input.tier } : {}), removed };
+  }
+
+  // A site's memberships, a page at a time (M6 R155). Ended ones DynamoDB
+  // hasn't removed yet are left out: they no longer open anything.
+  async listMembers(caller: Caller, input: { siteId: string; tier?: string; limit?: number; cursor?: string }) {
+    const site = await this.#ownSite(caller, input.siteId);
+    const now = this.#now().toISOString();
+    const page = await this.#page(() => this.#d.store.listMemberships(site.id, {
+      limit: input.limit ?? MEMBERS_PAGE, ...(input.tier ? { tier: input.tier } : {}), ...(input.cursor ? { cursor: input.cursor } : {}),
+    }));
+    return {
+      site_id: site.id,
+      tiers: tiersOf(site.rules ?? []),
+      members: page.items.filter((m) => !m.expiresAt || m.expiresAt > now).map(memberOf),
+      ...(page.cursor ? { next_cursor: page.cursor } : {}),
+    };
+  }
+
+  // Every share across the caller's sites, soonest end first, so forgotten
+  // ones are easy to find (M6 R165).
+  async listShares(caller: Caller, input: { endingWithinDays?: number; siteId?: string; limit?: number; cursor?: string }) {
+    const site = input.siteId ? await this.#ownSite(caller, input.siteId) : undefined;
+    const now = this.#now();
+    const page = await this.#page(() => this.#d.store.listOwnerShares(caller.userId, {
+      limit: input.limit ?? MEMBERS_PAGE,
+      ...(input.endingWithinDays ? { before: new Date(now.getTime() + input.endingWithinDays * DAY_S * 1000).toISOString() } : {}),
+      ...(site ? { siteId: site.id } : {}),
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+    }));
+    const sites = new Map((await this.#d.store.listSitesByOwner(caller.userId)).map((s) => [s.id, s]));
+    return {
+      shares: page.items.flatMap((g) => {
+        const s = sites.get(g.siteId);
+        return s && (g.expiresAt ?? '') > now.toISOString() ? [{ site_id: g.siteId, url: this.#url(s) + g.path.slice(1), ...shareOf(g) }] : [];
+      }),
+      ...(page.cursor ? { next_cursor: page.cursor } : {}),
+    };
+  }
+
+  async #page<T>(query: () => Promise<T>): Promise<T> {
+    try {
+      return await query();
+    } catch (err) {
+      if (err instanceof BadCursor) throw new ToolError('That cursor isn\'t one Passa returned. Start again without it.');
+      throw err;
+    }
   }
 
   // Removes one shared path, or every path shared with the email, and makes
@@ -887,8 +1041,9 @@ export class Publisher {
     return { site_id: site.id, email, ...(input.path ? { path: input.path } : {}), unshared: removed };
   }
 
-  // After DynamoDB removes an expired share (M5 R133): as an unshare.
-  async expireShare(siteId: string): Promise<void> {
+  // After DynamoDB removes an ended share or membership (M5 R133, M6 R158):
+  // as removing it.
+  async expireGrant(siteId: string): Promise<void> {
     await this.#revoke(siteId);
   }
 
@@ -903,7 +1058,7 @@ export class Publisher {
     const site = await this.#ownSite(caller, input.siteId);
     const now = this.#now();
     const rules = site.rules ?? [];
-    const grants = (await this.#d.store.listGrants(site.id)).filter((g) => grantIsLive(g, now));
+    const grants = (await this.#d.store.listGrants(site.id)).filter((g) => !g.expiresAt || g.expiresAt > now.toISOString());
     const { public: open, members } = regions(rules);
     // A share opens the rule at its path (M6 R156); with that rule gone, it opens nothing.
     const opensNothing = grants.filter((g) => !rules.some((r) => r.path === g.path));
@@ -912,6 +1067,7 @@ export class Publisher {
       url: this.#url(site),
       access: accessOf(rules),
       rules,
+      tiers: tiersOf(rules),
       public_urls: open.map((p) => this.#url(site) + p.slice(1)),
       member_urls: members.map((p) => this.#url(site) + p.slice(1)),
       shares: grants.map((g) => ({ ...shareOf(g), ...(opensNothing.includes(g) ? { opens_nothing: true } : {}) })),

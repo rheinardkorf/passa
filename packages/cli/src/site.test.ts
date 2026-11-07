@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseRules } from './deploy.ts';
+import { grantDates, parseRules } from './deploy.ts';
 import { initSite } from './init.ts';
 import { buildSite } from './site.ts';
 
@@ -168,5 +168,23 @@ describe('access options', () => {
     expect(parseRules({})).toBeUndefined();
     expect(parseRules({ rule: ['/lessons/=gold, silver'] })).toEqual([{ path: '/lessons/', access: ['gold', 'silver'] }]);
     expect(() => parseRules({ rule: ['public'] })).toThrow(/<path>=<access>/);
+  });
+});
+
+describe('grant dates (M6 R158)', () => {
+  const now = new Date('2026-11-07T10:00:00Z');
+  it('turn --from, --expires and --for into a start and an end', () => {
+    expect(grantDates({}, now)).toEqual({});
+    expect(grantDates({ from: '2026-12-01', expires: '2026-12-31' }, now)).toEqual({ starts_at: '2026-12-01T00:00:00Z', expires_at: '2026-12-31T23:59:59Z' });
+    expect(grantDates({ for: '30d' }, now)).toEqual({ expires_at: '2026-12-07T10:00:00.000Z' });
+    expect(grantDates({ for: '2w' }, now)).toEqual({ expires_at: '2026-11-21T10:00:00.000Z' });
+    expect(grantDates({ from: '2026-12-01', for: '6m' }, now)).toEqual({ starts_at: '2026-12-01T00:00:00Z', expires_at: '2027-06-01T00:00:00.000Z' });
+    expect(grantDates({ for: '1y' }, now)).toEqual({ expires_at: '2027-11-07T10:00:00.000Z' });
+  });
+
+  it('refuses both an end and a duration, and durations it can\'t read', () => {
+    expect(() => grantDates({ expires: '2026-12-31', for: '30d' }, now)).toThrow(/Choose one/);
+    expect(() => grantDates({ for: '30' }, now)).toThrow(/--for takes/);
+    expect(() => grantDates({ from: 'soon', for: '30d' }, now)).toThrow(/--from takes/);
   });
 });
