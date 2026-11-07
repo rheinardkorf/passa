@@ -1,6 +1,6 @@
 // Changing sites from the CLI (R106–R110): publish and sync a folder (with the
-// cards passa render draws), access, names, rollback and delete. The server
-// decides what's allowed; the CLI asks before anything it confirms.
+// cards passa render draws), access, sharing (M5 R139), names, rollback and
+// delete. The server decides what's allowed; the CLI asks before anything it confirms.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -169,9 +169,30 @@ export async function rollback(target: Target, version: string | undefined, opti
 export const deleteSite = (target: Target, now: boolean, options: CallOptions = {}) =>
   callTool<Record<string, unknown>>(target.server, 'delete', { site_id: target.siteId, now }, options);
 
-// --rule /docs/=public, --public, --private: the rules they mean.
-export function parseRules(values: { public?: boolean; private?: boolean; rule?: string[] }): Rule[] | undefined {
+// M5 R129: the person checks the email before anything is shared, as an agent
+// reads it back. A date alone expires at the end of that day (UTC).
+export async function share(target: Target, email: string, options: CallOptions & { ask: Ask; path?: string; expires?: string }) {
+  const address = email.trim().toLowerCase();
+  const expiresAt = options.expires && /^\d{4}-\d{2}-\d{2}$/.test(options.expires) ? `${options.expires}T23:59:59Z` : options.expires;
+  const what = options.path && options.path !== '/' ? `${options.path} on ${target.siteId}` : target.siteId;
+  const question = `Share ${what} with ${address}? They'll get an email inviting them to sign in with that address and open it.`;
+  if (!(await options.ask(question))) throw new Error('Nothing was shared.');
+  return callTool<Record<string, unknown>>(target.server, 'share', {
+    site_id: target.siteId, email: address, confirm_share: true, ...(options.path ? { path: options.path } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}),
+  }, options);
+}
+
+export const unshare = (target: Target, email: string, options: CallOptions & { path?: string } = {}) =>
+  callTool<Record<string, unknown>>(target.server, 'unshare', { site_id: target.siteId, email: email.trim().toLowerCase(), ...(options.path ? { path: options.path } : {}) }, options);
+
+export type Share = { email: string; path: string; shared_at: string; expires_at?: string; invited_at?: string; opens_nothing?: boolean };
+export const listAccess = (target: Target, options: CallOptions = {}) =>
+  callTool<{ url: string; access: string; rules: Rule[]; shares: Share[]; note?: string }>(target.server, 'list_access', { site_id: target.siteId }, options);
+
+// --rule /docs/=public, --public, --shared, --private: the rules they mean.
+export function parseRules(values: { public?: boolean; shared?: boolean; private?: boolean; rule?: string[] }): Rule[] | undefined {
   if (values.public) return [{ path: '/', tier: 'public' }];
+  if (values.shared) return [{ path: '/', tier: 'shared' }];
   if (values.private) return [];
   if (!values.rule?.length) return undefined;
   return values.rule.map((r) => {

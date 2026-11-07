@@ -15,6 +15,7 @@ import {
   createTables,
   Events,
   loadTokenKey,
+  type MailProvider,
   OidcStore,
   senderDomain,
   signingKeyKey,
@@ -57,8 +58,19 @@ function wiring() {
   return { config, client, db, s3, ses, kms, secrets, store, edge, events, deps, origin, domainOrigin };
 }
 
-async function authApp(w: ReturnType<typeof wiring>) {
+// Moto accepts the email but delivers nothing, so it's printed here too.
+function localMailer(w: ReturnType<typeof wiring>): MailProvider {
   const ses = new SesMailer(w.ses, w.config.email.from);
+  return {
+    kind: 'ses',
+    async send(email) {
+      await ses.send(email);
+      out(`\nEmail to ${email.to}: ${email.subject}\n${email.text}`);
+    },
+  };
+}
+
+async function authApp(w: ReturnType<typeof wiring>) {
   const { cookieKeys, siteKeys } = await loadAuthSecrets(w.secrets, AUTH_SECRET);
   const [siteKey] = siteKeys;
   if (!siteKey) throw new Error('no site key');
@@ -66,14 +78,7 @@ async function authApp(w: ReturnType<typeof wiring>) {
     store: w.store,
     events: w.events,
     config: w.config,
-    // Moto accepts the email but delivers nothing, so it's printed here too.
-    mailer: {
-      kind: 'ses',
-      async send(email) {
-        await ses.send(email);
-        out(`\nEmail to ${email.to}: ${email.subject}\n${email.text}`);
-      },
-    },
+    mailer: localMailer(w),
     siteKey: async () => siteKey,
     urls: { auth: `http://localhost:${PORT}`, mcp: `http://mcp.localhost:${PORT}`, site: w.origin, domain: w.domainOrigin },
     oidc: new OidcStore(w.db, tables.main),
@@ -86,6 +91,7 @@ async function authApp(w: ReturnType<typeof wiring>) {
 async function mcpApp(w: ReturnType<typeof wiring>) {
   return createMcpApp({
     ...w.deps,
+    mailer: localMailer(w),
     oidc: new OidcStore(w.db, tables.main),
     tokenKeys: [await loadTokenKey(w.kms, TOKEN_KEY)],
     issuer: `http://localhost:${PORT}`,

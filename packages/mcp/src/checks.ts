@@ -109,7 +109,7 @@ export function kindOf(path: string): FileKind | undefined {
   return dot > 0 ? KINDS[name.slice(dot + 1).toLowerCase()] : undefined;
 }
 
-export type Limits = Config['limits'];
+export type Limits = Omit<Config['limits'], 'sharesPerSite'>;
 
 // Checks paths, counts and sizes before any content is read or stored. Used
 // for inline files and for the file list given to begin_upload.

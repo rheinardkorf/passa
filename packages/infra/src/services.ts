@@ -179,6 +179,9 @@ export class ServicesStack extends Stack {
     });
     mcp.addEnvironment(ENV.cardsFunction, cards.functionName);
     cards.grantInvoke(mcp);
+    // Sharing invites go through the mail function too (M5 R130, R145).
+    mcp.addEnvironment(ENV.mailFunction, mailer.functionName);
+    mailer.grantInvoke(mcp);
     data.table.grantReadWriteData(mcp);
     data.events.grantWriteData(mcp);
     data.sites.grantReadWrite(mcp);
@@ -208,7 +211,8 @@ export class ServicesStack extends Stack {
     new ARecord(this, 'McpA', { zone, recordName: 'mcp', target: mcpTarget });
     new AaaaRecord(this, 'McpAaaa', { zone, recordName: 'mcp', target: mcpTarget });
 
-    // Hard deletes: the table stream, filtered to TTL removals of PURGE items.
+    // Hard deletes, expired held names and expired shares (M5 R133): the table
+    // stream, filtered to TTL removals of PURGE, NAME and GRANT items.
     const purge = nodeFunction(this, 'PurgeFunction', {
       entry: 'packages/mcp/src/purge.ts',
       environment,
@@ -220,7 +224,9 @@ export class ServicesStack extends Stack {
     data.events.grantWriteData(purge);
     data.sites.grantRead(purge);
     data.sites.grantDelete(purge);
-    purge.addToRolePolicy(kvsWritePolicy(data.edgeStore, 'remove'));
+    // Removes the edge records of purged sites and names, and writes those of
+    // sites whose shares expired, with the new access version.
+    purge.addToRolePolicy(kvsWritePolicy(data.edgeStore));
     // TableV2's typings clash with exactOptionalPropertyTypes; it is an ITable.
     purge.addEventSource(new DynamoEventSource(data.table as unknown as ITable, {
       startingPosition: StartingPosition.LATEST,
@@ -233,6 +239,10 @@ export class ServicesStack extends Stack {
         eventName: FilterRule.isEqual('REMOVE'),
         userIdentity: { principalId: FilterRule.isEqual('dynamodb.amazonaws.com') },
         dynamodb: { OldImage: { pk: { S: FilterRule.beginsWith('NAME#') } } },
+      }), FilterCriteria.filter({
+        eventName: FilterRule.isEqual('REMOVE'),
+        userIdentity: { principalId: FilterRule.isEqual('dynamodb.amazonaws.com') },
+        dynamodb: { OldImage: { sk: { S: FilterRule.beginsWith('GRANT#') } } },
       })],
     }));
 

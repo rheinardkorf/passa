@@ -9,6 +9,8 @@ export const mainTable = (TableName: string): CreateTableCommandInput => ({
     { AttributeName: 'sk', AttributeType: 'S' },
     { AttributeName: 'gsi1pk', AttributeType: 'S' },
     { AttributeName: 'gsi1sk', AttributeType: 'S' },
+    { AttributeName: 'gsi2pk', AttributeType: 'S' },
+    { AttributeName: 'gsi2sk', AttributeType: 'S' },
   ],
   KeySchema: [
     { AttributeName: 'pk', KeyType: 'HASH' },
@@ -20,6 +22,16 @@ export const mainTable = (TableName: string): CreateTableCommandInput => ({
       KeySchema: [
         { AttributeName: 'gsi1pk', KeyType: 'HASH' },
         { AttributeName: 'gsi1sk', KeyType: 'RANGE' },
+      ],
+      Projection: { ProjectionType: 'ALL' },
+    },
+    // Overloaded and sparse: only items that set gsi2pk are in it. USERS lists
+    // every user by email (M5 R143).
+    {
+      IndexName: 'gsi2',
+      KeySchema: [
+        { AttributeName: 'gsi2pk', KeyType: 'HASH' },
+        { AttributeName: 'gsi2sk', KeyType: 'RANGE' },
       ],
       Projection: { ProjectionType: 'ALL' },
     },

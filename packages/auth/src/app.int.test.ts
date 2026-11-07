@@ -160,7 +160,8 @@ describe('signing in to view a site', () => {
     expect(`${url.origin}${url.pathname}`).toBe(`https://${siteId}.example.com/_passa/session`);
     expect(url.searchParams.get('p')).toBe('/docs/');
     expect(url.searchParams.get('l')).toBe('3600');
-    expect(url.searchParams.get('t')).toMatch(new RegExp(`^k1\\.${siteId}\\.1\\.\\d+\\.[0-9a-f]{64}$`));
+    // The owner's handoff carries the owner's tier code, o (M5 R136).
+    expect(url.searchParams.get('t')).toMatch(new RegExp(`^k1\\.${siteId}\\.1\\.\\d+\\.o\\.[0-9a-f]{64}$`));
 
     expect((await events('signin.continue')).some((e) => e.userId === owner.id && e.result === 'ok')).toBe(true);
   });

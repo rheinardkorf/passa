@@ -4,15 +4,23 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   type Config,
   type Events,
+  grantIsLive,
   handoffUrl,
   isDomain,
   isName,
   isSiteId,
+  newUserId,
+  ruleFor,
+  ruleId,
+  servedPath,
+  sharedRulesFor,
   type SigningKey,
+  type SiteTiers,
   type Site,
   siteDomain,
   type Store,
   type User,
+  viewerTiers,
 } from '@passa/shared';
 import type { Mailer } from './mailer.ts';
 import { magicLinkEmail, type Next, type Target } from './pages.ts';
@@ -70,17 +78,33 @@ export class SignIn {
     return (this.#d.now?.() ?? new Date()).getTime();
   }
 
-  // Only a site's owner may view it, and only while it's active. A name counts
-  // only while it's the site's current one; held names redirect at the edge.
-  async #viewableSite(user: User, label: string): Promise<Site | undefined> {
+  // The site a label names, while it's active. A name counts only while it's
+  // the site's current one (held names redirect at the edge), and a domain
+  // only once it's live on the site (M4).
+  async #site(label: string): Promise<Site | undefined> {
     const siteId = isSiteId(label) ? label
       : isName(label) ? (await this.#d.store.getName(label))?.siteId
       : isDomain(label) ? (await this.#d.store.getDomain(label))?.siteId : undefined;
     const site = siteId ? await this.#d.store.getSite(siteId) : undefined;
-    // A name or domain counts only while it's the site's (a domain once live: M4).
     if (isName(label) && site?.name !== label) return undefined;
     if (isDomain(label) && !site?.domains?.includes(label)) return undefined;
-    return site && site.status === 'active' && site.ownerId === user.id ? site : undefined;
+    return site?.status === 'active' ? site : undefined;
+  }
+
+  // What an email may open on a site: everything as its owner (o), or the
+  // shared rules at or under the paths shared with it (M5 R135, R136).
+  async #tiersFor(site: Site, user: { id: string; email: string } | undefined, email: string): Promise<SiteTiers | undefined> {
+    if (user && site.ownerId === user.id) return 'o';
+    const now = new Date(this.#now());
+    const paths = (await this.#d.store.grantsFor(site.id, email)).filter((g) => grantIsLive(g, now)).map((g) => g.path);
+    const rules = sharedRulesFor(site.rules ?? [], paths);
+    return rules.length ? viewerTiers(rules.map((r) => ruleId(r.path))) : undefined;
+  }
+
+  async #viewableSite(user: User, label: string): Promise<{ site: Site; tiers: SiteTiers } | undefined> {
+    const site = await this.#site(label);
+    const tiers = site ? await this.#tiersFor(site, user, user.email) : undefined;
+    return site && tiers ? { site, tiers } : undefined;
   }
 
   // Always resolves the same way, whether or not an email is sent (R15).
@@ -104,7 +128,16 @@ export class SignIn {
       return;
     }
 
-    const user = await store.findUserByEmail(email);
+    let user = await store.findUserByEmail(email);
+    // Someone a site is shared with may have no account yet: they get one with
+    // no roles, which can sign in to view but never publish (M5 R135).
+    if (!user && next && 'site' in next) {
+      const site = await this.#site(next.site.siteId);
+      if (site && (await this.#tiersFor(site, undefined, email))) {
+        user = { id: newUserId(), email, roles: [], status: 'active', createdAt: new Date(now).toISOString() };
+        await store.putUser(user);
+      }
+    }
     const allowed = !!user && user.status === 'active'
       && (!next || ('site' in next ? !!(await this.#viewableSite(user, next.site.siteId)) : isPublisher(user)));
     if (!user || !allowed) {
@@ -179,11 +212,17 @@ export class SignIn {
   // Where to send a signed-in user who asked for a site: the edge's handoff
   // URL, which sets the site cookie. Undefined when they may not view it.
   async siteRedirect(user: User, target: Target, ip: string): Promise<string | undefined> {
-    const site = await this.#viewableSite(user, target.siteId);
-    if (!site) {
+    const viewable = await this.#viewableSite(user, target.siteId);
+    // Someone the site is shared with is refused paths not shared with them
+    // here: a cookie without them would only send them back (M5 R136).
+    const rule = viewable ? ruleFor(viewable.site.rules ?? [], servedPath(target.path)) : undefined;
+    const opens = viewable && (viewable.tiers === 'o' || rule?.tier === 'public'
+      || (rule?.tier === 'shared' && viewable.tiers.split('-').includes(ruleId(rule.path))));
+    if (!viewable || !opens) {
       await this.#d.events.record({ action: 'site.view', result: 'refused', userId: user.id, siteId: target.siteId, ip });
       return undefined;
     }
+    const { site, tiers } = viewable;
     return handoffUrl({
       key: await this.#d.siteKey(),
       siteId: site.id,
@@ -193,6 +232,7 @@ export class SignIn {
       origin: site.domain ? (this.urls.domain ?? ((d: string) => `https://${d}`))(site.domain) : this.urls.site(site.name ?? site.id),
       path: target.path,
       cookieLifetime: this.#d.config.lifetimes.siteCookie,
+      tiers,
       now: this.#now(),
     });
   }

@@ -53,8 +53,9 @@ describe('services stack', () => {
     const holders = (action: string) => policies.filter((p) => p.text.includes(action)).map((p) => p.id.replace(/ServiceRole.*/, ''));
     expect(holders('kms:Sign')).toEqual(['AuthFunction']);
     expect(holders('ses:SendEmail')).toEqual(['MailFunction']);
-    expect(holders('cloudfront-keyvaluestore:PutKey')).toEqual(['McpFunction']);
-    // Purge and malware findings can only take sites down.
+    // Purge writes the edge records of sites whose shares expired, from the
+    // table as it is (M5 R133); malware findings can only take sites down.
+    expect(holders('cloudfront-keyvaluestore:PutKey')).toEqual(['McpFunction', 'PurgeFunction']);
     expect(holders('cloudfront-keyvaluestore:DeleteKey')).toEqual(['McpFunction', 'PurgeFunction', 'ScansFunction']);
     expect(holders('s3:PutObject')).toEqual(['CardsFunction', 'McpFunction']);
     const cards = policies.find((p) => p.id.startsWith('CardsFunction'))?.text ?? '';
@@ -109,14 +110,21 @@ describe('services stack', () => {
     services.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: Match.objectLike({ PASSA_MALWARE_SCAN: '1' }) } });
   });
 
-  it('runs only on TTL removals of PURGE and NAME items', () => {
+  it('runs only on TTL removals of PURGE, NAME and GRANT items', () => {
     const mapping = Object.values(services.findResources('AWS::Lambda::EventSourceMapping'))[0];
     const patterns = (mapping?.Properties.FilterCriteria.Filters as { Pattern: string }[]).map((f) => JSON.parse(f.Pattern));
-    expect(patterns).toEqual(['PURGE#', 'NAME#'].map((prefix) => ({
-      eventName: ['REMOVE'],
-      userIdentity: { principalId: ['dynamodb.amazonaws.com'] },
-      dynamodb: { OldImage: { pk: { S: [{ prefix }] } } },
-    })));
+    const ttlRemoval = (image: object) => ({ eventName: ['REMOVE'], userIdentity: { principalId: ['dynamodb.amazonaws.com'] }, dynamodb: { OldImage: image } });
+    expect(patterns).toEqual([
+      ttlRemoval({ pk: { S: [{ prefix: 'PURGE#' }] } }),
+      ttlRemoval({ pk: { S: [{ prefix: 'NAME#' }] } }),
+      ttlRemoval({ sk: { S: [{ prefix: 'GRANT#' }] } }),
+    ]);
+  });
+
+  it('lets auth. and mcp. hand email to the mail function (M5 R130, R145)', () => {
+    const fns = services.findResources('AWS::Lambda::Function');
+    const withMail = Object.entries(fns).filter(([, f]) => f.Properties.Environment?.Variables?.PASSA_MAIL_FUNCTION).map(([id]) => id.replace(/[A-F0-9]{8}$/, ''));
+    expect(withMail).toEqual(['AuthFunction', 'McpFunction']);
   });
 
   it('removes old versions once a day, with no access to the edge or to write files', () => {

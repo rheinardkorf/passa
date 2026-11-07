@@ -29,7 +29,7 @@ const inlineFile = z.strictObject({
 const inlineFiles = z.array(inlineFile).min(1).max(1000).describe('The files, for sites up to the inline size limit. Use begin_upload for larger sites');
 const rules = z.array(z.strictObject({
   path: z.string().min(1).max(MAX_RULE_PATH).describe('/ for the whole site, or a folder ending in /, such as /docs/'),
-  tier: z.enum(['private', 'public']).describe('public: anyone with the link, without signing in. private: only you'),
+  tier: z.enum(['private', 'shared', 'public']).describe('public: anyone with the link, without signing in. shared: you and everyone the site is shared with, after signing in. private: only you'),
 })).max(100).describe('Who can open which paths. The longest matching path decides; anything no rule covers is private');
 const confirmPublic = z.boolean().default(false).describe('Must be true when the rules make anything public. Ask the person first');
 
@@ -91,6 +91,19 @@ const schemas = {
     cursor,
   }),
   set_access: z.strictObject({ site_id: siteId, rules, confirm_public: confirmPublic }),
+  share: z.strictObject({
+    site_id: siteId,
+    email: z.email().max(254).describe('The email to share with, exactly as the person gave it'),
+    path: z.string().max(MAX_RULE_PATH).regex(/^\/(?:[^/]+\/)*$/).default('/').describe('/ or a folder ending in /: what the email may open, with shared folders under it. It gets a shared rule of its own unless it\'s public'),
+    expires_at: z.iso.datetime({ offset: true }).optional().describe('When the share stops working: at least an hour and at most a year ahead. Without it, it lasts until unshared'),
+    confirm_share: z.boolean().default(false).describe('Must be true. Read the email back to the person first, since a typo shares private pages with a stranger'),
+  }),
+  unshare: z.strictObject({
+    site_id: siteId,
+    email: z.email().max(254),
+    path: z.string().max(MAX_RULE_PATH).optional().describe('One shared path to take away; without it, every path shared with the email'),
+  }),
+  list_access: z.strictObject({ site_id: siteId }),
   set_name: z.strictObject({
     site_id: siteId,
     name: z.string().max(40).nullable().describe('The new name, such as cv for cv.<site domain>; null removes the name'),
@@ -117,11 +130,11 @@ const schemas = {
 };
 
 // The event detail for a change of rules (R48): what became public or private.
-function accessDetail(result: object): { detail?: string } {
+function accessDetail(result: object, prefix = ''): { detail?: string } {
   const r: Partial<AccessChange> = result;
-  if (!r.made_public && !r.made_private) return {};
+  if (!r.made_public && !r.made_private) return prefix ? { detail: prefix.slice(0, 500) } : {};
   const list = (paths: string[] | undefined) => (paths?.length ? paths.join(', ') : 'nothing');
-  return { detail: `made public: ${list(r.made_public)}; made private: ${list(r.made_private)}`.slice(0, 500) };
+  return { detail: `${prefix ? `${prefix}; ` : ''}made public: ${list(r.made_public)}; made shared: ${list(r.made_shared)}; made private: ${list(r.made_private)}`.slice(0, 500) };
 }
 
 // Text (such as the theme guide) is returned as it is; anything else as JSON.
@@ -140,7 +153,7 @@ function size(bytes: number): string {
 }
 
 // Descriptions state this deployment's actual limits, so agents don't have to guess.
-function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retention }: Config) {
+function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retention, rateLimits }: Config) {
   const inline = size(limits.inlinePublish);
   const minutes = `${Math.round(lifetimes.uploadUrl / 60)} minutes`;
   const sizes = `Limits: ${limits.files} files, ${size(limits.file)} per file, ${size(limits.site)} per site.`;
@@ -158,12 +171,19 @@ function descriptions({ limits, lifetimes, deleteGraceDays, nameHoldDays, retent
       + `A name is 2–40 lowercase letters, digits and single hyphens. When a site's name changes or is removed, the old name is held for ${nameHoldDays} days: it keeps redirecting, and only you can claim it again. `
       + 'Names are first come, first served, so check with the person before choosing one. '
       + 'A named site\'s public pages can appear in search engines; to keep a page out, add <meta name="robots" content="noindex"> to it.',
-    set_access: 'Set who can open which parts of a site, replacing its rules. Each rule is / or a folder ending in /, and a tier: public (anyone with the link, without signing in) or private (only you). '
+    set_access: 'Set who can open which parts of a site, replacing its rules. Each rule is / or a folder ending in /, and a tier: public (anyone with the link, without signing in), shared (you and everyone the site is shared with, after signing in; see share) or private (only you). '
       + 'The longest matching rule decides, and anything no rule covers is private, so rules: [] makes the whole site private. '
-      + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. '
+      + 'Before making anything public, check with the person: confirm_public must be true for any change that makes something public. Private and shared need no confirmation. '
       + 'Changes take effect within seconds, and everywhere within about a minute. '
       + 'On a Markdown site, the pages are rendered again with the new rules in the same change, so lists, tags and the feed never name a page the rules make private. '
       + 'Public pages of a named site can appear in search engines; unnamed sites are never indexed.',
+    share: `Share part of a site with someone by email, such as one client's proposal: they can then open path (default /, the whole site) after signing in with that email by magic link, and nothing else that isn't public. `
+      + 'The path gets a shared rule of its own, so sharing /proposals/acme/ with one person and /proposals/globex/ with another keeps each from the other. Shared folders under the path open with it (also_opens lists them; tell the person). A public path stays public. '
+      + 'They get an invite with your email and the address, never the site\'s title; sharing the same path with the same email again resends it, at most once an hour. '
+      + `Before sharing, read the email back to the person: confirm_share must be true. A site can be shared with ${limits.sharesPerSite} emails, and ${rateLimits.invitesPerDay} invites can be sent a day. `
+      + 'Pass expires_at for a share that stops working at a set time.',
+    unshare: 'Stop sharing a path of a site with an email, or with no path, everything shared with them. Their next request is refused, while everyone else keeps their access. The rules don\'t change.',
+    list_access: 'List who can open a site: its rules, its public and shared URLs, and its shares: each email and path, when it was shared, when it expires and when the invite was sent.',
     get_site: `Get a site's details, its versions newest first, and the files of one version with their sizes and SHA-256 hashes, but not their contents. On a Markdown site, sources have role source, and pages made from them have role rendered and rendered_from; _passa/access.yml is a read-only copy of the rules, for folders taken out of Passa. Use get_files to read files. If next_cursor is returned, pass it as cursor for older versions. ${kept}`,
     find_sites: 'List your sites newest first, optionally matching a title or name. If next_cursor is returned, pass it as cursor for the next page.',
     get_files: `Get the contents of a site's files. Text files come back as text, up to ${inline} in total; binary files, and text past that, come back as download links valid for ${minutes}. To change a few words, use update with edits instead of resending the file.`,
@@ -265,6 +285,22 @@ export function createServer(deps: Deps, caller: Caller, log: Log): McpServer {
     const r = await publisher.setAccess(caller, { siteId: i.site_id, rules: i.rules, confirmPublic: i.confirm_public });
     return { result: r, siteId: r.site_id, ...accessDetail(r) };
   });
+
+  tool('share', describe.share, { openWorldHint: true }, schemas.share, async (i) => {
+    const r = await publisher.share(caller, {
+      siteId: i.site_id, email: i.email, path: i.path, confirmShare: i.confirm_share, ...(i.expires_at ? { expiresAt: i.expires_at } : {}),
+    });
+    return { result: r, siteId: r.site_id, ...accessDetail(r, `shared ${r.share.path} with ${r.share.email}${r.invite_sent ? ', invited' : ''}`) };
+  });
+
+  tool('unshare', describe.unshare, { destructiveHint: true, idempotentHint: true }, schemas.unshare, async (i) => {
+    const r = await publisher.unshare(caller, { siteId: i.site_id, email: i.email, ...(i.path ? { path: i.path } : {}) });
+    return { result: r, siteId: r.site_id, detail: `unshared ${r.path ?? 'everything'} with ${r.email}` };
+  });
+
+  tool('list_access', describe.list_access, { readOnlyHint: true }, schemas.list_access, async (i) => ({
+    result: await publisher.listAccess(caller, { siteId: i.site_id }),
+  }));
 
   tool('get_site', describe.get_site, { readOnlyHint: true }, schemas.get_site, async (i) => ({
     result: await publisher.getSite(caller, {

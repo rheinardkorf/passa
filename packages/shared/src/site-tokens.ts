@@ -11,6 +11,13 @@ export const isSitePath = (path: string): boolean => path.startsWith('/') && SIT
 // Handoff tokens are only valid briefly: long enough to follow one redirect.
 export const HANDOFF_TTL_S = 60;
 
+// What a cookie lets its holder open on a site (M5 R136): o, the owner, opens
+// every path; s-<id>-<id>…, someone the site is shared with, opens the shared
+// rules with those IDs (ruleId). Public paths need no cookie at all.
+export type SiteTiers = 'o' | `s-${string}`;
+export const MAX_VIEWER_RULES = 20;
+export const viewerTiers = (ids: string[]): SiteTiers => `s-${ids.slice(0, MAX_VIEWER_RULES).join('-')}`;
+
 const sign = (key: SigningKey, purpose: string, fields: (string | number)[]) =>
   createHmac('sha256', key.secret).update(`${purpose}.${fields.join('.')}`).digest('hex');
 
@@ -23,17 +30,18 @@ export function handoffUrl(input: {
   origin: string; // e.g. https://<site-id>.<domain>
   path: string;
   cookieLifetime: number;
+  tiers: SiteTiers;
   now?: number; // ms
 }): string {
   const exp = Math.floor((input.now ?? Date.now()) / 1000) + HANDOFF_TTL_S;
-  const fields = [input.key.kid, input.siteId, input.accessVersion, exp];
+  const fields = [input.key.kid, input.siteId, input.accessVersion, exp, input.tiers];
   const token = `${fields.join('.')}.${sign(input.key, 'handoff', [...fields, input.cookieLifetime, input.path])}`;
   const query = new URLSearchParams({ t: token, l: String(input.cookieLifetime), p: input.path });
   return `${input.origin}/_passa/session?${query}`;
 }
 
 // A site cookie value, as the edge issues it. Used by tests.
-export function siteCookie(input: { key: SigningKey; siteId: string; accessVersion: number; expires: number }): string {
-  const fields = [input.key.kid, input.siteId, input.accessVersion, input.expires];
+export function siteCookie(input: { key: SigningKey; siteId: string; accessVersion: number; expires: number; tiers: SiteTiers }): string {
+  const fields = [input.key.kid, input.siteId, input.accessVersion, input.expires, input.tiers];
   return `${fields.join('.')}.${sign(input.key, 'cookie', fields)}`;
 }

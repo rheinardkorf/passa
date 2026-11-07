@@ -391,7 +391,7 @@ describe('public access (M2)', () => {
     const site = (await call('publish', { title: 'Back to private', files: page('x'), rules: PUBLIC, confirm_public: true })).json();
     expect(site).toMatchObject({ access: 'public', public_urls: [site.url] });
     const r = (await call('set_access', { site_id: site.site_id, rules: [] })).json();
-    expect(r).toMatchObject({ access: 'private', made_private: ['/'], public_urls: [], note: 'Paths made private can stay public at some edge locations for up to a minute.' });
+    expect(r).toMatchObject({ access: 'private', made_private: ['/'], public_urls: [], note: 'Paths made private or shared can stay open as before at some edge locations for up to a minute.' });
     expect(r.rules).toBeUndefined();
     expect(await edgeRules(site.site_id)).toEqual([]);
   });
@@ -407,7 +407,7 @@ describe('public access (M2)', () => {
     const site = (await call('publish', { title: 'Rules', files: page('x') })).json();
     const many = Array.from({ length: 21 }, (_, n) => ({ path: `/f${n}/`, tier: 'private' }));
     expect((await call('set_access', { site_id: site.site_id, rules: many })).text).toBe('Publish refused: more than 20 rules');
-    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'shared' }] })).text).toContain('Input validation error');
+    expect((await call('set_access', { site_id: site.site_id, rules: [{ path: '/', tier: 'members' }] })).text).toContain('Input validation error');
   });
 
   it('replaces rules with an update, or keeps them when none are sent (R35)', async () => {
@@ -450,8 +450,8 @@ describe('public access (M2)', () => {
 
   it('records what each change made public or private (R48)', async () => {
     const events = (await eventsFor('alice')).filter((e) => e.action === 'set_access' && e.result === 'ok');
-    expect(events.map((e) => e.detail)).toContain('made public: /; made private: nothing');
-    expect(events.map((e) => e.detail)).toContain('made public: nothing; made private: /');
+    expect(events.map((e) => e.detail)).toContain('made public: /; made shared: nothing; made private: nothing');
+    expect(events.map((e) => e.detail)).toContain('made public: nothing; made shared: nothing; made private: /');
   });
 });
 

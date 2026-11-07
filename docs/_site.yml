@@ -11,6 +11,7 @@ nav:
     items:
       - { title: Markdown sites, url: /markdown/ }
       - { title: Access, url: /access/ }
+      - { title: Sharing, url: /sharing/ }
       - { title: Themes, url: /themes/ }
       - { title: Social cards, url: /social-cards/ }
   - title: Reference
@@ -20,6 +21,8 @@ nav:
   - title: Self-hosting
     items:
       - { title: Deploying Passa, url: /deploying/ }
+      - { title: Email, url: /email/ }
+      - { title: Publishers and admins, url: /users/ }
       - { title: Security, url: /security/ }
   - title: Custom domains
     items:

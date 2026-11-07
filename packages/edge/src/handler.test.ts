@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, SITE_ID_PATTERN, siteCookie } from '@passa/shared';
+import { type EdgeRecord, handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, ruleId, SITE_ID_PATTERN, siteCookie, type SiteTiers, viewerTiers } from '@passa/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { functionCode, MAX_FUNCTION_BYTES, responseFunctionCode } from './build.ts';
 import { type EdgeRequest, type EdgeResponse, isResponse, loadHandler, loadViewerResponse } from './load.ts';
@@ -38,8 +38,8 @@ function request(uri: string, extra: { host?: string; cookie?: string; query?: R
 
 const domains = { sites: 'example.com', auth: 'https://auth.example.com' };
 const run = (event: { request: EdgeRequest }) => handle(event, { kvs, crypto, now: NOW, ...domains });
-const cookie = (overrides: Partial<{ siteId: string; accessVersion: number; expires: number; key: typeof key }> = {}) =>
-  siteCookie({ key, siteId: SITE, accessVersion: 1, expires: now + 600, ...overrides });
+const cookie = (overrides: Partial<{ siteId: string; accessVersion: number; expires: number; key: typeof key; tiers: SiteTiers }> = {}) =>
+  siteCookie({ key, tiers: 'o', siteId: SITE, accessVersion: 1, expires: now + 600, ...overrides });
 
 async function response(event: { request: EdgeRequest }): Promise<EdgeResponse> {
   const result = await run(event);
@@ -103,7 +103,7 @@ describe('without a valid cookie (R10, R12)', () => {
     const r = await response(request('/', { host: `${missing}.example.com` }));
     expect(r.headers.location?.value).toBe(`https://auth.example.com/site/signin?site=${missing}&path=%2F`);
     // Even with a cookie that would be valid if the site existed.
-    const c = siteCookie({ key, siteId: missing, accessVersion: 1, expires: now + 600 });
+    const c = siteCookie({ key, tiers: 'o', siteId: missing, accessVersion: 1, expires: now + 600 });
     expect((await response(request('/', { host: `${missing}.example.com`, cookie: c }))).statusCode).toBe(302);
   });
 });
@@ -216,7 +216,7 @@ describe('named sites (M2 R44, R45)', () => {
 
   it('hands sign-in back on the name host, and waits for a new name to reach the edge', async () => {
     const event = (host: string) => {
-      const url = new URL(handoffUrl({ key, siteId: SITE, accessVersion: 1, origin: `https://${host}.example.com`, path: '/', cookieLifetime: 3600, now: NOW }));
+      const url = new URL(handoffUrl({ key, tiers: 'o', siteId: SITE, accessVersion: 1, origin: `https://${host}.example.com`, path: '/', cookieLifetime: 3600, now: NOW }));
       const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
       return { request: { ...request(url.pathname, { query }).request, headers: { host: { value: `${host}.example.com` } } } };
     };
@@ -228,6 +228,53 @@ describe('named sites (M2 R44, R45)', () => {
     await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/', 'p']], n: 'cv' });
     expect(await rewrite(at('cv', '/'))).toBe(`/${SITE}/${VERSION}/index.html`);
     expect((await response(at(SITE, '/'))).headers.location?.value).toBe('https://cv.example.com/');
+  });
+});
+
+describe('shared paths (M5 R136)', () => {
+  const PLANS = ruleId('/plans/');
+  const ACME = ruleId('/plans/acme/');
+  const rules: EdgeRecord['r'] = [['/plans/acme/', 's', ACME], ['/plans/', 's', PLANS], ['/', 'x']];
+  beforeEach(async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: rules });
+  });
+
+  it('opens the shared rules a viewer\'s cookie lists, and nothing else that isn\'t public', async () => {
+    const acmeOnly = cookie({ tiers: viewerTiers([ACME]) });
+    expect(await rewrite(request('/plans/acme/', { cookie: acmeOnly }))).toBe(`/${SITE}/${VERSION}/plans/acme/index.html`);
+    expect((await response(request('/plans/', { cookie: acmeOnly }))).headers.location?.value).toBe(signinFor('/plans/'));
+    expect((await response(request('/', { cookie: acmeOnly }))).headers.location?.value).toBe(signinFor('/'));
+    const both = cookie({ tiers: viewerTiers([PLANS, ACME]) });
+    expect(await rewrite(request('/plans/', { cookie: both }))).toBe(`/${SITE}/${VERSION}/plans/index.html`);
+    expect(await rewrite(request('/plans/acme/', { cookie: both }))).toBe(`/${SITE}/${VERSION}/plans/acme/index.html`);
+  });
+
+  it('opens everything to the owner, and shared paths to no one without a cookie', async () => {
+    expect(await rewrite(request('/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/index.html`);
+    expect(await rewrite(request('/plans/', { cookie: cookie() }))).toBe(`/${SITE}/${VERSION}/plans/index.html`);
+    expect((await response(request('/plans/'))).headers.location?.value).toBe(signinFor('/plans/'));
+  });
+
+  it('refuses a cookie whose rules were changed, since the signature covers them', async () => {
+    const forged = cookie({ tiers: viewerTiers([ACME]) }).replace(`.s-${ACME}.`, `.s-${PLANS}.`);
+    expect((await response(request('/plans/', { cookie: forged }))).statusCode).toBe(302);
+    expect((await response(request('/', { cookie: cookie({ tiers: viewerTiers([ACME]) }).replace(`.s-${ACME}.`, '.o.') }))).statusCode).toBe(302);
+  });
+
+  it('treats a shared rule without an ID as private', async () => {
+    await kvs.put(SITE, { cur: VERSION, v: 1, r: [['/plans/', 's'] as unknown as EdgeRecord['r'][number]] });
+    expect((await response(request('/plans/', { cookie: cookie({ tiers: viewerTiers([PLANS]) }) }))).statusCode).toBe(302);
+  });
+
+  it('hands sign-in back with the viewer\'s rules, and an old access version stops working', async () => {
+    const tiers = viewerTiers([ACME]);
+    const url = new URL(handoffUrl({ key, tiers, siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/plans/acme/', cookieLifetime: 3600, now: NOW }));
+    const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
+    const r = await response(request(url.pathname, { query }));
+    expect(r.cookies?.['__Host-passa']?.value).toBe(cookie({ tiers, expires: now + 3600 }));
+    // Unsharing bumps the access version (R131): the viewer's cookie stops opening anything.
+    await kvs.put(SITE, { cur: VERSION, v: 2, r: rules });
+    expect((await response(request('/plans/acme/', { cookie: cookie({ tiers }) }))).statusCode).toBe(302);
   });
 });
 
@@ -270,7 +317,7 @@ describe('custom domains (M4 R122)', () => {
   });
 
   it('hands sign-in back on the domain', async () => {
-    const url = new URL(handoffUrl({ key, siteId: SITE, accessVersion: 1, origin: 'https://docs.example.org', path: '/guide/', cookieLifetime: 3600, now: NOW }));
+    const url = new URL(handoffUrl({ key, tiers: 'o', siteId: SITE, accessVersion: 1, origin: 'https://docs.example.org', path: '/guide/', cookieLifetime: 3600, now: NOW }));
     const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
     const r = await response({ request: { ...request(url.pathname, { query }).request, headers: { host: { value: 'docs.example.org' } } } });
     expect([r.statusCode, r.headers.location?.value, r.cookies?.['__Host-passa']?.value]).toEqual([302, '/guide/', cookie({ expires: now + 3600 })]);
@@ -335,7 +382,7 @@ describe('with a separate site domain', () => {
 
 describe('sign-in handoff', () => {
   function handoff(overrides: Partial<Parameters<typeof handoffUrl>[0]> = {}) {
-    const url = new URL(handoffUrl({ key, siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/docs/', cookieLifetime: 3600, now: NOW, ...overrides }));
+    const url = new URL(handoffUrl({ key, tiers: 'o', siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/docs/', cookieLifetime: 3600, now: NOW, ...overrides }));
     // As the proxy passes them: undecoded.
     const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
     return request(url.pathname, { query });

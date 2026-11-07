@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, tierFor } from './rules.ts';
+import { accessChanges, accessOf, checkRules, edgeRules, MAX_RULES, regions, type Rule, ruleId, servedPath, sharedRulesFor, tierFor } from './rules.ts';
 
 const pub = (path: string): Rule => ({ path, tier: 'public' });
 const priv = (path: string): Rule => ({ path, tier: 'private' });
@@ -75,11 +75,35 @@ describe('tierFor', () => {
   });
 });
 
+describe('the shared tier (M5)', () => {
+  const shared = (path: string): Rule => ({ path, tier: 'shared' });
+
+  it('sends shared rules to the edge as s, even with nothing public', () => {
+    expect(edgeRules([shared('/plans/')])).toEqual([['/plans/', 's', ruleId('/plans/')]]);
+    expect(edgeRules([pub('/'), shared('/plans/'), priv('/plans/drafts/')])).toEqual([['/plans/drafts/', 'x'], ['/plans/', 's', ruleId('/plans/')], ['/', 'p']]);
+    expect(ruleId('/plans/')).toMatch(/^[0-9a-f]{8}$/);
+    expect(ruleId('/plans/')).not.toBe(ruleId('/plans/acme/'));
+    expect(edgeRules([priv('/a/')])).toEqual([]);
+  });
+
+  it('counts shared regions, and calls an all-shared site shared', () => {
+    expect(regions([shared('/plans/')])).toEqual({ public: [], shared: ['/plans/'], private: ['/'] });
+    expect(accessOf([shared('/')])).toBe('shared');
+    expect(accessOf([shared('/plans/')])).toBe('mixed');
+  });
+
+  it('reports what becomes shared, and that shared to private is not public', () => {
+    expect(accessChanges([], [shared('/plans/')])).toEqual({ madePublic: [], madeShared: ['/plans/'], madePrivate: [] });
+    expect(accessChanges([shared('/')], [])).toEqual({ madePublic: [], madeShared: [], madePrivate: ['/'] });
+    expect(accessChanges([shared('/')], [pub('/')]).madePublic).toEqual(['/']);
+  });
+});
+
 describe('regions and access', () => {
   it('names each region by its prefix', () => {
-    expect(regions([])).toEqual({ public: [], private: ['/'] });
-    expect(regions([pub('/'), priv('/notes/')])).toEqual({ public: ['/'], private: ['/notes/'] });
-    expect(regions([pub('/docs/')])).toEqual({ public: ['/docs/'], private: ['/'] });
+    expect(regions([])).toEqual({ public: [], shared: [], private: ['/'] });
+    expect(regions([pub('/'), priv('/notes/')])).toEqual({ public: ['/'], shared: [], private: ['/notes/'] });
+    expect(regions([pub('/docs/')])).toEqual({ public: ['/docs/'], shared: [], private: ['/'] });
   });
 
   it('summarises a site as private, public or mixed', () => {
@@ -93,17 +117,37 @@ describe('regions and access', () => {
 
 describe('accessChanges', () => {
   it('finds what becomes public or private', () => {
-    expect(accessChanges([], [pub('/')])).toEqual({ madePublic: ['/'], madePrivate: [] });
-    expect(accessChanges([pub('/')], [])).toEqual({ madePublic: [], madePrivate: ['/'] });
-    expect(accessChanges([pub('/')], [pub('/'), priv('/notes/')])).toEqual({ madePublic: [], madePrivate: ['/notes/'] });
+    expect(accessChanges([], [pub('/')])).toEqual({ madePublic: ['/'], madeShared: [], madePrivate: [] });
+    expect(accessChanges([pub('/')], [])).toEqual({ madePublic: [], madeShared: [], madePrivate: ['/'] });
+    expect(accessChanges([pub('/')], [pub('/'), priv('/notes/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: ['/notes/'] });
   });
 
   it('catches a path exposed by removing a private rule', () => {
-    expect(accessChanges([pub('/'), priv('/notes/')], [pub('/')])).toEqual({ madePublic: ['/notes/'], madePrivate: [] });
+    expect(accessChanges([pub('/'), priv('/notes/')], [pub('/')])).toEqual({ madePublic: ['/notes/'], madeShared: [], madePrivate: [] });
   });
 
   it('sees no change when rules are rewritten without changing access', () => {
-    expect(accessChanges([pub('/')], [pub('/'), pub('/docs/')])).toEqual({ madePublic: [], madePrivate: [] });
-    expect(accessChanges([], [priv('/'), priv('/a/')])).toEqual({ madePublic: [], madePrivate: [] });
+    expect(accessChanges([pub('/')], [pub('/'), pub('/docs/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: [] });
+    expect(accessChanges([], [priv('/'), priv('/a/')])).toEqual({ madePublic: [], madeShared: [], madePrivate: [] });
+  });
+});
+
+describe('served paths', () => {
+  it('match the edge: folders get index.html, and so do paths without an extension', () => {
+    expect(servedPath('/')).toBe('/index.html');
+    expect(servedPath('/plans/')).toBe('/plans/index.html');
+    expect(servedPath('/plans')).toBe('/plans/index.html');
+    expect(servedPath('/plans/q1.pdf')).toBe('/plans/q1.pdf');
+  });
+});
+
+describe('shares by path (M5)', () => {
+  const shared = (path: string): Rule => ({ path, tier: 'shared' });
+  const rules = [pub('/'), shared('/proposals/acme/'), shared('/proposals/globex/'), shared('/plans/'), priv('/plans/hr/')];
+  it('opens the shared rules at or under each path shared', () => {
+    expect(sharedRulesFor(rules, ['/proposals/acme/']).map((r) => r.path)).toEqual(['/proposals/acme/']);
+    expect(sharedRulesFor(rules, ['/proposals/']).map((r) => r.path)).toEqual(['/proposals/acme/', '/proposals/globex/']);
+    expect(sharedRulesFor(rules, ['/']).map((r) => r.path)).toEqual(['/proposals/acme/', '/proposals/globex/', '/plans/']);
+    expect(sharedRulesFor(rules, ['/plans/acme/'])).toEqual([]);
   });
 });
