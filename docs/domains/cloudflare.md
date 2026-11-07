@@ -16,7 +16,7 @@ Passa doesn't write Cloudflare records itself yet (that comes with the self-host
 1. **Start the command**, so it can show you the records:
 
    ```sh
-   passa admin domain add docs.example.com my-docs --new-tenant --stage prod
+   passa admin domain add docs.example.com my-docs --new-tenant
    ```
 
    ```
@@ -58,7 +58,7 @@ Adding these records doesn't affect email: MX, SPF and other records stay as the
 ## Remove it
 
 ```sh
-passa admin domain remove docs.example.com --stage prod
+passa admin domain remove docs.example.com
 ```
 
 Then delete the two records in Cloudflare yourself: Passa only removes records it wrote.

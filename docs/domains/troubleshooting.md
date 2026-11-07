@@ -6,7 +6,7 @@ access: public
 
 # Troubleshooting domains
 
-Start with `passa admin domain status <domain> --stage <stage>`. It shows the domain's state and each record, with ✓ for records that resolve and ✗ for those that don't, and says why when it can tell.
+Start with `passa admin domain status <domain>`. It shows the domain's state and each record, with ✓ for records that resolve and ✗ for those that don't, and says why when it can tell.
 
 ## It's stuck at "Waiting for DNS"
 

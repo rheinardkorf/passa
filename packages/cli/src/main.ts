@@ -13,7 +13,8 @@ import { type Ask, deleteSite, listAccess, parseRules, publishFolder, rollback, 
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
 import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
-import { AdminRefused, addDomain, adminFunctionName, type DomainList, type DomainReport, formatList, formatStatus, formatUsers, lambdaInvoker, removeDomain, type UserReport } from './admin.ts';
+import { adminTarget, AdminTargetRefused, lambdaLister } from './admin-link.ts';
+import { AdminRefused, addDomain, awsRefusal, type DomainList, type DomainReport, formatList, formatStatus, formatUsers, lambdaInvoker, removeDomain, type UserReport } from './admin.ts';
 
 const USAGE = `passa: build, preview, check and publish a site.
 
@@ -65,7 +66,9 @@ Admin, with the deployment's AWS credentials (AWS_PROFILE, aws sso login), never
                                        active admin, can't be disabled
   passa admin users enable <email>     let them back in
   passa admin users reindex            once, after upgrading to M5: lists users created before it
-  Admin commands take --stage <dev|prod> (required), --region and --json.
+  Admin commands work on the deployment you're signed in to (or --server). The first time, they ask
+  which AWS profile reaches it (or take --profile), find its admin function, and remember both.
+  --stage <stage> names the function directly; --region and --json too.
 
 Options for render, serve and check:
   --site-url <url>      the site's address, for absolute links (default: url in _site.yml)
@@ -321,6 +324,22 @@ async function pullCommand(args: string[]) {
 
 // Asks on the terminal; without one, a question can't be answered, so the
 // command stops (scripts pass --yes or --confirm-public).
+// Asks the person to choose one of a few things, by number or name; nothing
+// without a terminal (the AWS SDK's usual credentials are used then).
+async function pickInTerminal(question: string, choices: string[]): Promise<string | undefined> {
+  if (!process.stdin.isTTY) return undefined;
+  out(question);
+  choices.forEach((c, i) => out(`  ${i + 1}. ${c}`));
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question('Number or name (Enter for the default credentials): ')).trim();
+    return choices[Number(answer) - 1] ?? choices.find((c) => c === answer);
+  } finally {
+    rl.close();
+  }
+}
+
 // skip: the options that answer yes in scripts.
 const askTerminal = (yes: boolean, skip = '--yes (or --confirm-public)'): Ask => async (question) => {
   if (yes) return true;
@@ -472,18 +491,32 @@ async function rollbackCommand(args: string[]) {
 // passa admin domain|users …: invokes passa-<stage>-admin with AWS credentials (M4, M5).
 async function adminCommand(args: string[]) {
   const [group, action, ...rest] = args;
-  const usage = 'Usage: passa admin domain add|list|status|remove … or passa admin users add|list|disable|enable … --stage <stage> (see passa --help)';
+  const usage = 'Usage: passa admin domain add|list|status|remove … or passa admin users add|list|disable|enable|reindex … (see passa --help)';
   const actions: Record<string, string[]> = { domain: ['add', 'list', 'status', 'remove'], users: ['add', 'list', 'disable', 'enable', 'reindex'] };
   if (!group || !action || !actions[group]?.includes(action)) throw new Error(usage);
   const { values, positionals } = parseArgs({
     args: rest, allowPositionals: true,
     options: {
-      stage: { type: 'string' }, region: { type: 'string' }, json: { type: 'boolean' },
+      stage: { type: 'string' }, profile: { type: 'string' }, region: { type: 'string' }, server: { type: 'string' }, json: { type: 'boolean' },
       'fill-tenant': { type: 'boolean' }, 'new-tenant': { type: 'boolean' }, primary: { type: 'boolean' }, admin: { type: 'boolean' },
     },
   });
-  if (!values.stage) throw new Error('Which deployment? Add --stage, such as --stage prod.');
-  const invoke = await lambdaInvoker(adminFunctionName(values.stage), values.region);
+  // The deployment: --stage, or the one signed in to (--server, $PASSA_SERVER, current).
+  const credentials = readCredentials();
+  const server = values.stage && !values.server ? undefined : (() => {
+    try {
+      return chooseServer(values.server, credentials);
+    } catch {
+      return undefined;
+    }
+  })();
+  const target = await adminTarget({
+    ...(server ? { server } : {}), ...(values.stage ? { stage: values.stage } : {}),
+    ...(values.profile ? { profile: values.profile } : {}), ...(values.region ? { region: values.region } : {}),
+    pick: pickInTerminal, lister: lambdaLister, refusal: (err, profile) => awsRefusal(err, 'the admin function', profile),
+  });
+  if (target.found && !values.json) out(`Using ${target.functionName}${target.profile ? ` through AWS profile ${target.profile}` : ''}; remembered for ${server ?? 'this deployment'}.`);
+  const invoke = await lambdaInvoker(target.functionName, { ...(target.region ? { region: target.region } : {}), ...(target.profile ? { profile: target.profile } : {}) });
   const { userInfo, hostname } = await import('node:os');
   const actor = `${userInfo().username}@${hostname()}`;
   if (group === 'users') {
@@ -603,6 +636,6 @@ async function main(argv: string[]): Promise<number> {
 
 main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => {
   // A refusal or a needed sign-in is meant for the person as it is.
-  err(e instanceof ToolRefused || e instanceof LoginNeeded || e instanceof AdminRefused ? e.message : `passa: ${e instanceof Error ? e.message : String(e)}`);
+  err(e instanceof ToolRefused || e instanceof LoginNeeded || e instanceof AdminRefused || e instanceof AdminTargetRefused ? e.message : `passa: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
 });

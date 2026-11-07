@@ -29,7 +29,7 @@ When something doesn't work, see [[Troubleshooting domains]].
 ## What happens when you add a domain
 
 ```sh
-passa admin domain add docs.example.com my-docs --new-tenant --stage prod
+passa admin domain add docs.example.com my-docs --new-tenant
 ```
 
 1. Passa checks the domain and the site, and claims the domain for the site.
@@ -63,7 +63,7 @@ An apex domain (`example.com`, with nothing in front) can't have a CNAME, so its
 | `passa admin domain status <domain>` | Its records, and which of them resolve |
 | `passa admin domain remove <domain>` | Detach it; the site moves to its next address first |
 
-Every command takes `--stage` (such as `prod`), and uses your AWS credentials as the AWS CLI does: `AWS_PROFILE`, `aws sso login`, and `AWS_REGION` (or `--region`) set to the region Passa is deployed in. Only people allowed to invoke the deployment's admin function can run them; agents connected to Passa can't.
+Admin commands use your AWS credentials, not your Passa sign-in. The first time, `passa admin` asks which AWS profile reaches the deployment you're signed in to (or takes `--profile`), finds the deployment's admin function in that account, and remembers both. After that, admin commands need nothing extra. When the AWS sign-in has expired, it says how to sign in again with that profile. `--server` picks another deployment, and `--stage` names one directly. Only people allowed to invoke the deployment's admin function can run them; agents connected to Passa can't.
 
 ## Tenants
 

@@ -13,7 +13,7 @@ For a domain whose DNS is anywhere other than a Route 53 zone Passa manages (Rac
 1. **Start the command**, so it can show you the records:
 
    ```sh
-   passa admin domain add docs.example.com my-docs --new-tenant --stage prod
+   passa admin domain add docs.example.com my-docs --new-tenant
    ```
 
    It shows the pointer record first, then the validation record a few seconds later. Leave it running.
@@ -76,7 +76,7 @@ If the name already has a record (say `www` points at an old host), most hosts w
 ## Remove it
 
 ```sh
-passa admin domain remove docs.example.com --stage prod
+passa admin domain remove docs.example.com
 ```
 
 Then delete the two records at your DNS host yourself: Passa only removes records it wrote.

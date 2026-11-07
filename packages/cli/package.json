@@ -1,6 +1,6 @@
 {
   "name": "@passa/cli",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "The passa command: build, preview and check a Markdown site locally, and publish it to a Passa deployment.",
   "private": true,
   "type": "module",
