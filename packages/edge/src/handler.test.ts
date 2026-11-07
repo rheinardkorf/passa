@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type EdgeRecord, FRAGMENT_MARK, handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, ruleId, SITE_ID_PATTERN, siteCookie, type SiteTiers, viewerTiers } from '@passa/shared';
+import { clearUrl, type EdgeRecord, FRAGMENT_MARK, handoffUrl, MemoryEdgeStore, NAME_PATTERN, newSiteId, ruleId, SITE_ID_PATTERN, siteCookie, type SiteTiers, viewerTiers } from '@passa/shared';
 import { HTMX } from '@passa/render';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { functionCode, MAX_FUNCTION_BYTES, responseFunctionCode } from './build.ts';
@@ -39,8 +39,8 @@ function request(uri: string, extra: { host?: string; cookie?: string; query?: R
 
 const domains = { sites: 'example.com', auth: 'https://auth.example.com' };
 const run = (event: { request: EdgeRequest }) => handle(event, { kvs, crypto, now: NOW, ...domains });
-const cookie = (overrides: Partial<{ siteId: string; accessVersion: number; expires: number; key: typeof key; tiers: SiteTiers }> = {}) =>
-  siteCookie({ key, tiers: 'o', siteId: SITE, accessVersion: 1, expires: now + 600, ...overrides });
+const cookie = (overrides: Partial<{ siteId: string; accessVersion: number; expires: number; key: typeof key; tiers: SiteTiers; email: string }> = {}) =>
+  siteCookie({ key, tiers: 'o', siteId: SITE, accessVersion: 1, expires: now + 600, email: 'owner@example.com', ...overrides });
 
 async function response(event: { request: EdgeRequest }): Promise<EdgeResponse> {
   const result = await run(event);
@@ -224,7 +224,7 @@ describe.each([['source', async () => loadHandler()], ['minified build', loadMin
 
     it('hands sign-in back on the name host, and waits for a new name to reach the edge', async () => {
       const event = (host: string) => {
-        const url = new URL(handoffUrl({ key, tiers: 'o', siteId: SITE, accessVersion: 1, origin: `https://${host}.example.com`, path: '/', cookieLifetime: 3600, now: NOW }));
+        const url = new URL(handoffUrl({ key, email: 'owner@example.com', tiers: 'o', siteId: SITE, accessVersion: 1, origin: `https://${host}.example.com`, path: '/', cookieLifetime: 3600, now: NOW }));
         const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
         return { request: { ...request(url.pathname, { query }).request, headers: { host: { value: `${host}.example.com` } } } };
       };
@@ -276,7 +276,7 @@ describe.each([['source', async () => loadHandler()], ['minified build', loadMin
 
     it('hands sign-in back with the viewer\'s rules, and an old access version stops working', async () => {
       const tiers = viewerTiers([ACME]);
-      const url = new URL(handoffUrl({ key, tiers, siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/plans/acme/', cookieLifetime: 3600, now: NOW }));
+      const url = new URL(handoffUrl({ key, email: 'owner@example.com', tiers, siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/plans/acme/', cookieLifetime: 3600, now: NOW }));
       const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
       const r = await response(request(url.pathname, { query }));
       expect(r.cookies?.['__Host-passa']?.value).toBe(cookie({ tiers, expires: now + 3600 }));
@@ -325,7 +325,7 @@ describe.each([['source', async () => loadHandler()], ['minified build', loadMin
     });
 
     it('hands sign-in back on the domain', async () => {
-      const url = new URL(handoffUrl({ key, tiers: 'o', siteId: SITE, accessVersion: 1, origin: 'https://docs.example.org', path: '/guide/', cookieLifetime: 3600, now: NOW }));
+      const url = new URL(handoffUrl({ key, email: 'owner@example.com', tiers: 'o', siteId: SITE, accessVersion: 1, origin: 'https://docs.example.org', path: '/guide/', cookieLifetime: 3600, now: NOW }));
       const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
       const r = await response({ request: { ...request(url.pathname, { query }).request, headers: { host: { value: 'docs.example.org' } } } });
       expect([r.statusCode, r.headers.location?.value, r.cookies?.['__Host-passa']?.value]).toEqual([302, '/guide/', cookie({ expires: now + 3600 })]);
@@ -427,9 +427,73 @@ describe.each([['source', async () => loadHandler()], ['minified build', loadMin
     });
   });
 
+  describe('refreshing and the login block (M7)', () => {
+    const FAMILY = ruleId('/family/');
+    const page = `https://${SITE}.example.com/family/?x=1#top`;
+    const hx = (extra: Record<string, string> = {}) => ({ 'hx-request': 'true', 'hx-current-url': page, ...extra });
+    const refresh = (path: string) => `https://auth.example.com/site/refresh?site=${SITE}&path=${encodeURIComponent(path)}`;
+    beforeEach(async () => {
+      await kvs.put(SITE, { cur: VERSION, v: 2, r: [['/family/', 's', FAMILY], ['/', 'p']] });
+    });
+
+    it('sends someone whose cookie is out of date through auth.\'s refresh, back to the page they\'re on (R175)', async () => {
+      for (const c of [cookie({ accessVersion: 1, tiers: viewerTiers([FAMILY]) }), cookie({ accessVersion: 2, expires: now - 1 })]) {
+        const r = await response(request('/family/cards/', { headers: hx(), cookie: c }));
+        expect([r.statusCode, r.headers['hx-redirect']?.value, r.headers.location]).toEqual([204, refresh('/family/'), undefined]);
+      }
+      // A page on another origin, or none, returns to the home page.
+      const stale = cookie({ accessVersion: 1 });
+      expect((await response(request('/family/cards/', { headers: hx({ 'hx-current-url': 'https://evil.example/x' }), cookie: stale }))).headers['hx-redirect']?.value).toBe(refresh('/'));
+      expect((await response(request('/family/cards/', { headers: { 'hx-request': 'true' }, cookie: stale }))).headers['hx-redirect']?.value).toBe(refresh('/'));
+    });
+
+    it('gives a current cookie without access, or a forged one, the plain 204: no refresh, so no loop', async () => {
+      const cases = [
+        cookie({ accessVersion: 2, tiers: viewerTiers([ruleId('/other/')]) }),
+        cookie({ accessVersion: 1, key: { kid: 'k1', secret: 'b'.repeat(64) } }),
+        cookie({ accessVersion: 1, siteId: 'quiet-river-m7wp2c' }),
+      ];
+      for (const c of cases) {
+        const r = await response(request('/family/cards/', { headers: hx(), cookie: c }));
+        expect([r.statusCode, r.headers['hx-redirect']]).toEqual([204, undefined]);
+      }
+    });
+
+    it('clears the cookie through a signed handoff, and refuses one that isn\'t (R175)', async () => {
+      const clear = (overrides: Partial<Parameters<typeof clearUrl>[0]> = {}) => {
+        const url = new URL(clearUrl({ key, siteId: SITE, origin: `https://${SITE}.example.com`, path: '/family/', now: NOW, ...overrides }));
+        return request(url.pathname, { query: Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string])) });
+      };
+      const r = await response(clear());
+      expect([r.statusCode, r.headers.location?.value, r.cookies?.['__Host-passa']]).toEqual([302, '/family/', { value: '', attributes: 'Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax' }]);
+      const elsewhere = clear();
+      elsewhere.request.querystring.p = { value: '%2Fother%2F' };
+      for (const bad of [clear({ now: NOW - 61_000 }), clear({ siteId: 'quiet-river-m7wp2c' }), clear({ key: { kid: 'k1', secret: 'b'.repeat(64) } }), elsewhere]) {
+        expect((await response(bad)).statusCode).toBe(404);
+      }
+    });
+
+    it('tells the login block who\'s signed in: nobody (204), or the viewer, by name if asked (R178)', async () => {
+      const login = (c?: string, showUser = 'true') => response(request('/_passa/login', { query: { show_user: showUser }, ...(c ? { cookie: c } : {}) }));
+      expect((await login()).statusCode).toBe(204);
+      expect((await login(cookie({ accessVersion: 1 }))).statusCode).toBe(204);
+      expect((await login(cookie({ accessVersion: 2, expires: now - 1 }))).statusCode).toBe(204);
+      const anna = cookie({ accessVersion: 2, tiers: viewerTiers([FAMILY]), email: 'añna+<b>@example.com' });
+      const shown = await login(anna);
+      expect([shown.statusCode, shown.body?.data, shown.headers['cache-control']?.value]).toEqual([200, '<span class="passa-login-who">Signed in as añna+&#60;b&#62;@example.com</span>', 'no-store']);
+      expect((await login(anna, 'false')).body?.data).toBe('<span class="passa-login-who"></span>');
+    });
+
+    it('sends the login block\'s link to auth.\'s sign-in for this site and page (R177)', async () => {
+      const go = async (path: string) => (await response(request('/_passa/signin', { query: { path } }))).headers.location?.value;
+      expect(await go('%2Ffamily%2Fnotes%2F')).toBe(`https://auth.example.com/site/signin?site=${SITE}&path=%2Ffamily%2Fnotes%2F`);
+      expect(await go('%2F%2Fevil.example')).toBe(`https://auth.example.com/site/signin?site=${SITE}&path=%2F`);
+    });
+  });
+
   describe('sign-in handoff', () => {
     function handoff(overrides: Partial<Parameters<typeof handoffUrl>[0]> = {}) {
-      const url = new URL(handoffUrl({ key, tiers: 'o', siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/docs/', cookieLifetime: 3600, now: NOW, ...overrides }));
+      const url = new URL(handoffUrl({ key, email: 'owner@example.com', tiers: 'o', siteId: SITE, accessVersion: 1, origin: `https://${SITE}.example.com`, path: '/docs/', cookieLifetime: 3600, now: NOW, ...overrides }));
       // As the proxy passes them: undecoded.
       const query = Object.fromEntries(url.search.slice(1).split('&').map((p) => p.split('=') as [string, string]));
       return request(url.pathname, { query });

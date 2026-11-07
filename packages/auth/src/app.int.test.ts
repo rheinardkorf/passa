@@ -160,8 +160,8 @@ describe('signing in to view a site', () => {
     expect(`${url.origin}${url.pathname}`).toBe(`https://${siteId}.example.com/_passa/session`);
     expect(url.searchParams.get('p')).toBe('/docs/');
     expect(url.searchParams.get('l')).toBe('3600');
-    // The owner's handoff carries the owner's tier code, o (M5 R136).
-    expect(url.searchParams.get('t')).toMatch(new RegExp(`^k1\\.${siteId}\\.1\\.\\d+\\.o\\.[0-9a-f]{64}$`));
+    // The owner's handoff carries the owner's tier code, o (M5 R136), and email (M7 R178).
+    expect(url.searchParams.get('t')).toMatch(new RegExp(`^k1\\.${siteId}\\.1\\.\\d+\\.o\\.${Buffer.from(owner.email).toString('hex')}\\.[0-9a-f]{64}$`));
 
     expect((await events('signin.continue')).some((e) => e.userId === owner.id && e.result === 'ok')).toBe(true);
   });
@@ -228,6 +228,37 @@ describe('signing in to view a site', () => {
       expect(new URL(r.location).host, label).toBe('current-one.example.com');
     }
     for (const label of ['held-one', legacy, 'never-named']) expect((await browser.request(`/site/signin?site=${label}&path=%2F`)).status, label).toBe(403);
+  });
+
+  it('refreshes a fragment\'s stale cookie: a new one with access, else a signed clear, never a sign-in page (M7 R175)', async () => {
+    const owner = await newUser();
+    const other = await newUser();
+    const siteId = await newSite(owner.id);
+    const ownerBrowser = new Browser();
+    await signIn(ownerBrowser, owner);
+    const before = emailsTo(owner.email);
+    const fresh = await ownerBrowser.request(`/site/refresh?site=${siteId}&path=%2Ffamily%2F`);
+    expect([fresh.status, new URL(fresh.location).searchParams.get('p')]).toEqual([302, '/family/']);
+    expect(new URL(fresh.location).searchParams.get('t')).toMatch(/\.o\.[0-9a-f]+\.[0-9a-f]{64}$/);
+    expect(emailsTo(owner.email)).toBe(before);
+
+    // Signed in without access, or not signed in: back to the page, cookie cleared.
+    const otherBrowser = new Browser();
+    await signIn(otherBrowser, other);
+    for (const browser of [otherBrowser, new Browser()]) {
+      const cleared = await browser.request(`/site/refresh?site=${siteId}&path=%2Ffamily%2F`);
+      const url = new URL(cleared.location);
+      expect([cleared.status, `${url.origin}${url.pathname}`, url.searchParams.get('p')]).toEqual([302, `https://${siteId}.example.com/_passa/session`, '/family/']);
+      expect(url.searchParams.get('c')).toMatch(/^k1\.\d+\.[0-9a-f]{64}$/);
+      expect(url.searchParams.get('t')).toBeNull();
+    }
+    // No such site: its address, where the edge treats it as private.
+    const missing = newSiteId();
+    expect((await new Browser().request(`/site/refresh?site=${missing}&path=%2F`)).location).toBe(`https://${missing}.example.com/`);
+    expect((await new Browser().request('/site/refresh?site=never-named&path=%2F')).location).toBe('https://never-named.example.com/');
+    // Never to a domain no site has: that would be an open redirect.
+    expect((await new Browser().request('/site/refresh?site=evil.example&path=%2F')).status).toBe(404);
+    expect((await new Browser().request('/site/refresh?site=Nope&path=%2F')).status).toBe(400);
   });
 
   it('rejects site and path values the edge would never send', async () => {

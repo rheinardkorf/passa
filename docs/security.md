@@ -13,7 +13,7 @@ Passa's job is keeping private things private, so most of its design is about th
 - **Checked at the edge.** Every request to a site is checked by a CloudFront Function before anything is served. Private pages need a valid sign-in for that site; there's no way to reach the files around it.
 - **Private by default.** A new site is private, anything no rule covers is private, and nothing becomes public without an explicit confirmation.
 - **One origin per site.** Each site has its own subdomain, so one site's scripts can't read another's pages or cookies.
-- **A strict Content Security Policy.** Pages can load scripts and styles only from the site and a few public CDNs, and can't make network requests or post forms anywhere. A page can't send what it shows to someone else.
+- **A strict Content Security Policy.** Pages can load scripts and styles only from the site and a few public CDNs. They can make requests to their own site, for fragments, and nowhere else, and can't post forms anywhere. A page can't send what it shows to someone else.
 - **Nothing leaks through lists.** On Markdown sites, lists, tag pages, feeds and social cards only ever include pages the visitor can see.
 
 ## How sign-in works

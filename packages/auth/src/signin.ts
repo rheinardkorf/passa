@@ -2,6 +2,7 @@
 // HTTP lives in app.ts; this is the logic and what it records.
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  clearUrl,
   type Config,
   type Events,
   type Grant,
@@ -249,13 +250,34 @@ export class SignIn {
       key: await this.#d.siteKey(),
       siteId: site.id,
       accessVersion: site.accessVersion,
-      // The site's current address, from the database, never from the request
-      // (M2 R45): its primary domain, else its name, else its ID (M4 R123).
-      origin: site.domain ? (this.urls.domain ?? ((d: string) => `https://${d}`))(site.domain) : this.urls.site(site.name ?? site.id),
+      origin: this.#origin(site),
       path: target.path,
       cookieLifetime: this.#d.config.lifetimes.siteCookie,
       tiers,
+      email: user.email,
       now: this.#now(),
     });
+  }
+
+  // Where a fragment's request sends someone whose site cookie is out of date
+  // (M7 R175): a new cookie, as siteRedirect gives, if they're signed in to
+  // auth. and still open the page; otherwise back to the page with the cookie
+  // cleared. Never a sign-in page: they didn't ask to sign in, a page did.
+  // An ID or name no active site has goes back to its address under the sites
+  // domain, where the edge treats it as a private site, so this answer doesn't
+  // tell which names exist. A domain no site has gets nothing: redirecting to
+  // it would send anyone anywhere, and custom domains are public in DNS anyway.
+  async siteRefresh(user: User | undefined, target: Target, ip: string): Promise<string | undefined> {
+    const handoff = user ? await this.siteRedirect(user, target, ip) : undefined;
+    if (handoff) return handoff;
+    const site = await this.#site(target.siteId);
+    if (!site) return isSiteId(target.siteId) || isName(target.siteId) ? `${this.urls.site(target.siteId)}${target.path}` : undefined;
+    return clearUrl({ key: await this.#d.siteKey(), siteId: site.id, origin: this.#origin(site), path: target.path, now: this.#now() });
+  }
+
+  // The site's current address, from the database, never from the request
+  // (M2 R45): its primary domain, else its name, else its ID (M4 R123).
+  #origin(site: Site): string {
+    return site.domain ? (this.urls.domain ?? ((d: string) => `https://${d}`))(site.domain) : this.urls.site(site.name ?? site.id);
   }
 }

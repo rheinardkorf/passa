@@ -12,6 +12,7 @@ nav:
       - { title: Markdown sites, url: /markdown/ }
       - { title: Access, url: /access/ }
       - { title: Membership, url: /membership/ }
+      - { title: Fragments and sign-in, url: /fragments/ }
       - { title: Sharing, url: /sharing/ }
       - { title: Themes, url: /themes/ }
       - { title: Social cards, url: /social-cards/ }

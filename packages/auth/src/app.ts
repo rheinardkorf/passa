@@ -181,6 +181,18 @@ export function createAuthApp(deps: AuthDeps): express.Express {
     res.redirect(302, location);
   });
 
+  // Where the edge sends a fragment's request whose site cookie is out of date
+  // (M7 R175): back to the page with a new cookie, or with none. It answers the
+  // same way whether or not the person has access, as sign-in does.
+  app.get('/site/refresh', async (req, res) => {
+    const target = parseTarget(req.query.site, req.query.path);
+    if (!target) return html(res, errorPage(400), 400);
+    const current = await sessionOf(res);
+    const location = await signin.siteRefresh(current?.user, target, ipOf(req));
+    if (!location) return html(res, errorPage(404), 404);
+    res.redirect(302, location);
+  });
+
   app.post('/signin', form, checkPost, async (req, res) => {
     const email = field(req.body.email).trim();
     const next = parseNext(req.body);

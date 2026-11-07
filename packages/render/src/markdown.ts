@@ -22,6 +22,9 @@ hljs.registerAliases(['yml'], { languageName: 'yaml' });
 export type PageState = {
   source: string | null;
   dir: string;
+  // The page's own address, which a login block returns to (/ in a fragment,
+  // which is shown on other pages).
+  url?: string;
   links: Set<string>;
   missing: string[];
   ids: Set<string>;
@@ -32,9 +35,10 @@ export type PageState = {
   startsWithHeading?: boolean;
   excerpt?: string;
   mermaid: boolean;
-  // True when the page embeds a fragment, so its layout loads HTMX.
+  // True when the page embeds a fragment or has a login block, so its layout loads HTMX.
   embeds: boolean;
-  // Embeds render refuses (M7 R172): a missing src, or one that isn't a fragment.
+  // Blocks render refuses (M7 R172): an embed with a missing src, or one that
+  // isn't a fragment; a login block it can't read.
   badEmbeds: string[];
 };
 
@@ -92,6 +96,7 @@ export function markdownFor(ctx: MarkdownContext): Markdown {
     const info = token.info.trim();
     const name = info.split(/\s+/)[0] ?? '';
     if (name === 'fragment') return embed(token.content, env);
+    if (name === 'login') return login(token.content, env);
     const template = ctx.widgets.get(name) ?? DEFAULT_WIDGETS[name];
     if (!template) return fallback();
     const content = token.content;
@@ -138,6 +143,41 @@ export function markdownFor(ctx: MarkdownContext): Markdown {
     }
   };
 
+  // A block's own classes, for themes, as " a b" (or ""), or undefined when refused.
+  const classesOf = (data: Record<string, unknown>, block: string, refuse: (why: string) => string) => {
+    const classes = data.class === undefined ? '' : String(data.class).trim();
+    if (classes && !CLASSES.test(classes)) {
+      refuse(`a ${block} block's class is class names separated by spaces, not ${classes}`);
+      return undefined;
+    }
+    return classes ? ` ${classes}` : '';
+  };
+
+  // A login block (M7 R177): a link to sign in to the site and come back to
+  // this page, which the edge replaces once the viewer is signed in, with who
+  // they are (show_user: true) or nothing. The link works without scripts.
+  const login = (content: string, env: Env) => {
+    const refuse = (why: string) => {
+      env.page.badEmbeds.push(why);
+      return '';
+    };
+    let data: Record<string, unknown>;
+    try {
+      const parsed: unknown = parseYaml(content) ?? {};
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return refuse('a login block holds show_user, label and class, as YAML');
+      data = parsed as Record<string, unknown>;
+    } catch (err) {
+      return refuse(`a login block isn't valid YAML (${(err instanceof Error ? err.message : String(err)).split('\n')[0]})`);
+    }
+    if (data.show_user !== undefined && typeof data.show_user !== 'boolean') return refuse('a login block\'s show_user is true or false');
+    const classes = classesOf(data, 'login', refuse);
+    if (classes === undefined) return '';
+    env.page.embeds = true;
+    const label = escapeHtml(data.label === undefined ? 'Sign in' : String(data.label));
+    const back = encodeURIComponent(env.page.url ?? '/');
+    return `<div class="passa-login${classes}" hx-get="/_passa/login?show_user=${data.show_user === true}" hx-trigger="load" hx-swap="innerHTML"><a class="passa-login-link" href="/_passa/signin?path=${back}">${label}</a></div>\n`;
+  };
+
   // An embed (M7 R171): a placeholder HTMX fills with a fragment, showing its
   // fallback until then, and for viewers the fragment's rule doesn't open. The
   // placeholder stays, with its classes; the fragment goes inside it.
@@ -161,14 +201,14 @@ export function markdownFor(ctx: MarkdownContext): Markdown {
     if (!src) return refuse('a fragment block needs src: [[page]]');
     const trigger = data.trigger === undefined ? 'load' : String(data.trigger);
     if (!TRIGGERS.includes(trigger)) return refuse(`a fragment block's trigger is ${TRIGGERS.join(', ')}, not ${trigger}`);
-    const classes = data.class === undefined ? '' : String(data.class).trim();
-    if (classes && !CLASSES.test(classes)) return refuse(`a fragment block's class is class names separated by spaces, not ${classes}`);
+    const classes = classesOf(data, 'fragment', refuse);
+    if (classes === undefined) return '';
     const found = ctx.embed(src);
     if ('problem' in found) return refuse(found.problem);
     env.page.embeds = true;
     const fallback = data.fallback === undefined ? '' : md.render(String(data.fallback), env);
     const mark = found.mark ? ` data-passa-rule="${found.mark}"` : '';
-    return `<div class="passa-embed${classes ? ` ${classes}` : ''}" hx-get="${escapeHtml(found.url)}" hx-trigger="${trigger}" hx-swap="innerHTML"${mark}>${fallback}</div>\n`;
+    return `<div class="passa-embed${classes}" hx-get="${escapeHtml(found.url)}" hx-trigger="${trigger}" hx-swap="innerHTML"${mark}>${fallback}</div>\n`;
   };
 
   // Wikilinks: [[target]] and [[target|text]], before link parsing, so Foam's
