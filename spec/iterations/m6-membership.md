@@ -88,9 +88,14 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Start and end dates
 
-- **R158** Every grant, membership or share, may have a start (`starts_at`, `--from`) and an end (`expires_at`, `--expires`, or `--for` a duration turned into a date when added). Before its start and after its end a grant opens nothing: sign-in and cookie refresh check both, and an ended grant is removed (DynamoDB TTL), bumping the access version, as shares' expiry does now. Without an end, a grant lasts until it's removed (a lifetime membership, say). An end can be any time in the future, after the start if there is one; one in the past, or not after the start, is refused as almost certainly a mistake. This lifts M5's one-year limit on a share's expiry (R133).
+- **R158** Every grant, membership or share, may have a start (`starts_at`, `--from`) and an end (`expires_at`, `--expires`, or `--for` a duration turned into a date when added). Before its start and after its end a grant opens nothing: sign-in and cookie refresh check both, and an ended grant is removed (DynamoDB TTL), bumping the access version, as shares' expiry does now. An end in the past, or not after the start, is refused as almost certainly a mistake.
+  - **Memberships** need no end: without one, a membership lasts until it's removed (a lifetime member, say), and an end can be any time ahead.
+  - **Shares always end,** since they're ad hoc and easy to forget: 90 days after they're made (or after their start) unless given an end, and at most a year ahead (M5 R133's limit, kept). Sharing again renews a share. This replaces M5's shares without an end.
 
 ### Seeing who has access
+
+- **R165** `passa shares` and a `list_shares` tool list every share across the owner's sites (site, path, email, made, start, end, last used), soonest end first, filtered with `--ending 30d` or by site, a page at a time, so shares that are forgotten or no longer used are easy to find and remove.
+- **R166** Every grant records when it was last used: the date of the latest sign-in in which it opened something. `list_access`, `passa shares` and `passa members list` show it (`never` until first used).
 
 - **R159** `passa access <site> --as <email>`, and an `email` option on `list_access`, list every path the person opens and why (public, a membership of which tier, or a share of which path), and the restricted paths they don't open.
 - **R160** `list_access` lists rules with their audiences, the site's tiers, and shares; `list_members` lists memberships.
@@ -101,11 +106,11 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Moving to the new form
 
-- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, or no rule where the folder above is already private (the people it was shared with keep their shares). Existing shares keep working under R156. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
+- **R162** Existing shares without an end get one 90 days after the move (R158). Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, or no rule where the folder above is already private (the people it was shared with keep their shares). Existing shares keep working under R156. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
 
 ### CLI and docs
 
-- **R163** The CLI does everything the tools do: `passa members add | remove | list`, `passa access --as`, and `--from` / `--expires` / `--for` on `passa share` and `passa members add`.
+- **R163** The CLI does everything the tools do: `passa members add | remove | list`, `passa shares`, `passa access --as`, and `--from` / `--expires` / `--for` on `passa share` and `passa members add`.
 - **R164** The docs get a Membership page (tiers, memberships, access in `_site.yml` and front matter, how shares and memberships combine, dates), and the Access and Sharing pages move to the new terms.
 
 ## Security and quality requirements
@@ -123,7 +128,8 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 - **Rules:** `{ path, access: string[] | 'private' }`, stored on the site as now. The edge record is unchanged: a rule that isn't public or owner-only becomes `[path, "s", id]` as M5's shared rules do, since the edge only needs a rule's ID; audiences stay off the edge.
 - **Viewer cookies:** list the IDs of the rules a person opens: rules listing a tier they're a member of (within its dates), and the rule each of their shares opens (R156). `auth.` works them out at sign-in, as now.
 - **Memberships:** items in the site's partition (`SITE#<site>`, `MEMBER#<tier>#<email>`), with start, end, invite time and a TTL at the end; one person's are found by a second key (`MEMBERSHIP#<email>#<tier>` in the same partition, or an index), so sign-in reads them directly. Listing a tier is a query, a page at a time.
-- **Shares:** as M5 (`GRANT#<email>#<path>`), plus a start date; a share no longer reaches rules under its path.
+- **Shares:** as M5 (`GRANT#<email>#<path>`), plus a start date and a required end; a share no longer reaches rules under its path. Listing every share across an owner's sites (R165) needs an index by owner (an overloaded key on the share items, as `gsi1` already does for sites by owner), not a scan.
+- **Last used:** `auth.` already reads a person's grants at sign-in to build their cookie; it writes the date back to each grant that opened something, skipping grants already marked today, so it costs a write per grant per day at most, never per page.
 - **Access in files:** render reads `_site.yml`'s `access` and `tiers` and each page's front matter into rules, merges page rules that match their folder's, and returns them with the version; publishing stores them on the site. `_passa/access.yml` remains a read-only copy for folders taken out of Passa.
 - **Render:** audiences become sets; "may list" is "every audience of the listing page is in the listed page's audience" (with public and owner-only as now).
 
@@ -136,7 +142,8 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 5. **Owner-added only.** Other ways in (invite links, self sign-up, agents, the paywall) come later; owner-added needs no abuse protection and works while SES is in its sandbox.
 6. **Per site.** Tiers, memberships and rules belong to one site.
 7. **No member limit.** Member count doesn't affect the edge, cookies or sign-in; the daily invite cap limits email, and lists come in pages.
-8. **Start and end dates on every grant,** checked at sign-in, so nothing needs scheduling.
+8. **Start and end dates on every grant,** checked at sign-in, so nothing needs scheduling. Shares always end (90 days by default, a year at most) because they're ad hoc and easy to forget; memberships needn't, since they're deliberate and managed.
+9. **Audit and last used:** `passa shares` lists every share across sites, with when each was last used, so forgotten shares are easy to spot; memberships show last used too.
 
 ## Early checks
 
@@ -150,7 +157,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 | --- | --- |
 | Rules per site | 20 (edge budget ~850 bytes) |
 | Tier names | 1–30 lowercase letters, digits, hyphens; `public`, `private`, `shared` reserved |
-| Grant end | optional (none: until removed); any future time after the start |
+| Grant end | memberships: optional (none: until removed); shares: 90 days by default, at most a year ahead |
 | Invites | count against `rateLimits.invitesPerDay`; at most hourly per email and tier or path |
 | Member list page | 100 |
 
@@ -164,4 +171,4 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 ## Done when
 
 - The demo works.
-- Tested: rules listing several tiers; `private` closing a path inside a tier folder and a public one; `public` combined with tiers refused; a page's front matter overriding its folder; public access from files needing confirmation; members opening their tiers' paths and nothing else; a share reaching a path whatever its rule, and stopping at a sub-rule (named in the result); start and end dates on memberships and shares; removing a membership and a share; render lists without leaks across tiers; `--as` showing what a person opens and why; M5's rules and shares moved; the CLI matching every tool.
+- Tested: rules listing several tiers; `private` closing a path inside a tier folder and a public one; `public` combined with tiers refused; a page's front matter overriding its folder; public access from files needing confirmation; members opening their tiers' paths and nothing else; a share reaching a path whatever its rule, and stopping at a sub-rule (named in the result); start and end dates on memberships and shares (a share's default end, and its one-year limit); `passa shares` across sites and last used on shares and memberships; removing a membership and a share; render lists without leaks across tiers; `--as` showing what a person opens and why; M5's rules and shares moved; the CLI matching every tool.
