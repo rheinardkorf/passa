@@ -183,6 +183,56 @@ describe('access (M3 R82, R88, R89)', () => {
   });
 });
 
+describe('access from the site\'s files (M6 R150, R151)', () => {
+  const course = (access: string) => filesOf({
+    '_site.yml': `title: Course\ntiers: [gold, silver]\naccess:\n${access}`,
+    'index.md': '# Home',
+    'lessons/week-1.md': '# Week one',
+    'lessons/quiz.md': '---\naccess: [silver]\n---\n# Quiz',
+  });
+
+  it('takes the site\'s rules from _site.yml and front matter, confirming anything public', async () => {
+    const refused = await call('publish', { title: 'Course', files: course('  /: [public]\n  /lessons/: [gold, silver]\n') });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('This would make / public');
+    const site = (await call('publish', { title: 'Course', files: course('  /: [public]\n  /lessons/: [gold, silver]\n'), confirm_public: true })).json();
+    expect(site.rules).toEqual([{ path: '/', access: ['public'] }, { path: '/lessons/', access: ['gold', 'silver'] }, { path: '/lessons/quiz/', access: ['silver'] }]);
+    expect(site).toMatchObject({ access: 'mixed', made_public: ['/'], made_members: ['/lessons/', '/lessons/quiz/'] });
+    expect(await read(site.site_id, site.current_version, '_passa/access.yml')).toContain('- { path: "/lessons/quiz/", access: ["silver"] }');
+    expect((await env.store.getSite(String(site.site_id)))?.accessFromFiles).toBe(true);
+  });
+
+  it('refuses set_access and passed rules on such a site, and keeps the rules when the files stop declaring them', async () => {
+    const site = (await call('publish', { title: 'Course', files: course('  /lessons/: [gold]\n') })).json();
+    expect((await call('set_access', { site_id: site.site_id, rules: [] })).text).toContain('access comes from its files');
+    expect((await call('update', { site_id: site.site_id, files: filesOf({ 'more.md': '# More' }), rules: [] })).text).toContain('rules can\'t be passed as well');
+    // Tiers change in the file, and the rules with them.
+    const changed = (await call('update', { site_id: site.site_id, files: filesOf({ '_site.yml': 'title: Course\ntiers: [gold, silver]\naccess:\n  /lessons/: [silver]\n' }) })).json();
+    expect(changed.rules).toEqual([{ path: '/lessons/', access: ['silver'] }]);
+    // No access in _site.yml any more: the rules stay as they were, and set_access works again.
+    const stopped = (await call('update', { site_id: site.site_id, files: filesOf({ '_site.yml': 'title: Course\n' }) })).json();
+    expect(stopped.rules).toEqual([{ path: '/lessons/', access: ['silver'] }]);
+    expect((await env.store.getSite(String(site.site_id)))?.accessFromFiles).toBe(false);
+    expect((await call('set_access', { site_id: site.site_id, rules: [] })).isError).toBe(false);
+  });
+
+  it('refuses a share needing a rule the files don\'t have, saying what to add', async () => {
+    const shared = createServer({ ...env, mailer: { kind: 'memory', send: async () => undefined } }, { userId: 'alice' }, () => undefined);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([shared.connect(b), client.connect(a)]);
+    const site = (await call('publish', { title: 'Course', files: course('  /lessons/: [gold]\n') })).json();
+    const share = async (path: string) => ((await client.callTool({ name: 'share', arguments: { site_id: site.site_id, email: 'reviewer@example.com', path, confirm_share: true } })).content as { text: string }[])[0]?.text ?? '';
+    expect(await share('/lessons/week-1/')).toContain('has no rule of its own for the share to open. Add one there with the access it has now ([gold])');
+    expect(JSON.parse(await share('/lessons/')).share.path).toBe('/lessons/');
+  });
+
+  it('refuses tiers the site doesn\'t name', async () => {
+    const r = await call('publish', { title: 'Bad tier', files: course('  /lessons/: [platinum]\n') });
+    expect(r.text).toContain('platinum isn\'t a tier this site names');
+  });
+});
+
 describe('limits and sync (M3 R70, R87)', () => {
   it('counts a source and its page as one file', async () => {
     const pages = (n: number) => Array.from({ length: n }, (_, i) => ({ path: `p${i}.md`, content: `Page ${i}` }));

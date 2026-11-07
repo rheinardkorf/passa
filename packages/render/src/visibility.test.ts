@@ -2,7 +2,7 @@
 // visitor of the listing page can't see. These are the tests the spec says
 // must fail the build.
 import { describe, expect, it } from 'vitest';
-import { render, type Rule, type Source } from './index.ts';
+import { render, type Rule, ruleId, type Source } from './index.ts';
 
 const page = (path: string, title: string, extra = '') => ({ path, content: `---\ntitle: ${title}\ndate: 2026-10-0${(title.length % 9) + 1}\n${extra}---\n${title} body.` });
 const listLayout = { path: '_layouts/default.html', content: '<h1>{{title}}</h1>{{{content}}}|{{#pages}}[{{title}}]{{/pages}}|{{#backlinks}}<{{title}}>{{/backlinks}}|{{#allTags}}#{{name}}{{/allTags}}|{{#related}}~{{title}}{{/related}}|{{#prev}}prev:{{title}}{{/prev}}{{#next}}next:{{title}}{{/next}}' };
@@ -168,5 +168,63 @@ describe('pages under a private rule (M5 R137, M6)', () => {
     const members = build([page('lessons/q1.md', 'Q1', 'access: private\n'), listLayout], [{ path: '/lessons/', access: ['gold'] }]);
     expect(members.problems.find((p) => p.kind === 'access-private-made-members')?.message)
       .toBe('lessons/q1.md says access: private, but the site\'s rules open /lessons/q1/ to members (gold)');
+  });
+});
+
+describe('access from the site\'s files (M6 R147, R150, R167)', () => {
+  const siteYml = (extra: string) => ({ path: '_site.yml', content: `title: Course\ntiers: [gold, silver]\n${extra}` });
+  const course = [
+    siteYml('access:\n  /: [public]\n  /lessons/: [gold, silver]\n  /lessons/draft/: private\n'),
+    page('lessons/week-1.md', 'Week one'),
+    page('lessons/quiz.md', 'The quiz', 'access: [silver]\n'),
+    page('lessons/week-2.md', 'Week two', 'access: [silver, gold]\n'), // agrees with its folder: no rule
+    page('lessons/draft/idea.md', 'Draft idea'),
+    listLayout,
+  ];
+
+  it('makes rules from _site.yml and pages whose front matter differs, and they win over the rules given', () => {
+    const site = build(course, [{ path: '/', access: ['public'] }, { path: '/lessons/', access: ['public'] }]);
+    expect(site.rules).toEqual([
+      { path: '/', access: ['public'] },
+      { path: '/lessons/', access: ['gold', 'silver'] },
+      { path: '/lessons/draft/', access: 'private' },
+      { path: '/lessons/quiz/', access: ['silver'] },
+    ]);
+    expect(site.pages.find((p) => p.path === 'lessons/quiz/index.html')?.tier).toBe('members');
+    expect(site.problems.filter((p) => p.kind === 'access')).toEqual([]);
+  });
+
+  it('leaves the rules given alone when _site.yml declares no access, with front matter only a hint', () => {
+    const site = build([{ path: '_site.yml', content: 'title: Docs\n' }, page('guide.md', 'Guide', 'access: public\n'), listLayout], [{ path: '/', access: ['public'] }]);
+    expect(site.rules).toBeUndefined();
+    expect(site.pages.find((p) => p.path === 'guide/index.html')?.tier).toBe('public');
+  });
+
+  it('refuses tiers the site doesn\'t name, and access it can\'t read', () => {
+    const site = build([
+      siteYml('access:\n  /lessons/: [platinum]\n  /x/: [public, gold]\n  bad: private\n'),
+      page('a.md', 'A', 'access: [bronze]\n'),
+      listLayout,
+    ], []);
+    expect(site.problems.filter((p) => p.kind === 'access').map((p) => p.message)).toEqual([
+      '_site.yml: access for /lessons/: platinum isn\'t a tier this site names (tiers in _site.yml: gold, silver)',
+      '_site.yml: access for /x/: public already opens to everyone, so it isn\'t combined with tiers',
+      '_site.yml: access for "bad": use / or a folder ending in /, such as /lessons/',
+      'a.md: access: bronze isn\'t a tier this site names (tiers in _site.yml: gold, silver)',
+    ]);
+  });
+
+  it('marks links to pages that aren\'t public with their rule\'s ID, and owner for pages no rule covers', () => {
+    const site = build([
+      siteYml('access:\n  /: [public]\n  /lessons/: [gold]\n'),
+      { path: 'index.md', content: '---\ntitle: Home\n---\nSee [[Week one]] and [[About]].' },
+      page('lessons/week-1.md', 'Week one'),
+      page('about.md', 'About'),
+      listLayout,
+    ], []);
+    const home = site.html('index.html');
+    expect(home).toContain(`<a data-passa-rule="${ruleId('/lessons/')}" href="/lessons/week-1/"`);
+    expect(home).toMatch(/<a href="\/about\/"/); // public: unmarked
+    expect(ruleId('/lessons/')).toMatch(/^[0-9a-f]{8}$/);
   });
 });

@@ -92,6 +92,21 @@ describe('refusals, as a publish would', () => {
   });
 });
 
+describe('access declared in _site.yml (M6 R150)', () => {
+  it('builds the pages its files make public, without a rules file or front matter on every page', () => {
+    const build = buildSite(site({
+      '_site.yml': 'title: Course\ntiers: [gold]\naccess:\n  /: [public]\n  /members/: [gold]\n',
+      'index.md': '# Home',
+      'about.md': '# About',
+      'members/lesson.md': '# Lesson',
+      'members/free.md': '---\naccess: public\n---\n# Free',
+    }));
+    expect(build.access).toBe('rules');
+    expect(build.pages.map((p) => p.path).sort()).toEqual(['about/index.html', 'index.html', 'members/free/index.html']);
+    expect(build.skippedPages).toEqual(['members/lesson.md']);
+  });
+});
+
 describe('passa init', () => {
   it('starts a site that builds as it is, and never overwrites', () => {
     const root = mkdtempSync(join(tmpdir(), 'passa-init-'));

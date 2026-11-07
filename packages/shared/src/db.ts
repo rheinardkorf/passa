@@ -37,6 +37,9 @@ export type Site = {
   status: 'active' | 'deleting' | 'blocked';
   // Path rules (M2). None means the whole site is private.
   rules?: Rule[];
+  // The rules come from the current version's files (M6 R150): its _site.yml
+  // declares access, so set_access is refused and the files are changed instead.
+  accessFromFiles?: boolean;
   // Its address when set (M2 R44, R45); otherwise the site ID is.
   name?: string;
   // Custom domains that serve it (M4), and the primary one, which is then its
@@ -281,7 +284,9 @@ export class Store {
   // and still on the version this one was built from. Rules, when given, are
   // replaced in the same write, if the site is unchanged since it was read
   // (seen: its updatedAt then), since they were checked against what was read.
-  async addVersion(ownerId: string, version: Version, baseVersionId: string, rules?: { rules: Rule[]; seen: string }): Promise<void> {
+  // With rules, the site's rules (and whether they come from its files) change
+  // in the same write, refused if the site changed since it was read (seen).
+  async addVersion(ownerId: string, version: Version, baseVersionId: string, rules?: { rules: Rule[]; seen: string; fromFiles?: boolean }): Promise<void> {
     try {
       await this.#db.send(new TransactWriteCommand({
         TransactItems: [
@@ -296,7 +301,7 @@ export class Store {
             Update: {
               TableName: this.#table,
               Key: siteKey(version.siteId),
-              UpdateExpression: `SET #current = :v, updatedAt = :now${rules ? ', #rules = :rules' : ''}`,
+              UpdateExpression: `SET #current = :v, updatedAt = :now${rules ? ', #rules = :rules, accessFromFiles = :files' : ''}`,
               ConditionExpression: `ownerId = :owner AND #status = :active AND #current = :base${rules ? ' AND updatedAt = :seen' : ''}`,
               ExpressionAttributeNames: { '#current': 'current', '#status': 'status', ...(rules ? { '#rules': 'rules' } : {}) },
               ExpressionAttributeValues: {
@@ -305,7 +310,7 @@ export class Store {
                 ':owner': ownerId,
                 ':active': 'active',
                 ':base': baseVersionId,
-                ...(rules ? { ':rules': rules.rules, ':seen': rules.seen } : {}),
+                ...(rules ? { ':rules': rules.rules, ':seen': rules.seen, ':files': rules.fromFiles === true } : {}),
               },
             },
           },

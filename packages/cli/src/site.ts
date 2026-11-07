@@ -116,14 +116,16 @@ export function buildSite(root: string, options: BuildOptions = {}): Build {
 
   // How access is decided (R93): the rules file wins; without one, only pages
   // marked access: public are built; --include-private builds everything.
-  const hasRules = existsSync(join(root, RULES_FILE));
+  // A site whose _site.yml declares access has its rules from its files (M6
+  // R150), which render works out; the rules file is then only a copy.
+  const hasRules = existsSync(join(root, RULES_FILE)) || 'access' in siteYml;
   const access: Build['access'] = options.includePrivate ? 'everything' : hasRules || options.rules ? 'rules' : 'front-matter';
   let rules: Rule[] = [{ path: '/', access: ['public'] }];
   let skippedPages: string[] = [];
   // A page whose front matter can't be read can't say it's public, so it's
   // left out: said as a problem, not hidden among the pages that aren't public.
   const unreadable: Problem[] = [];
-  if (access === 'rules') rules = options.rules ?? readRules(read(RULES_FILE));
+  if (access === 'rules') rules = options.rules ?? ('access' in siteYml ? [] : readRules(read(RULES_FILE)));
   if (access === 'front-matter') {
     skippedPages = sources.filter((s) => {
       if (!markdown(s)) return false;

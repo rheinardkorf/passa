@@ -130,10 +130,15 @@ export type Edit = { path: string; old: string; new: string };
 // What a new version is made from. The site's details and rules are what its
 // pages render with; confirmPublic also confirms a page marked access: private
 // that the rules make public (M3 R89).
+// rulesGiven: rules came with the call, which a site whose files declare its
+// access refuses (M6 R150).
 type Changes = {
   content?: Content; edited?: InputFile[]; base?: Version; remove?: string[];
-  site: Pick<Site, 'id' | 'name' | 'title'>; rules: Rule[]; confirmPublic: boolean;
+  site: Pick<Site, 'id' | 'name' | 'title'>; rules: Rule[]; confirmPublic: boolean; rulesGiven?: boolean;
 };
+// The rules a version's files declare, and what they change from the rules before.
+type FileAccess = { fileRules?: Rule[]; fileChange?: AccessChange };
+const FROM_FILES = 'This site\'s access comes from its files (access in _site.yml, and pages\' front matter)';
 
 // A file Passa rendered for a version, and whether the base version has it already.
 type RenderedFile = { entry: FileEntry; content: Uint8Array; unchanged: boolean };
@@ -253,7 +258,7 @@ export class Publisher {
   // Runs every check, then writes a complete new version: the files sent, plus
   // the base version's other files (copied within S3) unless removed, plus the
   // pages rendered from its sources (M3 R70), copied when they haven't changed.
-  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[]; cards: CardJob; sentCards: SentCards }> {
+  async #storeVersion(caller: Caller, siteId: string, changes: Changes): Promise<{ version: Version; skipped: string[]; written: number; problems: string[]; cards: CardJob; sentCards: SentCards } & FileAccess> {
     const { content, edited = [], base, remove = [] } = changes;
     const received = !content
       ? { files: [], skipped: [] }
@@ -275,7 +280,7 @@ export class Publisher {
     const kept = (base?.files ?? []).filter((f) => f.role !== 'rendered' && !replaced.has(f.path.toLowerCase()));
     const authored = [...kept.map(withRole), ...checked.map((f) => withRole({ path: f.path, size: f.size, contentType: f.contentType, sha256: f.sha256 }))];
     const fresh = new Map(checked.map((f) => [f.path, f.content]));
-    const { rendered, problems, cards } = await this.#render(changes, authored, fresh, kept);
+    const { rendered, problems, cards, ...fileAccess } = await this.#render(changes, authored, fresh, kept);
     const sentCards = await this.#storeSentCards(siteId, sentCardFiles, cards);
     const entries = [...authored, ...rendered.map((r) => r.entry)].sort((a, b) => a.path.localeCompare(b.path));
     this.#checkTotals(entries);
@@ -296,14 +301,14 @@ export class Publisher {
       await inBatches(copies, ({ from, to }) => this.#d.files.copyVersionFile(siteId, base.id, version.id, storedPath(from), storedPath(to)), COPY_PARALLEL);
     }
     if (content && 'uploadId' in content) await this.#d.files.deleteUpload(content.uploadId);
-    return { version, skipped, written: written.length, problems, cards, sentCards };
+    return { version, skipped, written: written.length, problems, cards, sentCards, ...fileAccess };
   }
 
   // Renders the version's sources, if it has any: its pages, its feed, and the
   // read-only copy of its rules (M3 R88). Refused on a page that would replace a
   // file (R68), a missing layout (R79), or an unconfirmed page marked private
   // that the rules make public (R89); other problems are returned (R90).
-  async #render(changes: Changes, authored: FileEntry[], fresh: Map<string, Uint8Array>, kept: FileEntry[]): Promise<{ rendered: RenderedFile[]; problems: string[]; cards: CardJob }> {
+  async #render(changes: Changes, authored: FileEntry[], fresh: Map<string, Uint8Array>, kept: FileEntry[]): Promise<{ rendered: RenderedFile[]; problems: string[]; cards: CardJob } & FileAccess> {
     const sourceEntries = authored.filter((f) => f.role === 'source');
     if (!sourceEntries.length) return { rendered: [], problems: [], cards: NO_CARDS };
     const { base, site, rules, confirmPublic } = changes;
@@ -321,10 +326,15 @@ export class Publisher {
         ? `${p.message}: change its front matter, or check with the person and call again with confirm_public set to true`
         : p.message));
     }
+    // A site whose files declare its access (M6 R150): those rules are its
+    // rules, checked like any, with confirm_public for anything made public.
+    const fileRules = result.rules;
+    if (fileRules && changes.rulesGiven) throw new ToolError(`${FROM_FILES}, so rules can't be passed as well. Change _site.yml instead.`);
+    const fileChange = fileRules ? this.#checkAccess(rules, fileRules, confirmPublic) : undefined;
     const outputs = [
       ...result.pages.map((p) => ({ path: p.path, content: encode(p.html), from: p.from })),
       ...(result.feed ? [{ path: 'feed.xml', content: encode(result.feed), from: null }] : []),
-      { path: RULES_FILE, content: encode(rulesFile(rules)), from: null },
+      { path: RULES_FILE, content: encode(rulesFile(fileRules ?? rules)), from: null },
     ];
     const fromOf = new Map(outputs.map((o) => [o.path, o.from]));
     // Rendered pages pass the same checks as any file.
@@ -338,6 +348,7 @@ export class Publisher {
       }),
       problems: result.problems.filter((p) => !REFUSING.has(p.kind)).map((p) => p.message),
       cards: { cards: result.cards ?? [], fonts: result.cardFonts ?? [] },
+      ...(fileRules && fileChange ? { fileRules, fileChange } : {}),
     };
   }
 
@@ -432,9 +443,11 @@ export class Publisher {
   // Returns undefined for a site without sources, which needs no new version.
   async #rerender(caller: Caller, site: Site, base: Version, change: { rules: Rule[]; confirmPublic: boolean; setRules?: boolean }) {
     if (!base.files.some((f) => f.role === 'source')) return undefined;
-    const { version, problems, cards } = await this.#storeVersion(caller, site.id, { base, site, rules: change.rules, confirmPublic: change.confirmPublic });
+    const { version, problems, cards, fileRules } = await this.#storeVersion(caller, site.id, { base, site, rules: change.rules, confirmPublic: change.confirmPublic });
+    const rules = fileRules ? { rules: fileRules, seen: site.updatedAt, fromFiles: true }
+      : change.setRules || site.accessFromFiles ? { rules: change.rules, seen: site.updatedAt } : undefined;
     try {
-      await this.#d.store.addVersion(caller.userId, version, site.current, change.setRules ? { rules: change.rules, seen: site.updatedAt } : undefined);
+      await this.#d.store.addVersion(caller.userId, version, site.current, rules);
     } catch (err) {
       if (!(err instanceof NotFoundOrConflict)) throw err;
       const now = await this.#d.store.getSite(site.id);
@@ -504,16 +517,18 @@ export class Publisher {
   async publish(caller: Caller, input: { content: Content; title: string; dataSource?: string; dataAsOf?: string; rules?: Rule[]; confirmPublic?: boolean }) {
     const change = input.rules ? this.#checkAccess([], input.rules, input.confirmPublic ?? false) : undefined;
     const siteId = newSiteId();
-    const { version, skipped, problems, cards, sentCards } = await this.#storeVersion(caller, siteId, {
-      content: input.content, site: { id: siteId, title: input.title }, rules: input.rules ?? [], confirmPublic: input.confirmPublic ?? false,
+    const { version, skipped, problems, cards, sentCards, fileRules, fileChange } = await this.#storeVersion(caller, siteId, {
+      content: input.content, site: { id: siteId, title: input.title }, rules: input.rules ?? [], confirmPublic: input.confirmPublic ?? false, rulesGiven: !!input.rules?.length,
     });
+    const rules = fileRules ?? input.rules;
     const site: Site = {
       id: siteId,
       ownerId: caller.userId,
       title: input.title,
       ...(input.dataSource ? { dataSource: input.dataSource } : {}),
       ...(input.dataAsOf ? { dataAsOf: input.dataAsOf } : {}),
-      ...(input.rules?.length ? { rules: input.rules } : {}),
+      ...(rules?.length ? { rules } : {}),
+      ...(fileRules ? { accessFromFiles: true } : {}),
       current: version.id,
       accessVersion: 1,
       status: 'active',
@@ -523,7 +538,7 @@ export class Publisher {
     await this.#d.store.createSite(site, version);
     await this.#sync(site.id);
     const drawn = await this.#finishCards(site.id, version, cards);
-    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...sentCardsResult(sentCards), ...drawn, ...(change ? this.#accessResult(site, change) : {}) };
+    return { ...this.#summary(site), files: version.files.length, skipped, ...(problems.length ? { problems } : {}), ...sentCardsResult(sentCards), ...drawn, ...(fileChange ?? change ? this.#accessResult(site, (fileChange ?? change) as AccessChange) : {}) };
   }
 
   // By default the new version is the current one with the changes applied.
@@ -575,7 +590,7 @@ export class Publisher {
       if (problems.length) throw new PublishRefused(problems);
     }
     const edited = base && edits.length ? await this.#applyEdits(base, edits) : [];
-    const { version, skipped, written, problems, cards, sentCards } = await this.#storeVersion(caller, site.id, {
+    const { version, skipped, written, problems, cards, sentCards, fileRules, fileChange } = await this.#storeVersion(caller, site.id, {
       ...(input.content ? { content: input.content } : {}),
       ...(base ? { base } : {}),
       edited,
@@ -583,10 +598,16 @@ export class Publisher {
       site: { ...site, ...(input.details?.title ? { title: input.details.title } : {}) },
       rules: input.rules ?? site.rules ?? [],
       confirmPublic: input.confirmPublic ?? false,
+      rulesGiven: !!input.rules,
     });
+    // The files' rules when they declare access; the rules sent; or, when the
+    // files have stopped declaring access, the rules as they were, kept.
+    const rules = fileRules ? { rules: fileRules, seen: site.updatedAt, fromFiles: true }
+      : input.rules ? { rules: input.rules, seen: site.updatedAt }
+      : site.accessFromFiles ? { rules: site.rules ?? [], seen: site.updatedAt } : undefined;
     try {
       // Fails if another update landed first, so neither silently undoes the other.
-      await this.#d.store.addVersion(caller.userId, version, site.current, input.rules ? { rules: input.rules, seen: site.updatedAt } : undefined);
+      await this.#d.store.addVersion(caller.userId, version, site.current, rules);
     } catch (err) {
       if (!(err instanceof NotFoundOrConflict)) throw err;
       const now = await this.#d.store.getSite(site.id);
@@ -607,7 +628,7 @@ export class Publisher {
       ...(problems.length ? { problems } : {}),
       ...sentCardsResult(sentCards),
       ...drawn,
-      ...(change ? this.#accessResult(updated, change) : {}),
+      ...(fileChange ?? change ? this.#accessResult(updated, (fileChange ?? change) as AccessChange) : {}),
     };
   }
 
@@ -758,6 +779,7 @@ export class Publisher {
   async setAccess(caller: Caller, input: { siteId: string; rules: Rule[]; confirmPublic: boolean }) {
     const site = await this.#ownSite(caller, input.siteId);
     this.#assertChangeable(site);
+    if (site.accessFromFiles) throw new ToolError(`${FROM_FILES}. Change access there and update the site, rather than set_access.`);
     const change = this.#checkAccess(site.rules ?? [], input.rules, input.confirmPublic);
     const rendered = await this.#saveRules(caller, site, input.rules, input.confirmPublic);
     const updated = (await this.#sync(site.id)) ?? site;
@@ -810,6 +832,9 @@ export class Publisher {
     const above = accessFor(before, `${input.path}index.html`);
     const isPublic = isPublicAccess(above);
     const rules = isPublic || before.some((r) => r.path === input.path) ? before : [...before, { path: input.path, access: above }];
+    if (rules !== before && site.accessFromFiles) {
+      throw new ToolError(`${FROM_FILES}, and ${input.path} has no rule of its own for the share to open. Add one there with the access it has now (${above === 'private' ? 'private' : `[${above.join(', ')}]`}), update the site, then share.`);
+    }
     const change = this.#checkAccess(before, rules, false);
 
     const existing = await store.getGrant(site.id, email, input.path);

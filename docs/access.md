@@ -39,7 +39,30 @@ Passa refuses any change that would make something public unless the request say
 
 On a Markdown site, the rules decide which pages are public, and the pages are rendered again whenever the rules change. Lists of pages, tag pages and the feed only ever name pages the visitor can see, so a public page never leaks the title of a private one. A members page lists pages every one of its tiers can open, and a page under a `private` rule lists only that rule's pages. The feed lists public pages only.
 
-Front matter can't make a page public. A page marked `access: private` that a rule would make public is refused until you fix one or the other, or confirm it.
+### Access in the site's files
+
+A Markdown site can keep its access in its own files, so publishing or syncing the folder sets it, with no access commands. Declare it in `_site.yml`:
+
+```yaml
+tiers: [gold, silver]
+access:
+  /: [public]
+  /lessons/: [gold, silver]
+  /lessons/draft/: private
+```
+
+and a page can differ from its folder in its front matter:
+
+```yaml
+---
+title: The quiz
+access: [silver]
+---
+```
+
+`tiers` names the site's tiers; rules can only use those. A page's own access is more specific than its folder's, so it wins; a page that agrees with its folder adds nothing. Once `_site.yml` declares `access`, the files are the site's access: `set_access` and `passa access --rule` are refused, and you change the files instead. Making anything public still needs a yes, however it's set.
+
+A site whose `_site.yml` doesn't declare `access` keeps the rules set with `set_access` or `passa access`. On those sites, front matter can't make a page public: a page marked `access: private` that a rule would make public is refused until you fix one or the other, or confirm it.
 
 Passa writes the rules into the site as `_passa/access.yml`, a read-only copy. It's there for when the folder is taken out of Passa: `passa render` and `passa serve` use it to build only the public pages.
 
