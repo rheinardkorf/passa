@@ -106,7 +106,7 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 
 ### Moving to the new form
 
-- **R162** Existing shares without an end get one 90 days after the move (R158). Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, or no rule where the folder above is already private (the people it was shared with keep their shares). Existing shares keep working under R156. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
+- **R162** Existing rules move to the new form: `{ path, tier: public }` → `access: [public]`, `private` → `private`, and M5's `shared` → `private`, or no rule where the folder above is already private (the people it was shared with keep their shares). Existing shares keep working under R156, with their dates as they are; R158's default end applies to shares made from now on. Tools and the CLI accept the old `tier` field for one release, answering in the new form.
 
 ### CLI and docs
 
