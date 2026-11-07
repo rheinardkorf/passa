@@ -32,7 +32,7 @@ export function addStage(app: App, base: Config, stage: Stage) {
     zone: foundation.zone,
     data,
     authCertificate: global.authCertificate,
-    webAclArn: global.webAcl.attrArn,
+    ...(global.webAcl ? { webAclArn: global.webAcl.attrArn } : {}),
   });
 
   const sites = new SitesStack(app, name('sites'), { ...props, config, stage, siteZone: foundation.siteZone, data, certificate: global.siteCertificate, cards: services.cards });

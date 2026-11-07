@@ -75,11 +75,20 @@ rateLimits:
   # sign-in and client registration endpoints (WAF's minimum is 10).
   authPerIp: 600
   authFormsPerIp: 30
+  # OAuth client registrations per IP in each window: Passa's own limit.
+  registerPerIp: 10
   # API Gateway throttling on mcp.: requests per second, and the burst allowed.
   mcpPerSecond: 20
   mcpBurst: 40
   # Sharing invites each publisher may send in a day, so Passa can't send bulk email.
   invitesPerDay: 50
+
+# WAF in front of auth., optional: blocks known bad IPs and inputs, and
+# applies authPerIp and authFormsPerIp. It costs about US$9 a month per stage
+# whatever the traffic. Passa limits sign-in emails (signinPerEmail,
+# signinPerIp) and client registrations (registerPerIp) itself either way.
+# A stage can override it, such as stages.prod.waf: true.
+waf: false
 
 deleteGraceDays: 7
 

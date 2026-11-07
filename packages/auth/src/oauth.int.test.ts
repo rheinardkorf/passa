@@ -270,6 +270,31 @@ describe('connecting an app', () => {
   });
 });
 
+describe('client registration limits', () => {
+  it('allows registerPerIp registrations per IP in each window, then refuses with 429, with or without WAF', async () => {
+    const limited = { ...deps, clientIp: (req: { headers: Record<string, unknown> }) => String(req.headers['x-forwarded-for']), config: { ...deps.config, rateLimits: { ...deps.config.rateLimits, registerPerIp: 2 } } };
+    const s = await new Promise<Server>((resolve) => {
+      const started = createAuthApp(limited).listen(0, '127.0.0.1', () => resolve(started));
+    });
+    const at = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+    const reg = (ip: string) => fetch(`${at}/reg`, {
+      method: 'POST',
+      headers: { ...PROXIED, 'content-type': 'application/json', 'x-forwarded-for': ip },
+      body: JSON.stringify({ client_name: 'Flood', redirect_uris: ['http://127.0.0.1/callback'], grant_types: ['authorization_code'], response_types: ['code'], token_endpoint_auth_method: 'none' }),
+    });
+    try {
+      expect((await reg('198.51.100.7')).status).toBe(201);
+      expect((await reg('198.51.100.7')).status).toBe(201);
+      const refused = await reg('198.51.100.7');
+      expect(refused.status).toBe(429);
+      expect(await refused.json()).toMatchObject({ error: 'invalid_request' });
+      expect((await reg('198.51.100.8')).status).toBe(201); // another address has its own count
+    } finally {
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  });
+});
+
 describe('authorization requests', () => {
   it('require PKCE with S256 and the MCP server as the resource (R23)', async () => {
     const client = await register();

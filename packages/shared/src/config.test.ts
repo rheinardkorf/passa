@@ -31,6 +31,11 @@ describe('config', () => {
     expect([dev.domain, siteDomain(dev), dev.email.from]).toEqual(['dev.example.com', 'dev.example-sites.com', example.email.from]);
     expect(dev).not.toHaveProperty('stages');
     expect(stageConfig(config, 'prod').domain).toBe('example.com');
+    // WAF is off unless the config, or one stage, turns it on.
+    const rest: Record<string, unknown> = { ...example };
+    delete rest.waf;
+    const withProd = parseConfig({ ...rest, stages: { prod: { waf: true } } });
+    expect([parseConfig(rest).waf, stageConfig(withProd, 'prod').waf, stageConfig(withProd, 'dev').waf, stageConfig(parseConfig({ ...rest, waf: true }), 'dev').waf]).toEqual([false, true, false, true]);
     expect(() => parseConfig({ ...example, stages: { dev: { region: 'us-east-1' } } })).toThrow();
   });
 

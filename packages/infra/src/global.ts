@@ -1,5 +1,6 @@
 // What CloudFront needs from us-east-1: the certificates for auth.<domain>
-// and the sites, and the WAF rules in front of auth. (R20, R27).
+// and the sites, and the WAF rules in front of auth. (R20, R27), unless the
+// stage's config turns WAF off.
 import { type Config, siteDomain } from '@passa/shared';
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import { Certificate, CertificateValidation } from 'aws-cdk-lib/aws-certificatemanager';
@@ -14,7 +15,7 @@ const visibility = (metricName: string) => ({ cloudWatchMetricsEnabled: true, sa
 export class GlobalStack extends Stack {
   readonly authCertificate: Certificate;
   readonly siteCertificate: Certificate;
-  readonly webAcl: CfnWebACL;
+  readonly webAcl: CfnWebACL | undefined;
 
   constructor(scope: Construct, id: string, props: GlobalProps) {
     super(scope, id, props);
@@ -31,6 +32,10 @@ export class GlobalStack extends Stack {
       validation: CertificateValidation.fromDns(props.siteZone),
     });
 
+    this.webAcl = props.config.waf ? this.#webAcl(prefix, rateLimits) : undefined;
+  }
+
+  #webAcl(prefix: string, rateLimits: Config['rateLimits']): CfnWebACL {
     // Sign-in and client registration are the endpoints that send email or
     // create records, so they get a much lower limit than the rest.
     const forms = {
@@ -55,7 +60,7 @@ export class GlobalStack extends Stack {
       visibilityConfig: visibility(`${prefix}-${name}`),
     });
 
-    this.webAcl = new CfnWebACL(this, 'AuthAcl', {
+    return new CfnWebACL(this, 'AuthAcl', {
       name: `${prefix}-auth`,
       scope: 'CLOUDFRONT',
       defaultAction: { allow: {} },
