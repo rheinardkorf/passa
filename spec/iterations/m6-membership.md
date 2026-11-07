@@ -36,6 +36,29 @@ access:
 
 `/lessons/` and everything under it open to silver members; `/lessons/draft/` is the owner's alone (plus anyone it's shared with).
 
+## Scenarios
+
+One worked example, to check the requirements against before code does. A Markdown course site:
+
+| Path | Access (from `_site.yml`, or the page's front matter) |
+| --- | --- |
+| `/` | `[public]` |
+| `/lessons/` | `[gold, silver]` |
+| `/lessons/bonus/` | `[gold]` |
+| `/lessons/week-3/quiz/` | `[silver]` (front matter on that one page) |
+| `/lessons/draft/` | `private` |
+
+| Person | Grants | Opens | Doesn't open |
+| --- | --- | --- | --- |
+| The owner | (owns the site) | everything | |
+| sam@example.com | membership: `gold` | `/`, `/lessons/` (every week), `/lessons/bonus/` | the quiz (silver only), `/lessons/draft/` |
+| kim@example.com | membership: `silver` | `/`, `/lessons/`, the quiz | `/lessons/bonus/`, `/lessons/draft/` |
+| reviewer@example.com | share: `/lessons/` (ends in 90 days) | `/`, `/lessons/` and every week without a rule of its own | `/lessons/bonus/`, the quiz and `/lessons/draft/` (each has its own rule; the share's result names them) |
+| lee@example.com | membership: `gold`, from 1 December | `/` until then; as Sam from 1 December | |
+| Anyone else | none | `/` | everything else |
+
+Lists follow the same table: the bonus page may list lessons (gold members open both), but a lesson page doesn't list the bonus (silver members open lessons and not the bonus), and nothing lists the draft.
+
 ## Demo
 
 A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold, silver]`, `/lessons/bonus/` to `[gold]` and `/lessons/draft/` to `private`; one lesson's front matter says `access: [silver]`. Published with `passa sync` and no access commands. `passa members add` puts one address in `gold` and another in `silver`, from a start date, with an end date; each gets an invite. Signed in, the gold member opens the bonus and the silver member doesn't; neither opens `/lessons/draft/`. `/lessons/` is shared with a third address, who opens every lesson but not the bonus or the silver-only lesson, and the share's result says so. `passa access course --as <email>` shows what each person opens, and why. `passa members remove`, and that person's next request is refused.
@@ -167,6 +190,10 @@ A Markdown course site whose `_site.yml` sets `/` public, `/lessons/` to `[gold,
 2. Access in `_site.yml` and front matter, as the source of truth for Markdown sites.
 3. Memberships: tools, CLI, invites, revocation, dates; shares' new reach and start dates.
 4. "What can this person see?", docs, and the demo on dev, then production.
+
+## Changes after approval
+
+Changes to the approved spec are recorded here, each with its date and reason, rather than edited in silently. None yet.
 
 ## Done when
 
