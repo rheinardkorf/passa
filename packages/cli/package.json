@@ -9,7 +9,7 @@
     "passa": "./src/main.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-lambda": "3.1155.0",
+    "@aws-sdk/client-lambda": "3.1158.0",
     "@passa/csp": "workspace:*",
     "@passa/render": "workspace:*",
     "htmx.org": "4.0.0",

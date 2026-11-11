@@ -16,12 +16,12 @@
     "@types/oidc-provider": "9.12.1"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "3.1155.0",
-    "@aws-sdk/client-kms": "3.1155.0",
-    "@aws-sdk/client-lambda": "3.1155.0",
-    "@aws-sdk/client-secrets-manager": "3.1155.0",
-    "@aws-sdk/client-sesv2": "3.1155.0",
-    "@aws-sdk/lib-dynamodb": "3.1155.0",
+    "@aws-sdk/client-dynamodb": "3.1158.0",
+    "@aws-sdk/client-kms": "3.1158.0",
+    "@aws-sdk/client-lambda": "3.1158.0",
+    "@aws-sdk/client-secrets-manager": "3.1158.0",
+    "@aws-sdk/client-sesv2": "3.1158.0",
+    "@aws-sdk/lib-dynamodb": "3.1158.0",
     "@codegenie/serverless-express": "5.0.0",
     "@passa/mail": "workspace:*",
     "@passa/shared": "workspace:*",
