@@ -8,3 +8,12 @@ blockExoticSubdeps: true
 trustPolicy: no-downgrade
 allowBuilds:
   esbuild: false
+
+# Security fixes for transitive dependencies whose parents pin a vulnerable
+# version. Remove each once its parent moves past it.
+overrides:
+  # satori pins fflate 0.7.3 (GHSA: unzipSync loops on malformed ZIP64).
+  'fflate@<0.7.5': 0.7.5
+  # typescript-eslint 8.72 wants minimatch ^10 (GHSA-g3hv-75wg-m249, a DoS);
+  # 8.73 moves to ^11.0.1 but is younger than minimumReleaseAge. Dev only.
+  'minimatch@>=7.0.0 <11.0.1': 11.0.1
