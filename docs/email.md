@@ -6,7 +6,7 @@ access: public
 
 # Email
 
-Passa sends two kinds of email: sign-in links, and invites when a site is shared. Both come from `email.from` in `config.yml`, and both say the same whichever provider sends them. Neither ever includes a site's title, and tracking is off.
+Passa sends two kinds of email: sign-in links, and invites when a site is shared with someone or they're added as a member. Both come from `email.from` in `config.yml`, and both say the same whichever provider sends them. Neither ever includes a site's title, and tracking is off.
 
 Mail is sent in the background, so sign-in and sharing answer just as quickly whether or not an email goes out, and however slow the provider is.
 
@@ -23,7 +23,7 @@ The foundation stack verifies `domain` in SES. The sender must be at that domain
 
 A new AWS account's SES is in its **sandbox**: it only sends to addresses you've verified. That's enough to start, by verifying your own address and those of the people you share with, but ask AWS for production access to send to anyone.
 
-SES reports bounces and complaints to Passa, which disables a publisher whose address bounces (never an admin) and tells the admins.
+SES reports bounces and complaints to Passa. A permanent bounce or a complaint disables that person's account (never an admin's), so Passa stops emailing the address, and the admins get an alarm when the bounce or complaint rate climbs.
 
 ## SMTP
 

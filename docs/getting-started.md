@@ -32,7 +32,13 @@ To change it, ask the agent again. Every change makes a new version at the same 
 
 ## Share it
 
-Private sites can only be opened by you. To share a site, make it public:
+A new site can only be opened by you. To let one person in, share it with their email:
+
+> Share that site with sam@example.com.
+
+They get an invite, sign in with that email, and see what you shared with them, and nothing else. The agent reads the email back to you first, since a typo would share it with a stranger. A share can be one folder, and ends after 90 days unless you choose otherwise; see [[Sharing]]. For groups who stay, such as a course's students, use tiers: see [[Membership]].
+
+To let anyone with the link in, make it public:
 
 > Make that site public.
 
@@ -52,6 +58,7 @@ The `passa` command does all of this from a terminal:
 npm install -g @passajs/cli
 passa login mcp.example.com
 passa publish my-folder --title "Weekly notes"
+passa share my-folder sam@example.com
 passa access my-folder --public
 ```
 
@@ -60,4 +67,4 @@ See [[The passa CLI]].
 ## Next
 
 - Write sites in Markdown, with themes, widgets and charts: [[Markdown sites]].
-- Control who sees what: [[Access]].
+- Control who sees what: [[Access]], [[Sharing]] and [[Membership]].

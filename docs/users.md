@@ -12,7 +12,7 @@ A Passa deployment has three kinds of people:
 | --- | --- |
 | **Admins** | Publish; their accounts are never disabled automatically |
 | **Publishers** | Publish sites, and share them |
-| **Viewers** | Open sites shared with them; nothing else. Passa adds them itself, the first time they sign in to a shared site |
+| **Viewers** | Open what's shared with them, or what their memberships open; nothing else. Passa adds them itself, the first time they sign in to a site they have access to |
 
 Only admins and publishers can connect an agent or sign in with the `passa` command.
 
@@ -35,6 +35,6 @@ passa admin users enable sam@example.com
 - **`add`** lets an email publish. With `--admin`, they're an admin too: a bounced email never disables them, and they count towards the last active admin. Someone a site was already shared with keeps their account, and their shares.
 - **`disable`** stops someone: their next call through an agent or the CLI is refused, and they can't sign in. Their sites stay as they are, and public pages keep serving. Admins listed in `config.yml` can't be disabled (take them out of the list and deploy first), and neither can the last active admin.
 - **`enable`** lets them back in.
-- **`list`** shows everyone: admins, publishers and viewers, and whether they're active.
+- **`list`** shows everyone: admins, publishers and viewers (people sites are shared with, and members), and whether they're active.
 
 Each change is recorded, with the computer it was made from. The first time, `passa admin` asks which AWS profile reaches the deployment you're signed in to (or takes `--profile`), finds the deployment's admin function in that account, and remembers both. After that, admin commands need nothing extra. When the AWS sign-in has expired, it says how to sign in again with that profile. `--server` picks another deployment, `--stage` names its admin function directly, and `--json` is for scripts.
