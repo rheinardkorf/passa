@@ -14,7 +14,7 @@ Say "publish this" to an AI agent and get back a link. Passa turns what you and 
 - title: "[[Markdown sites]]"
   text: Write in Markdown; Passa renders the pages, lists, tags, feed and social cards.
 - title: "[[Access]]"
-  text: Private by default. Make a whole site or just some folders public.
+  text: Private by default. Share with people, open folders to members, or make them public.
 - title: "[[The passa CLI]]"
   text: Build and preview locally, and publish without an agent.
 - title: "[[Agents and MCP]]"
@@ -26,7 +26,8 @@ Say "publish this" to an AI agent and get back a link. Passa turns what you and 
 ## What it does
 
 - **One link per site.** Every site gets its own address, like `k3x9q2.example.com`, or a name you choose, like `notes.example.com`.
-- **Private by default.** Only you can open a new site, after signing in. Rules make folders, or the whole site, public.
+- **Private by default.** Only you can open a new site, after signing in. Share it, or one folder, with people by email; open folders to tiers of members; or make folders, or the whole site, public.
+- **Your own domains.** Give a site a domain of its own, such as `docs.example.com`.
 - **Markdown first.** Send Markdown and Passa renders it with a theme, wikilinks, widgets, charts and diagrams. Plain HTML and other files work too.
 - **Versions.** Every change is a new version, and you can roll back.
 - **Agents and people alike.** Agents connect over MCP with OAuth; the `passa` command does the same from a terminal.

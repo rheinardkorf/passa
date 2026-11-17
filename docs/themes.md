@@ -45,6 +45,26 @@ Layouts are [Mustache](https://mustache.github.io/mustache.5.html) templates: pl
 
 Every layout gets the page (`title`, `content`, `date`, `tags`, `toc`, …), lists of pages (`pages`, `recent`, `related`, `prev` and `next`, `backlinks`), and the site's settings (`site.title`, `nav`, …). Lists only ever include pages the visitor is allowed to see.
 
+## Fragments, sign-in and links readers can't follow
+
+A layout of your own has to load HTMX for [[Fragments and sign-in]] to work. Layouts get `htmx`, the address of Passa's copy, only on pages that embed a fragment or have a login block. Put this once, near the end of `<body>`, and never load HTMX any other way:
+
+```html
+{{#htmx}}<script src="{{htmx}}"></script>{{/htmx}}
+```
+
+The blocks use these classes, plus any `class` the page gives them:
+
+| Class | What it is |
+| --- | --- |
+| `.passa-embed` | A fragment's place on the page, holding its fallback until it loads |
+| `.passa-fragment` | The fragment, once loaded, inside its `.passa-embed` |
+| `.passa-login` | A login block, holding `a.passa-login-link`, or once signed in `span.passa-login-who` |
+
+Style a fragment from the embedding page's CSS, by the class the page gives its block (`.family-cards .passa-fragment ul`), so it fits wherever it lands. Fragments never use a layout.
+
+Links to pages that aren't public carry a `data-passa-rule` attribute, so a theme can style or hide links some readers can't follow. Hiding them doesn't protect anything: the pages themselves are checked on every request.
+
 ## Rules
 
 - Pages are served with a strict Content Security Policy: scripts, styles and fonts come from the site or a few public CDNs, images from the site itself, and pages can make requests only to their own site (as fragments do).

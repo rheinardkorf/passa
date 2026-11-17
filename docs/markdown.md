@@ -44,6 +44,9 @@ The common fields:
 | `description` | A summary for lists, link previews and social cards |
 | `layout` | A layout from the theme, such as `deck` for slides |
 | `hidden` | `true` renders the page but leaves it out of lists and the feed |
+| `draft` | `true` keeps the file with the site but renders no page |
+| `access` | Who can open this page, when it differs from its folder: `public`, `private` or tiers such as `[silver]`. See [[Access]] |
+| `fragment` | `true` makes the page a fragment, for embedding in other pages. See [[Fragments and sign-in]] |
 | `cover`, `hero`, `accent` | An image, an opening title and text, and a colour, for themes that use them |
 | `socialImage` | An image to use in link previews instead of the social card |
 
@@ -65,7 +68,7 @@ nav:
 
 ## Beyond standard Markdown
 
-- **Wikilinks** link pages by title: `[[Get started]]` links to the page titled "Get started". A link to a page that doesn't exist is reported as a problem.
+- **Wikilinks** link pages by title, path or file name: `[[Get started]]` links to the page titled "Get started", and `[[Get started|start here]]` changes the link's text. A link to a page that doesn't exist is reported as a problem.
 - **Callouts**, as in Obsidian:
 
   ```markdown
