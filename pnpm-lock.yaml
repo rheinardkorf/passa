@@ -406,8 +406,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
       nodemailer:
-        specifier: 10.2.0
-        version: 10.2.0
+        specifier: 10.3.1
+        version: 10.3.1
     devDependencies:
       '@types/nodemailer':
         specifier: 8.0.2
@@ -1949,8 +1949,8 @@ packages:
     resolution: {integrity: sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg==}
     engines: {node: '>=18'}
 
-  nodemailer@10.2.0:
-    resolution: {integrity: sha512-/XyGw6kX2stMdKGUJdAQmYAeY1FscWfdRydfd2NtK3A3KDfUUXCqZzExSNAt2xhh90X2qLCR+o2Gd48YPJcJwA==}
+  nodemailer@10.3.1:
+    resolution: {integrity: sha512-uF0AFsJC07Y1vdW7p580DKAnh7rAO+4UPSSB3mDCPNDufoiaOebV6JmrzpxB14OjEEEiBsNdYoM2Y+fN8M7BBA==}
     engines: {node: '>=20.0.0'}
 
   object-assign@4.1.1:
@@ -3865,7 +3865,7 @@ snapshots:
     dependencies:
       content-type: 2.1.0
 
-  nodemailer@10.2.0: {}
+  nodemailer@10.3.1: {}
 
   object-assign@4.1.1: {}
 
