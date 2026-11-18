@@ -21,7 +21,7 @@
     "@passa/render": "workspace:*",
     "@passa/shared": "workspace:*",
     "express": "5.3.0",
-    "file-type": "22.2.0",
+    "file-type": "22.3.0",
     "jose": "6.2.13",
     "zod": "4.6.7"
   },
