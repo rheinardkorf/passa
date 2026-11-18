@@ -302,8 +302,8 @@ importers:
         specifier: workspace:*
         version: link:../render
       htmx.org:
-        specifier: 4.0.0
-        version: 4.0.0
+        specifier: 4.0.1
+        version: 4.0.1
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -350,8 +350,8 @@ importers:
         specifier: 0.28.2
         version: 0.28.2
       htmx.org:
-        specifier: 4.0.0
-        version: 4.0.0
+        specifier: 4.0.1
+        version: 4.0.1
     devDependencies:
       '@passa/render':
         specifier: workspace:*
@@ -1696,8 +1696,8 @@ packages:
   hookified@2.2.0:
     resolution: {integrity: sha512-p/LgFzRN5FeoD3DLS6bkUapeye6E4SI6yJs6KetENd18S+FBthqYq2amJUWpt5z0EQwwHemidjY5OqJGEKm5uA==}
 
-  htmx.org@4.0.0:
-    resolution: {integrity: sha512-T/171FUY93Kdfp8t+DnHdk45QvKRiBhVhhrwSzrXgUi4pHKvhp77dUA/qg8FAjsFWPIHNbmUuIdCrcVHuiZWng==}
+  htmx.org@4.0.1:
+    resolution: {integrity: sha512-oF7JgXhDW9UXCy/k1ZYFUQgzu/rm19ORWPSPNL91vPluB2PB9+MV55tyQdH/w7o2EAbTYUG5SDW1R60mdkdqGg==}
     hasBin: true
 
   http-assert@1.5.0:
@@ -3646,7 +3646,7 @@ snapshots:
 
   hookified@2.2.0: {}
 
-  htmx.org@4.0.0: {}
+  htmx.org@4.0.1: {}
 
   http-assert@1.5.0:
     dependencies:
