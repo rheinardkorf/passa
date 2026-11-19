@@ -21,6 +21,10 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # One copy of each package where ranges allow it. Two copies of
+      # @smithy/signature-v4 once hid the SigV4a signer from the SDK, and every
+      # edge write failed in production.
+      - run: pnpm dedupe --check
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
