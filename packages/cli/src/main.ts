@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The passa command: local commands that need no account or network (R92),
 // and commands that work with a Passa deployment after passa login (R99–R112).
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { cpSync, createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
@@ -14,6 +14,7 @@ import { addMember, type Ask, deleteSite, listAccess, listMembers, listShares, p
 import { pull, resolveTarget, siteDetails, sitesList, writeLink } from './sites.ts';
 import { BUILD_MARKER as MARKER, buildSite, drawSiteCard, isEmptyDir, type Build, type BuildOptions } from './site.ts';
 import { initSite } from './init.ts';
+import { parseRange } from './range.ts';
 import { adminTarget, AdminTargetRefused, lambdaLister } from './admin-link.ts';
 import { AdminRefused, addDomain, awsRefusal, type DomainList, type DomainReport, formatList, formatStatus, formatUsers, lambdaInvoker, removeDomain, type UserReport } from './admin.ts';
 
@@ -238,7 +239,7 @@ async function serveCommand(args: string[]) {
     if (path === '_passa/signin') return res.writeHead(200, { ...headers, 'content-type': 'text/plain; charset=utf-8' }).end('Previews have no sign-in. On Passa, this link signs in to the site and comes back to the page.');
     if (`/${path}` === HTMX) return res.writeHead(200, { ...headers, 'content-type': TYPES['.js'] }).end(readFileSync(HTMX_FILE));
     if (path === 'feed.xml' && build.feed) return res.writeHead(200, { ...headers, 'content-type': TYPES['.xml'] }).end(build.feed);
-    if (files.has(path)) return res.writeHead(200, { ...headers, 'content-type': type }).end(readFileSync(join(folder, path)));
+    if (files.has(path)) return sendFile(req, res, join(folder, path), { ...headers, 'content-type': type });
     const card = cards.get(path);
     if (card) {
       if (!drawn.has(card.hash)) drawn.set(card.hash, drawSiteCard(folder, build, card));
@@ -251,6 +252,23 @@ async function serveCommand(args: string[]) {
   await new Promise<void>((done, fail) => server.once('error', fail).listen(port, '127.0.0.1', done));
   out(`\nServing ${shown(folder) || '.'} at ${local} (Ctrl+C to stop)`);
   return new Promise<number>(() => undefined);
+}
+
+// A file, in the byte range asked for if there is one, so video plays in
+// Safari (which asks for ranges and won't play without them).
+function sendFile(req: IncomingMessage, res: ServerResponse, file: string, headers: Record<string, string>) {
+  const { size } = statSync(file);
+  const range = parseRange(req.headers.range, size);
+  const common = { ...headers, 'accept-ranges': 'bytes' };
+  if (range === 'unsatisfiable') return res.writeHead(416, { ...common, 'content-range': `bytes */${size}` }).end();
+  const { start, end } = range ?? { start: 0, end: size - 1 };
+  res.writeHead(range ? 206 : 200, {
+    ...common,
+    'content-length': String(size === 0 ? 0 : end - start + 1),
+    ...(range ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
+  });
+  if (req.method === 'HEAD' || size === 0) return res.end();
+  createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
 }
 
 async function loginCommand(args: string[]) {
