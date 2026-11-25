@@ -12,7 +12,7 @@
     "@aws-sdk/client-sesv2": "3.1161.0",
     "@aws-sdk/client-ssm": "3.1161.0",
     "@passa/shared": "workspace:*",
-    "nodemailer": "10.2.0"
+    "nodemailer": "10.5.0"
   },
   "devDependencies": {
     "@types/nodemailer": "8.0.2"
