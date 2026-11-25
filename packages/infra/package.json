@@ -11,8 +11,8 @@
     "cdk": "cdk"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudfront-keyvaluestore": "3.1161.0",
-    "@aws-sdk/client-secrets-manager": "3.1161.0",
+    "@aws-sdk/client-cloudfront-keyvaluestore": "3.1166.0",
+    "@aws-sdk/client-secrets-manager": "3.1166.0",
     "@passa/auth": "workspace:*",
     "@passa/edge": "workspace:*",
     "@passa/shared": "workspace:*",
